@@ -65,6 +65,7 @@ pub async fn run_capture_loop(
         state.end_capture_state();
         return;
     }
+    state.storage_sync.reset(CameraRole::Main);
 
     // Snapshot what a resume would need, now that the disk session exists and
     // the settings for this run are fixed. Recorded for every capture, because
@@ -389,10 +390,10 @@ pub async fn run_capture_loop(
     .await
     .unwrap_or(None);
 
-    // End capture session. Off the runtime: `end_session` waits for the writer to be
-    // told, because a SER container it never hears about is left without the frame count
-    // in its header and is unreadable. The producing threads are joined by now, so the
-    // queue is only draining and the wait is bounded.
+    // End capture session. Off the runtime: `end_session` waits for the writer to be told,
+    // because a SER container it never hears about is left without the frame count in its
+    // header and is unreadable. The producing threads are joined by now, so the queue is
+    // only draining, and a writer that stalls is given up on.
     {
         let disk_writer = state.disk_writer.clone();
         let _ = tokio::task::spawn_blocking(move || disk_writer.end_session()).await;
@@ -408,10 +409,27 @@ pub async fn run_capture_loop(
     // Before the handle goes back: a fault hands it to recovery, which may resume at once.
     state.resume.edit_plan(|plan| plan.next_frame = numbers.peek());
 
-    // Return the camera handle to the session (or finalize disconnect if lost).
+    // Everything the capture saved reaches the device before it reads `Idle`: an observer
+    // powers off on that, and 2026-10-16 lost a whole stack to the OS's write cache. A Stop
+    // hands the camera back first, so a Disconnect's warm-up does not wait on the card. A
+    // capture that ended on its own syncs first: the recovery it hands a lost camera to
+    // resumes only from `Recovering`, which `end_capture_state` sets after the sync.
+    let stopped = state.capture_state() == CaptureState::Stopping;
     state.clear_camera_token(CameraRole::Main).await;
-    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
+    if stopped {
+        lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
+        sync_captures(&state).await;
+    } else {
+        sync_captures(&state).await;
+        lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
+    }
     state.end_capture_state();
+}
+
+/// Wait, off the runtime, until the imaging camera's saved files are on the device.
+async fn sync_captures(state: &Arc<AppState>) {
+    let state = Arc::clone(state);
+    let _ = tokio::task::spawn_blocking(move || state.storage_sync.sync(CameraRole::Main, &state.disk_writer)).await;
 }
 
 // =============================================================================

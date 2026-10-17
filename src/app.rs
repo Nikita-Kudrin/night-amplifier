@@ -8,7 +8,12 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
-use tracing::{error, info};
+use std::time::Duration;
+use tracing::{error, info, warn};
+
+/// How long a shutdown waits for the captures to stop and their files to reach the disk:
+/// inside systemd's default 90 s `TimeoutStopSec`, after which it kills the process anyway.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(75);
 
 /// The version the binary reports — the release's, when `build-dist.sh` names one — set
 /// by `main` before `run`.
@@ -312,7 +317,7 @@ pub async fn run(plugins: crate::plugins::Plugins) {
     let log_dir = log_config.log_dir.clone();
     let _log_guard = init_logging(log_config).expect("Failed to initialize logging");
 
-    info!(version = app_version(), "Night Amplifier - EAA Live Stacking Server");
+    info!(version = app_version(), "========== Night Amplifier - EAA Live Stacking Server is starting");
     crate::system_info::log_startup_report(startup_context(&args, log_dir)).await;
 
     if args.span_timings {
@@ -365,9 +370,48 @@ pub async fn run(plugins: crate::plugins::Plugins) {
         });
     }
 
-    if let Err(e) = server.run().await {
-        error!("Server error: {}", e);
-        std::process::exit(1);
+    let state = server.state();
+    tokio::select! {
+        served = server.run() => {
+            if let Err(e) = served {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        () = shutdown_signal() => {
+            info!("Shutting down: stopping the cameras and saving to disk (a second signal exits at once)");
+            tokio::select! {
+                () = crate::session::services::CaptureService::shut_down(&state, SHUTDOWN_BUDGET) => info!("Shut down"),
+                () = shutdown_signal() => warn!("Second signal: exiting without waiting for the captures"),
+            }
+            // Not a return: the runtime's drop waits on every blocking task, and a vendor
+            // call stuck in one would hold the exit past systemd's patience.
+            drop(_log_guard);
+            std::process::exit(0);
+        }
+    }
+}
+
+/// Ctrl-C, or `SIGTERM` from `systemctl stop` and a system shutdown. A handler that cannot
+/// be installed waits for ever, so it never reads as a signal.
+async fn shutdown_signal() {
+    let interrupt = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => drop(terminate.recv().await),
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = interrupt => {}
+        () = terminate => {}
     }
 }
 

@@ -653,6 +653,44 @@ async fn stopping_the_guide_camera_stops_its_raw_frame_writing() {
     );
 }
 
+/// The guide camera syncs its own frames when *it* stops — not when the imaging camera
+/// does, which may stop hours earlier or never run at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_the_guide_camera_syncs_the_frames_it_saved() {
+    use crate::state::StorageSyncState;
+
+    let (state, disk_writer) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    std::thread::spawn(move || disk_writer.run());
+    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    connect_and_start_guide(&state).await;
+    wait_until_running(&state).await;
+    let dir = loop_until_session_dir(&state).await;
+    wait_for_files(&dir, 2).await;
+    let while_running = state.storage_sync.status(CameraRole::Guide).state;
+
+    CaptureService::stop(&state, CameraRole::Guide).await;
+    let mut synced = state.storage_sync.status(CameraRole::Guide);
+    for _ in 0..200 {
+        if synced.state != StorageSyncState::Syncing && synced.state != StorageSyncState::Idle {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        synced = state.storage_sync.status(CameraRole::Guide);
+    }
+    let saved = files_in(&dir);
+    let _ = std::fs::remove_dir_all(state.disk_writer.raw_dir());
+
+    assert_eq!(while_running, StorageSyncState::Idle, "a running guide camera was called saved");
+    assert_eq!(synced.state, StorageSyncState::Synced);
+    assert_eq!(synced.files, saved, "the sync missed some of the {saved} guide frames");
+    assert_eq!(
+        state.storage_sync.status(CameraRole::Main).state,
+        StorageSyncState::Idle,
+        "the guide's stop spoke for the imaging camera"
+    );
+}
+
 /// A deliberate stop ends the observation. Keeping the resume record would send the
 /// next Start back into the old folder, where it would carry on the numbering into
 /// frames from a different session.

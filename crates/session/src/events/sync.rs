@@ -48,6 +48,7 @@ topics! {
     ViewedCamera => Value,
     StackCrop => Value,
     DiskWriter => Value,
+    StorageSync => Value,
     /// Before the other Push-To topics: a client's `target_cleared` also clears those.
     PushToTarget => Value,
     PushToDirection => Value,
@@ -111,6 +112,7 @@ impl ServerEvent {
             | E::FrameDropped { .. }
             | E::CaptureCounts { .. } => Some(Topic::CaptureCounts),
             E::DiskWriterWarning { .. } | E::DiskWriterWarningCleared => Some(Topic::DiskWriter),
+            E::StorageSync { .. } => Some(Topic::StorageSync),
             // `capture_resumed` also drives a one-off notice, which a lost one goes without.
             E::CameraReconnecting { .. }
             | E::CameraReconnectFailed { .. }
@@ -176,6 +178,7 @@ mod tests {
             (ServerEvent::CatalogInstallStarting, Some(Topic::CatalogInstall)),
             (ServerEvent::frame_dropped(1, 30), Some(Topic::CaptureCounts)),
             (ServerEvent::DiskWriterWarningCleared, Some(Topic::DiskWriter)),
+            (ServerEvent::storage_sync(CameraRole::Guide, &Default::default()), Some(Topic::StorageSync)),
             (ServerEvent::capture_resumed("Cam", 12), Some(Topic::CameraRecovery)),
             (ServerEvent::CameraRecoveryCleared { role: CameraRole::Guide }, Some(Topic::CameraRecovery)),
             (ServerEvent::camera_persistently_unresponsive("Cam", 3), None),

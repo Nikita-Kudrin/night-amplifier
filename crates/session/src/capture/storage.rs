@@ -406,6 +406,40 @@ mod tests {
         );
     }
 
+    /// A final stack the writer refuses — stopped responding, or gone — is the capture's one
+    /// irreplaceable output: the observer is told, not left to find it missing.
+    #[test]
+    fn a_stack_the_writer_refuses_is_reported_to_the_observer() {
+        let (state, writer) = AppState::new_for_testing();
+        drop(writer);
+        state.settings.update(|s| {
+            s.stacking = true;
+            s.wanderer_mode = false;
+            s.save_stacked_image = true;
+            s.background_subtraction = false;
+        });
+        state.frame_captured(true, true, None);
+        let mut events = state.subscribe_events();
+        let camera = ConnectedCameraInfo {
+            id: "mock_0".into(),
+            provider: "Mock".into(),
+            index: 0,
+            role: crate::state::CameraRole::Main,
+            info: night_amplifier_core::camera::CameraInfo { name: "Mock".into(), ..Default::default() },
+        };
+
+        let stack = Frame::filled(8, 8, 3, 0.25).unwrap();
+        save_stacked_result(&state, Some(stack), 1, None, None, &camera);
+
+        let errors: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                ServerEvent::Error { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors, ["The stack was not saved: Disk writer has been closed"]);
+    }
+
     /// The 2026-09-20 field settings: guide subs and the stack saved, raw main subs not.
     /// Guide saving keeps the writer enabled, but the guide files into a session of its
     /// own; counting it opened an empty `-live` folder on every Live view start (23 that
@@ -500,6 +534,7 @@ mod tests {
         let doomed = night_amplifier_core::disk_writer::OpenSession {
             dir: raw.join("blocker").join("doomed-live"),
             session_type: WritingSessionType::IndividualFrames,
+            group: night_amplifier_core::disk_writer::SyncGroup::Owned,
         };
         for n in 1..=3 {
             let frame = Arc::new(RawFrame {
@@ -848,7 +883,10 @@ pub fn save_stacked_result(
             .disk_writer
             .queue_stacked_frame(Arc::new(fits_frame), metadata)
         {
+            // The capture's one irreplaceable output: a writer that stopped responding gave
+            // it up, and the observer must hear it rather than find it missing tomorrow.
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
+            state.send_error(format!("The stack was not saved: {e}"));
         }
 
         match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {

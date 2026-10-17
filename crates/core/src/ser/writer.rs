@@ -104,6 +104,13 @@ impl SerWriter {
         }
     }
 
+    /// Push buffered frames to the OS, so a sync of the file covers them.
+    pub fn flush(&mut self) -> Result<()> {
+        self.writer
+            .flush()
+            .map_err(|e| StackError::InvalidConfiguration(format!("Failed to flush: {}", e)))
+    }
+
     /// Finalizes the file, writing timestamps and updating header.
     pub fn finalize(mut self) -> Result<()> {
         tracing::info!(frames_written = self.frames_written, "Finalizing SER file");

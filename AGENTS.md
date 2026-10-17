@@ -328,6 +328,22 @@ so `DiskWriterHandle` remembers issued names to keep same-second sessions apart,
 `raw/` with a throwaway mkdir — the folder was the only check a read-only/full disk refused Start on. Failed writes
 go to the UI once per episode (`FailureSink`), never just a log line per frame. The main capture opens one only
 when *it* saves (`main_capture_saves`); guide saving keeps the writer on but files into the guide's own session.
+**A write is not on disk until synced** (`core::durable`): 2026-10-16's Orange Pi lost power seconds after a Stop
+and kept a 0-byte stack, PNG and three subs, all logged "written". The worker records every path it writes, per
+`SyncGroup` (`Shared`: the handle's session, the imaging camera and its stack; `Owned`: the guide loop's), and
+on `DiskWriterHandle::sync(group)` hands them to a `disk-sync` thread — on the writer's own, the guide's stop held
+the imaging camera's frames until its queue dropped subs. Each camera syncs when *it* stops — the main pipeline
+after `end_session` and before `Idle` (a Stop hands the camera back first, so a Disconnect's warm-up never waits
+on the card), the guide loop after its hand-back — announcing `storage_sync` per role (a Value topic: `syncing` →
+`synced`/`failed`, `idle` again when it starts; a run counter drops a sync's verdict that a restart overtook).
+Syncing at the end, not per file, keeps a slow SD card from backing up the queue. The final stack *waits* for a
+queue slot (`queue_stacked_*`); a raw frame is turned away. **Every wait on the writer is bounded by progress**:
+`Unresponsive` after `STALL_PATIENCE` (60 s) with no write or sync step, or a pulled drive held the capture in
+`Stopping` for ever. SIGTERM/Ctrl-C runs `CaptureService::shut_down` (stop, sync, 75 s budget) before exiting.
+Config files (`settings.json`, Pro's state, AI-compute store, licence) go through `durable::write_atomic`: temp,
+sync, rename, one at a time process-wide (writers share `<name>.tmp`; overlapping ones exposed a 0-byte file), a
+snapshot of shared state built under that lock (`write_atomic_with`). Settings save off the runtime and coalesce
+(`SettingsWriter`). A directory `fsync` refused with `EINVAL`/`ENOTSUP` (FUSE exFAT/NTFS) counts as done.
 
 ## Streaming Protocols
 

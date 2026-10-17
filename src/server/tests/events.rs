@@ -128,6 +128,8 @@ async fn the_events_socket_opens_with_every_value_topic_then_synced() {
             json!({"type": "viewed_camera_changed", "camera": "main"}),
             json!({"type": "stack_crop_changed"}),
             json!({"type": "disk_writer_warning_cleared"}),
+            json!({"type": "storage_sync", "role": "main", "state": "idle", "files": 0, "failed": 0, "error": null}),
+            json!({"type": "storage_sync", "role": "guide", "state": "idle", "files": 0, "failed": 0, "error": null}),
             json!({"type": "target_cleared"}),
             json!({"type": "push_direction_cleared"}),
             json!({"type": "plate_solving_status", "in_progress": false, "target_name": null,

@@ -3,12 +3,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use super::config::{
     DiskWriterMessage, FrameType, WriteRequest, WritingSessionType, QUEUE_WARNING_THRESHOLD,
 };
 use super::error::DiskWriterError;
+use super::{SyncGroup, STALL_PATIENCE};
 use crate::camera::RawFrame;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
@@ -24,6 +26,8 @@ use crate::telemetry::metrics as telemetry_metrics;
 pub struct OpenSession {
     pub dir: PathBuf,
     pub session_type: WritingSessionType,
+    /// Which sync settles its files: `Shared` once published as the handle's session.
+    pub group: SyncGroup,
 }
 
 /// Handle to the disk writer for sending write requests
@@ -35,6 +39,9 @@ pub struct DiskWriterHandle {
     pub(crate) queue_depth: Arc<AtomicUsize>,
     /// Warning flag for queue overflow
     pub(crate) queue_warning: Arc<AtomicBool>,
+    /// Bumped by the writer and its sync thread at each write or sync step: what a wait on
+    /// them measures progress by. See [`STALL_PATIENCE`].
+    pub(crate) activity: Arc<AtomicU64>,
     /// The open capture session, if any
     pub(crate) session: Arc<RwLock<Option<OpenSession>>>,
     /// Whether saving is enabled
@@ -127,6 +134,7 @@ impl DiskWriterHandle {
         Ok(OpenSession {
             dir: session_path,
             session_type,
+            group: SyncGroup::Owned,
         })
     }
 
@@ -146,13 +154,13 @@ impl DiskWriterHandle {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(dir.clone());
-        Ok(OpenSession { dir, session_type })
+        Ok(OpenSession { dir, session_type, group: SyncGroup::Owned })
     }
 
     /// Publish the session that frames queued from now on belong to.
     fn open(&self, dir: PathBuf, session_type: WritingSessionType) {
         *self.session.write().unwrap_or_else(|e| e.into_inner()) =
-            Some(OpenSession { dir, session_type });
+            Some(OpenSession { dir, session_type, group: SyncGroup::Shared });
     }
 
     /// Reopen an existing session directory instead of creating a new one.
@@ -197,13 +205,47 @@ impl DiskWriterHandle {
     /// unreadable — this used to go out with `try_send` and be dropped silently
     /// whenever the disk had fallen behind. Call it from a blocking context: at capture
     /// end, which is the only place it belongs, the producing threads have already been
-    /// joined, so the queue is draining and the wait is bounded by one frame write.
+    /// joined, so the queue is draining; a writer that stalls is given up on.
     pub fn end_session(&self) -> Option<PathBuf> {
         let session = self.take_session();
-        if session.is_some() && self.sender.send(DiskWriterMessage::EndSession).is_err() {
-            warn!("Disk writer stopped before the session could be ended");
+        if session.is_some() {
+            if let Err(e) = self.send_patiently(DiskWriterMessage::EndSession, &mut Patience::new(self)) {
+                warn!(error = %e, "The disk writer was not told the session ended");
+            }
         }
         session.map(|s| s.dir)
+    }
+
+    /// Block until every file `group` wrote so far is on the storage device, not just in
+    /// the OS's cache, and say what made it. Call it from a blocking context, after the
+    /// group's last write was queued: the answer covers exactly what was queued before.
+    /// `Unresponsive` once nothing moved for [`STALL_PATIENCE`], however long the queue.
+    pub fn sync(&self, group: SyncGroup) -> Result<super::SyncReport, DiskWriterError> {
+        let (reply, answer) = mpsc::channel();
+        let mut patience = Patience::new(self);
+        self.send_patiently(DiskWriterMessage::Sync(group, reply), &mut patience)?;
+        loop {
+            match answer.recv_timeout(Duration::from_millis(100)) {
+                Ok(report) => return Ok(report),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(DiskWriterError::WriterClosed),
+                Err(mpsc::RecvTimeoutError::Timeout) => patience.check(&self.activity)?,
+            }
+        }
+    }
+
+    /// Queue `message`, waiting for room while the writer is making progress. `std`'s
+    /// bounded channel has no timed send, hence the polling; only Stop's few messages take
+    /// this path, never a frame.
+    fn send_patiently(&self, mut message: DiskWriterMessage, patience: &mut Patience) -> Result<(), DiskWriterError> {
+        loop {
+            match self.sender.try_send(message) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Disconnected(_)) => return Err(DiskWriterError::WriterClosed),
+                Err(mpsc::TrySendError::Full(back)) => message = back,
+            }
+            patience.check(&self.activity)?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Stop writing into the open session without ending it.
@@ -257,6 +299,11 @@ impl DiskWriterHandle {
         self.queue_frame_in(session, request)
     }
 
+    fn queue_final(&self, request: WriteRequest) -> Result<bool, DiskWriterError> {
+        let session = self.session.read().unwrap_or_else(|e| e.into_inner()).clone();
+        self.enqueue(session, request, Enqueue::WaitForRoom)
+    }
+
     /// Queue a frame against a session the caller owns, rather than the handle's shared
     /// one.
     ///
@@ -266,7 +313,16 @@ impl DiskWriterHandle {
     pub fn queue_frame_in(
         &self,
         session: Option<OpenSession>,
+        request: WriteRequest,
+    ) -> Result<bool, DiskWriterError> {
+        self.enqueue(session, request, Enqueue::TurnAwayWhenFull)
+    }
+
+    fn enqueue(
+        &self,
+        session: Option<OpenSession>,
         mut request: WriteRequest,
+        mode: Enqueue,
     ) -> Result<bool, DiskWriterError> {
         if !self.is_enabled() {
             return Ok(false);
@@ -291,26 +347,20 @@ impl DiskWriterHandle {
         }
 
         let message = DiskWriterMessage::WriteFrame(request);
-        match self.sender.try_send(message) {
-            Ok(()) => Ok(true),
-            // Not logged here: every caller reports the returned error, and the raw
-            // path rate-limits it. Logging both put two unthrottled lines in the log for
-            // each frame a busy disk turned away.
-            Err(mpsc::TrySendError::Full(_)) => {
-                self.queue_depth.fetch_sub(1, Ordering::SeqCst);
-                telemetry_metrics::record_disk_writer_queue_depth(
-                    self.queue_depth.load(Ordering::SeqCst) as u64,
-                );
-                Err(DiskWriterError::QueueFull)
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                self.queue_depth.fetch_sub(1, Ordering::SeqCst);
-                telemetry_metrics::record_disk_writer_queue_depth(
-                    self.queue_depth.load(Ordering::SeqCst) as u64,
-                );
-                Err(DiskWriterError::WriterClosed)
-            }
-        }
+        let sent = match mode {
+            Enqueue::TurnAwayWhenFull => self.sender.try_send(message).map_err(|e| match e {
+                mpsc::TrySendError::Full(_) => DiskWriterError::QueueFull,
+                mpsc::TrySendError::Disconnected(_) => DiskWriterError::WriterClosed,
+            }),
+            Enqueue::WaitForRoom => self.send_patiently(message, &mut Patience::new(self)),
+        };
+        // Not logged here: every caller reports the returned error, and the raw path
+        // rate-limits it. Logging both put two unthrottled lines in the log for each frame
+        // a busy disk turned away.
+        sent.map(|()| true).inspect_err(|_| {
+            self.queue_depth.fetch_sub(1, Ordering::SeqCst);
+            telemetry_metrics::record_disk_writer_queue_depth(self.queue_depth.load(Ordering::SeqCst) as u64);
+        })
     }
 
     /// Queue a raw frame for writing into the handle's current session.
@@ -353,12 +403,15 @@ impl DiskWriterHandle {
         )
     }
 
+    /// Queue the capture's final stack, waiting for room: a queue still full of raw frames
+    /// at Stop turned it away, and the stack is the capture's one irreplaceable output.
+    /// Call it from a blocking context. A writer that stalls is given up on (`Unresponsive`).
     pub fn queue_stacked_frame(
         &self,
         frame: std::sync::Arc<Frame>,
         metadata: FitsMetadata,
     ) -> Result<bool, DiskWriterError> {
-        self.queue_frame(WriteRequest {
+        self.queue_final(WriteRequest {
             frame_type: FrameType::Stacked(frame),
             session: None,
             frame_number: 0,
@@ -373,7 +426,7 @@ impl DiskWriterHandle {
     /// `rgb8` must be interleaved 8-bit RGB at `width` x `height`, produced by
     /// `crate::render::display::frame_to_rgb8_downsampled` (or an equivalent
     /// call through the same encoder) so the file matches what the live view
-    /// rendered — see `FrameType::StackedPng`.
+    /// rendered — see `FrameType::StackedPng`. Waits for room, as `queue_stacked_frame`.
     pub fn queue_stacked_png(
         &self,
         rgb8: std::sync::Arc<Vec<u8>>,
@@ -381,7 +434,7 @@ impl DiskWriterHandle {
         height: u32,
         stacked_count: u64,
     ) -> Result<bool, DiskWriterError> {
-        self.queue_frame(WriteRequest {
+        self.queue_final(WriteRequest {
             frame_type: FrameType::StackedPng {
                 rgb8,
                 width,
@@ -393,6 +446,35 @@ impl DiskWriterHandle {
             sensor_type: crate::camera::SensorType::Color,
             bayer_pattern: None,
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Enqueue {
+    /// A raw frame: a camera never waits on the disk, so a full queue drops it.
+    TurnAwayWhenFull,
+    WaitForRoom,
+}
+
+/// A wait on the writer that ends once it has made no progress for [`STALL_PATIENCE`].
+struct Patience {
+    seen: u64,
+    since: Instant,
+}
+
+impl Patience {
+    fn new(handle: &DiskWriterHandle) -> Self {
+        Self { seen: handle.activity.load(Ordering::SeqCst), since: Instant::now() }
+    }
+
+    fn check(&mut self, activity: &AtomicU64) -> Result<(), DiskWriterError> {
+        let now = activity.load(Ordering::SeqCst);
+        if now != self.seen {
+            (self.seen, self.since) = (now, Instant::now());
+        } else if self.since.elapsed() >= STALL_PATIENCE {
+            return Err(DiskWriterError::Unresponsive);
+        }
+        Ok(())
     }
 }
 

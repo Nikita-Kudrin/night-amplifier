@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, Mutex};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::events::ServerEvent;
 use super::services::{DiscoveredCameras, PushToState};
-use super::settings_persistence::SettingsPersistence;
+use super::settings_persistence::{SettingsPersistence, SettingsWriter};
 use night_amplifier_core::camera::CameraStatus;
 use night_amplifier_core::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
@@ -30,6 +30,7 @@ mod stream_viewers;
 mod session;
 mod settings;
 mod settings_store;
+mod storage_sync;
 mod types;
 mod stream_crop;
 mod sync;
@@ -55,6 +56,7 @@ pub use guide_loop::{GuideLoopTicket, GuideLoops};
 pub use installs::{InstallEvents, InstallStatus, Installer, Installs};
 pub use push_to_announcer::PushToAnnouncer;
 pub use reopen_hold::ReopenHold;
+pub use storage_sync::{StorageSync, StorageSyncState, StorageSyncStatus};
 pub use roster::{CameraRoster, ConnectedCameraInfo, FramelessRun};
 pub use session::{
     CaptureControl, CaptureResume, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
@@ -102,6 +104,8 @@ pub struct AppState {
     pub disk_writer: DiskWriterHandle,
     /// The slow-disk warning clients are shown. See [`DiskWarning`].
     pub disk_warning: DiskWarning,
+    /// Whether the last capture's files are on the device. See [`StorageSync`].
+    pub storage_sync: StorageSync,
     /// What the last camera enumeration found, for lists that do not enumerate again.
     pub discovered_cameras: DiscoveredCameras,
     /// Push-To's solve bookkeeping; `None` for a server without it. Synchronized inside,
@@ -121,8 +125,8 @@ pub struct AppState {
     /// `connect` can return before a loop that then fails to start — either way,
     /// presence once answered "solving" when nothing was. Only `guide_task` (un)registers loops.
     pub guide_loops: guide_loop::GuideLoops,
-    /// Settings persistence manager
-    settings_persistence: SettingsPersistence,
+    /// Writes the settings to disk; see [`Self::save_settings`].
+    settings_writer: SettingsWriter,
     /// Serializes `camera::lifecycle::connect`. Its idempotency check
     /// reads the roster, which `finalize_disconnect` clears first, so two
     /// concurrent connects for one id would both pass it, both open the
@@ -212,6 +216,7 @@ impl AppState {
         }));
 
         let disk_warning = DiskWarning::new(events_tx.clone());
+        let storage_sync = StorageSync::new(events_tx.clone());
         let state = Self {
             roster: CameraRoster::default(),
             capture: CaptureControl::default(),
@@ -227,11 +232,12 @@ impl AppState {
             events: events_tx,
             disk_writer: disk_writer_handle,
             disk_warning,
+            storage_sync,
             discovered_cameras: DiscoveredCameras::default(),
             push_to,
             push_to_tasks: std::sync::OnceLock::new(),
             guide_loops: guide_loop::GuideLoops::default(),
-            settings_persistence,
+            settings_writer: SettingsWriter::new(settings_persistence),
             camera_connect_lock: Mutex::new(()),
             device_catalog: Arc::new(night_amplifier_core::camera::RegistryCatalog::new()),
             plugins: night_amplifier_core::plugins::Plugins::installed(),
@@ -312,11 +318,14 @@ impl AppState {
         self.guide_loops.force_running(running);
     }
 
-    /// Save current settings to disk
+    /// Save the current settings to disk, off the caller's thread — see [`SettingsWriter`].
     pub fn save_settings(&self) {
-        if let Err(e) = self.settings_persistence.save(&self.settings.snapshot()) {
-            warn!("Failed to save settings: {}", e);
-        }
+        self.settings_writer.save(|| self.settings.snapshot());
+    }
+
+    /// Wait for every queued settings save to be written. Blocking.
+    pub fn flush_settings(&self) {
+        self.settings_writer.flush();
     }
 
     /// Create new application state for testing

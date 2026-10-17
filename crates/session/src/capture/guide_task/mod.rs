@@ -143,6 +143,7 @@ async fn spawn_loop(
             // certainly exists, so a spawn that never got this far cannot leave the
             // imaging camera stood down for a solve source that is not there.
             loop_state.guide_loops.mark_running(id);
+            loop_state.storage_sync.reset(CameraRole::Guide);
             // A panic would end the thread still registered, its slot `Guiding` with no
             // handle: Start answered "running" and no later loop could take the camera.
             // Recovered like the imaging pipeline's panicked capture thread.
@@ -167,6 +168,10 @@ async fn spawn_loop(
                 &loop_info.info.name,
                 camera,
             ));
+
+            // Every frame this loop saved is queued by now. After the hand-back, so a stop
+            // waiting for the handle does not wait out the sync too.
+            loop_state.storage_sync.sync(CameraRole::Guide, &loop_state.disk_writer);
         });
     if let Err(e) = spawned {
         // The handle went down with the closure. Recover it like any other lost handle.

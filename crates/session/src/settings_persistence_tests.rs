@@ -11,7 +11,7 @@ mod tests {
     use night_amplifier_core::push_to::TelescopeSettings;
     use night_amplifier_core::render::denoise::DenoiseSettings;
     use night_amplifier_core::render::StretchAggressiveness;
-    use crate::settings_persistence::{SettingsFile, SettingsPersistence};
+    use crate::settings_persistence::{SettingsFile, SettingsPersistence, SettingsWriter};
     use crate::state::{
         CameraCaptureProfile, CaptureSettings, EyepieceSettings, EyepieceStreamResolution,
         FocusModeSnapshot, RawFrameSaving, Resolution,
@@ -628,6 +628,66 @@ mod tests {
         let settings = read(json);
 
         assert_eq!(settings.raw_frame_saving, RawFrameSaving::default());
+    }
+
+    /// A save that cannot finish keeps the settings the last one wrote, rather than the
+    /// truncated file an in-place write leaves for the next start to discard.
+    #[test]
+    fn a_save_that_cannot_finish_keeps_the_previous_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let persistence = SettingsPersistence::new(&path);
+        let saved = CaptureSettings { gain: 123, ..CaptureSettings::default() };
+        persistence.save(&saved).unwrap();
+        // A directory where the save stages its file: the write fails, as a full disk would.
+        std::fs::create_dir(dir.path().join("settings.json.tmp")).unwrap();
+
+        let refused = persistence.save(&CaptureSettings { gain: 7, ..CaptureSettings::default() });
+
+        assert!(refused.is_err());
+        assert_eq!(persistence.load().unwrap().gain, 123);
+    }
+
+    /// `save_settings` runs from the settings service, a reconnect, an install and Focus
+    /// mode at once: whichever edit came last must be the one on disk.
+    #[test]
+    fn racing_saves_leave_the_newest_settings_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let store = crate::state::SettingsStore::new(CaptureSettings { gain: 0, ..CaptureSettings::default() });
+        let writer = SettingsWriter::new(SettingsPersistence::new(&path));
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..10 {
+                        store.update(|s| s.gain += 1);
+                        writer.save(|| store.snapshot());
+                    }
+                });
+            }
+        });
+        writer.flush();
+
+        assert_eq!(SettingsPersistence::new(&path).load().unwrap().gain, 80);
+    }
+
+    /// From an async handler the write goes to a blocking thread: the request does not wait
+    /// for the device, and a burst of edits still ends with the last one on disk.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_save_from_the_runtime_is_written_off_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let writer = std::sync::Arc::new(SettingsWriter::new(SettingsPersistence::new(&path)));
+
+        for gain in 1..=50 {
+            let settings = std::sync::Arc::new(CaptureSettings { gain, ..CaptureSettings::default() });
+            writer.save(|| settings);
+        }
+        let flushing = std::sync::Arc::clone(&writer);
+        tokio::task::spawn_blocking(move || flushing.flush()).await.unwrap();
+
+        assert_eq!(SettingsPersistence::new(&path).load().unwrap().gain, 50);
     }
 
     #[test]

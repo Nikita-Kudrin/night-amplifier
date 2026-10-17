@@ -103,6 +103,9 @@ pub enum DiskWriterMessage {
     WriteFrame(WriteRequest),
     /// End the current capture session
     EndSession,
+    /// Sync everything the group wrote so far to the device, then answer. Queued behind
+    /// every write before it, so the answer covers them all.
+    Sync(super::SyncGroup, std::sync::mpsc::Sender<super::SyncReport>),
 }
 
 /// Configuration for the disk writer

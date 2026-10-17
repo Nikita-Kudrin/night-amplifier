@@ -8,7 +8,7 @@ import StatusNotice from './StatusNotice.vue'
 import type {StatusTone} from './StatusNotice.vue'
 import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
 import {useEventStreamContext, useSelectedCamera} from '../composables/appContext'
-import type {SolveVerdict} from '../composables/api.types'
+import type {CameraRole, SolveVerdict} from '../composables/api.types'
 import {formatPercent} from '../utils/format'
 
 /** A chip: `kind` is its class, `dismiss` (when it has one) what a click on it clears. */
@@ -85,6 +85,46 @@ const pushToChip = computed((): Chip | null => {
   }
 })
 
+const STORAGE_ROLES: readonly CameraRole[] = ['main', 'guide']
+
+/** "3 files", or "3 guide frames": the guide camera saves only its raw frames. */
+function savedFiles(role: CameraRole, n: number) {
+  const noun = role === 'guide' ? 'guide frame' : 'file'
+  return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+/**
+ * Whether what a camera's last capture saved is on the storage device, not just in the OS's
+ * cache: 2026-10-16's Orange Pi lost power seconds after a Stop and kept an empty stack. One
+ * per camera, since each syncs when it stops. Saving is not dismissible — the observer must
+ * wait it out — and outranks Push-To while it lasts.
+ */
+const storageChip = (role: CameraRole): Chip | null => {
+  const sync = eventStream.storageSync.value[role]
+  if (!sync) return null
+  const kind = `storage-sync ${role} ${sync.state}`
+  const dismiss = () => eventStream.clearStorageSync(role)
+  if (sync.state === 'syncing') {
+    const what = role === 'guide' ? 'Saving guide frames' : 'Saving'
+    return {kind, tone: 'primary', spinner: true, text: `${what} to disk — keep the power on`}
+  }
+  if (sync.state === 'synced') {
+    return {kind, tone: 'success', icon: 'check', text: `Saved ${savedFiles(role, sync.files)} to disk`, dismiss}
+  }
+  if (sync.state === 'failed') {
+    // No count when the sync itself never answered (the drive stopped responding): which
+    // files made it is unknown, so none is named lost.
+    const what = sync.failed > 0
+      ? `${savedFiles(role, sync.failed)} not saved to disk`
+      : `${role === 'guide' ? 'Guide frames' : 'Captures'} not confirmed on disk`
+    return {kind, tone: 'error', icon: 'alert', text: `${what}${sync.error ? `: ${sync.error}` : ''}`, dismiss}
+  }
+  return null
+}
+
+const liveChips = computed(() =>
+  [...STORAGE_ROLES.map(storageChip), pushToChip.value].filter((chip) => chip !== null))
+
 /** The dismissible notices, in the order they show. */
 const notices = computed(() => {
   const es = eventStream
@@ -135,15 +175,16 @@ const notices = computed(() => {
     <div class="spacer"></div>
 
     <StatusNotice
-        v-if="pushToChip"
-        :class="pushToChip.kind"
-        :tone="pushToChip.tone"
-        :icon="pushToChip.icon"
-        :text="pushToChip.text"
-        :dismissible="Boolean(pushToChip.dismiss)"
-        @dismiss="pushToChip.dismiss?.()"
+        v-for="chip in liveChips"
+        :key="chip.kind"
+        :class="chip.kind"
+        :tone="chip.tone"
+        :icon="chip.icon"
+        :text="chip.text"
+        :dismissible="Boolean(chip.dismiss)"
+        @dismiss="chip.dismiss?.()"
     >
-      <template v-if="pushToChip.spinner" #icon>
+      <template v-if="chip.spinner" #icon>
         <BaseSpinner size="xs"/>
       </template>
     </StatusNotice>

@@ -405,6 +405,104 @@ describe('StatusBar', () => {
         })
     })
 
+    describe('Storage sync', () => {
+        type Syncs = ReturnType<typeof createCaptureEvents>['state']['storageSync']['value']
+        type Sync = NonNullable<Syncs['main']>
+        const mountWith = (sync: Sync, clearStorageSync = vi.fn(), guide: Sync | null = null) =>
+            mountStatusBar({eventStream: {storageSync: ref<Syncs>({main: sync, guide}), clearStorageSync}})
+
+        it('asks to keep the power on while saving, and cannot be dismissed', () => {
+            const wrapper = mountWith({state: 'syncing', files: 0, failed: 0, error: null})
+
+            const chip = wrapper.find('.storage-sync.main.syncing')
+            expect(chip.text()).toContain('keep the power on')
+            expect(chip.find('.btn-dismiss').exists()).toBe(false)
+        })
+
+        it('says how many files reached the disk once every one has', async () => {
+            const clearStorageSync = vi.fn()
+            const wrapper = mountWith({state: 'synced', files: 166, failed: 0, error: null}, clearStorageSync)
+
+            const chip = wrapper.find('.storage-sync.main.synced')
+            expect(chip.find('.status-chip-text').text()).toBe('Saved 166 files to disk')
+            expect(chip.classes()).toContain('tone-success')
+            await chip.trigger('click')
+            expect(clearStorageSync).toHaveBeenCalledWith('main')
+        })
+
+        // Each camera syncs when it stops: the guide's chip is its own, and dismissed alone.
+        it('shows the guide camera\'s save beside the imaging camera\'s', async () => {
+            const clearStorageSync = vi.fn()
+            const wrapper = mountWith(
+                {state: 'synced', files: 166, failed: 0, error: null},
+                clearStorageSync,
+                {state: 'synced', files: 1, failed: 0, error: null},
+            )
+
+            const texts = wrapper.findAll('.storage-sync .status-chip-text').map((chip) => chip.text())
+            expect(texts).toEqual(['Saved 166 files to disk', 'Saved 1 guide frame to disk'])
+            await wrapper.find('.storage-sync.guide').trigger('click')
+            expect(clearStorageSync).toHaveBeenCalledWith('guide')
+        })
+
+        it('words the guide camera\'s save as its frames, while saving and when one failed', () => {
+            const syncing = mountWith(
+                {state: 'synced', files: 2, failed: 0, error: null}, vi.fn(),
+                {state: 'syncing', files: 0, failed: 0, error: null},
+            )
+            const failed = mountWith(
+                {state: 'synced', files: 2, failed: 0, error: null}, vi.fn(),
+                {state: 'failed', files: 38, failed: 2, error: 'frame_000039.fits: EIO'},
+            )
+
+            const guideText = (wrapper: typeof syncing) => wrapper.find('.storage-sync.guide .status-chip-text').text()
+            expect(guideText(syncing)).toBe('Saving guide frames to disk — keep the power on')
+            expect(syncing.find('.storage-sync.guide .btn-dismiss').exists()).toBe(false)
+            expect(guideText(failed)).toBe('2 guide frames not saved to disk: frame_000039.fits: EIO')
+            expect(failed.find('.storage-sync.guide').classes()).toContain('tone-error')
+        })
+
+        // A sync that never answered (`StorageSync::sync`'s error branch) has no count: which
+        // files made it is unknown, so none is named lost — and never "0 files".
+        it('says the save is unconfirmed, without a count, when the whole sync failed', () => {
+            const wrapper = mountWith(
+                {state: 'failed', files: 0, failed: 0, error: 'Storage stopped responding'}, vi.fn(),
+                {state: 'failed', files: 0, failed: 0, error: null},
+            )
+
+            const text = (role: string) => wrapper.find(`.storage-sync.${role} .status-chip-text`).text()
+            expect(text('main')).toBe('Captures not confirmed on disk: Storage stopped responding')
+            expect(text('guide')).toBe('Guide frames not confirmed on disk')
+        })
+
+        it('names what did not reach the disk, never "saved"', () => {
+            const wrapper = mountWith({state: 'failed', files: 163, failed: 1, error: 'frame_000164.fits: EIO'})
+
+            const chip = wrapper.find('.storage-sync.main.failed')
+            expect(chip.find('.status-chip-text').text()).toBe('1 file not saved to disk: frame_000164.fits: EIO')
+            expect(chip.classes()).toContain('tone-error')
+            expect(wrapper.text()).not.toContain('Saved')
+        })
+
+        it('shows nothing when there is nothing to report', () => {
+            const wrapper = mountStatusBar()
+
+            expect(wrapper.find('.storage-sync').exists()).toBe(false)
+        })
+
+        it('shows ahead of the Push-To chip', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    storageSync: ref<Syncs>({main: {state: 'syncing', files: 0, failed: 0, error: null}, guide: null}),
+                    pushToBlocked: ref('No target selected'),
+                },
+            })
+
+            const texts = wrapper.findAll('.status-chip-text').map((chip) => chip.text())
+            expect(texts).toEqual(['Saving to disk — keep the power on', 'No target selected'])
+        })
+    })
+
     describe('Dropped Frames Counter', () => {
         it('does not show dropped counter when no frames dropped', () => {
             const wrapper = mountStatusBar({

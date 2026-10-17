@@ -5,6 +5,9 @@ pub enum DiskWriterError {
     QueueFull,
     /// The writer task has been closed
     WriterClosed,
+    /// The writer finished no write or sync for [`super::STALL_PATIENCE`]: a pulled drive, a
+    /// hung card. Waits on it give up rather than hold a capture in `Stopping` for ever.
+    Unresponsive,
     /// Failed to create directory
     DirectoryCreationFailed(String),
     /// Failed to write file
@@ -16,6 +19,7 @@ impl std::fmt::Display for DiskWriterError {
         match self {
             Self::QueueFull => write!(f, "Disk writer queue is full"),
             Self::WriterClosed => write!(f, "Disk writer has been closed"),
+            Self::Unresponsive => write!(f, "Storage stopped responding"),
             Self::DirectoryCreationFailed(msg) => write!(f, "Failed to create directory: {}", msg),
             Self::WriteFailed(msg) => write!(f, "Failed to write file: {}", msg),
         }

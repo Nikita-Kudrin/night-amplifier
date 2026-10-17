@@ -121,3 +121,24 @@ on disk will have gaps.
 
 **Save Stacked Image** stays Stacking-only. Live view builds no stack, and Wanderer discards its
 stack every time the telescope moves, so there is no single result to write.
+
+## Before you power off
+
+A file the computer has "saved" can still be waiting in memory for up to half a minute before it
+reaches the card or drive, and cutting the power then leaves it empty. So when you press **Stop**,
+the status bar first shows **Saving to disk — keep the power on**, while the stack, its PNG, the
+raw frames or the SER video are pushed onto the device. Then it shows **Saved N files to disk**,
+and it is safe to power off. If something did not make it, it says how many files and why instead.
+The guide camera's saved frames get their own notice when the guide camera stops — **Saved N
+guide frames to disk** — so wait for both if both were saving. Settings are written the same way
+each time you change them.
+
+On a slow card **Stop** can take a while: the camera is free again at once (a disconnect starts
+warming it up), but the capture reads *Stopping* until the files are on the card. If the drive stops
+responding altogether — unplugged, or a card that hangs — the app gives up after a minute without
+progress and says **Captures not confirmed on disk**, rather than staying in *Stopping* all night;
+if the stack itself could not be handed over, it says so too.
+
+Shutting the computer down, or stopping the service (`systemctl stop`), during a capture is safe:
+the app stops both cameras, saves the stack and syncs everything first, for up to 75 seconds.
+Pressing Ctrl-C a second time exits at once.
