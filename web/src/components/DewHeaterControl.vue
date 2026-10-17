@@ -1,86 +1,50 @@
-<script setup>
-import {computed, inject, ref, watch} from 'vue'
-import {updateSettings} from '../composables/api.js'
-import {useError} from '../composables/useError.js'
-import {BaseSlider, BaseToggle} from './ui'
-import {HELP_TEXTS} from '../constants'
+<script setup lang="ts">
+import {computed, ref, watch} from 'vue'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings'
+import {formatPercent} from '../utils/format'
+import {BaseAlert, BaseSlider, BaseToggle} from './ui'
+import SelectedCameraTag from './SelectedCameraTag.vue'
+import {DEFAULT_SETTINGS, DEW_HEATER_POWER_LIMITS, HELP_TEXTS} from '../constants'
 
-const settings = inject('settings', ref(null))
-const refreshSettings = inject('refreshSettings', async () => {
-})
-const cameras = inject('cameras', ref([]))
-const selectedCameraId = inject('selectedCamera', ref(null))
-const cameraStatus = inject('cameraStatus', ref({}))
 // Same reason as the cooler: each camera carries its own dew-heater state.
-const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
+const {cameraSettings, currentCamera, liveStatus, error, clearError, apply} = useCameraHardwareSettings()
 
-const {error, withErrorHandling} = useError()
+const hasDewHeater = computed(() => Boolean(currentCamera.value?.info.has_dew_heater))
 
-const cameraSettings = computed(() => {
-  if (!settings.value) return null
-  return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
-})
-
-const currentCamera = computed(() =>
-    (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
-)
-
-const hasDewHeater = computed(() => Boolean(currentCamera.value?.info?.has_dew_heater))
-
-const localHeaterEnabled = ref(true)
-const localHeaterPower = ref(10)
+const localHeaterEnabled = ref(DEFAULT_SETTINGS.dew_heater_enabled)
+const localHeaterPower = ref(DEFAULT_SETTINGS.dew_heater_power)
 
 watch(
     cameraSettings,
     (hardware) => {
       if (!hardware) return
-      localHeaterEnabled.value = hardware.dew_heater_enabled ?? true
-      if (typeof hardware.dew_heater_power === 'number') {
-        localHeaterPower.value = hardware.dew_heater_power
-      }
+      localHeaterEnabled.value = hardware.dew_heater_enabled
+      localHeaterPower.value = hardware.dew_heater_power
     },
     {immediate: true}
 )
 
-const liveStatus = computed(() => {
-  const name = currentCamera.value?.name
-  return name ? cameraStatus.value?.[name] : null
-})
-
-let debounceTimer = null
-
-async function applySetting(payload) {
-  await withErrorHandling(async () => {
-    await updateSettings({camera_role: settingsRole.value, ...payload})
-    await refreshSettings()
-  })
-}
-
-function debouncedApply(payload) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => applySetting(payload), 300)
-}
-
-function handleHeaterToggle(enabled) {
+function handleHeaterToggle(enabled: boolean) {
   localHeaterEnabled.value = enabled
-  applySetting({dew_heater_enabled: enabled})
+  void apply({dew_heater_enabled: enabled})
 }
 
-function handlePowerChange(value) {
+function handlePowerChange(value: number) {
   localHeaterPower.value = value
-  debouncedApply({dew_heater_power: value})
+  void apply({dew_heater_power: value})
 }
 
-function formatPercent(v) {
-  return `${Math.round(v)}%`
+/** The power control runs 0–100. */
+function formatPower(v: number) {
+  return formatPercent(v / 100)
 }
 </script>
 
 <template>
   <div v-if="hasDewHeater" class="settings-section dew-heater-control">
-    <h3 class="section-title">Dew Heater</h3>
+    <h3 class="section-title">Dew Heater <SelectedCameraTag/></h3>
 
-    <div v-if="error" class="heater-error">{{ error }}</div>
+    <BaseAlert v-if="error" @dismiss="clearError">{{ error }}</BaseAlert>
 
     <div class="control-group">
       <BaseToggle
@@ -95,15 +59,15 @@ function formatPercent(v) {
         v-if="localHeaterEnabled"
         v-model="localHeaterPower"
         label="Heater Power"
-        :min="0"
-        :max="100"
-        :step="1"
-        :format-value="formatPercent"
+        :min="DEW_HEATER_POWER_LIMITS.min"
+        :max="DEW_HEATER_POWER_LIMITS.max"
+        :step="DEW_HEATER_POWER_LIMITS.step"
+        :format-value="formatPower"
         :help="HELP_TEXTS.dew_heater_power"
         @change="handlePowerChange"
     >
       <template #label-left>
-        <span class="status-pill" :class="liveStatus?.dew_heater_on ? 'tone-good' : 'tone-idle'">
+        <span class="pill pill-status" :class="liveStatus?.dew_heater_on ? 'pill-success' : 'pill-muted'">
           {{ liveStatus?.dew_heater_on ? 'On' : 'Off' }}
         </span>
       </template>
@@ -111,34 +75,3 @@ function formatPercent(v) {
   </div>
 </template>
 
-<style scoped>
-.dew-heater-control {
-  margin-bottom: 0.625rem;
-}
-
-.status-pill {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.tone-idle {
-  background: var(--surface-hover);
-  color: var(--text-muted);
-}
-
-.tone-good {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-}
-
-.heater-error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
-}
-</style>

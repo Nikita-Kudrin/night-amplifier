@@ -1,193 +1,95 @@
-<script setup>
+<script setup lang="ts">
 import {computed, getCurrentInstance} from 'vue'
+import type {CSSProperties} from 'vue'
+import {formatAngle} from '../utils/format'
+import {
+  ARROW_ASPECT,
+  arrowScale as scaleFor,
+  baseSize,
+  edgeOffset,
+  formatScreens,
+  frameSpan,
+  infoOffset,
+  isOffScreen,
+  screensAway,
+} from '../utils/guideArrowLayout'
+import type {ClientPushDirection} from '../composables/events/pushToEvents'
+import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
+import type {ScreenRect} from '../composables/useCometRoi'
 
-const props = defineProps({
-  angleDeg: {
-    type: Number,
-    required: true,
-  },
-  distanceDeg: {
-    type: Number,
-    required: true,
-  },
-  isClose: {
-    type: Boolean,
-    default: false,
-  },
-  directionHint: {
-    type: String,
-    default: '',
-  },
-  imageLeft: {
-    type: Number,
-    default: 0,
-  },
-  imageTop: {
-    type: Number,
-    default: 0,
-  },
-  imageWidth: {
-    type: Number,
-    default: 400,
-  },
-  imageHeight: {
-    type: Number,
-    default: 300,
-  },
-  fovDeg: {
-    type: Number,
-    default: 0,
-  },
-  isCircular: {
-    type: Boolean,
-    default: false,
-  },
+const props = withDefaults(defineProps<{
+  /** `pushDirection` from the event stream. */
+  direction: ClientPushDirection
+  /** Where the image sits in the arrow's positioned parent, in CSS pixels. */
+  bounds?: ScreenRect
+  fovDeg?: number
+  isCircular?: boolean
+  /**
+   * The camera the angle was solved on, when it is not the one on screen: the chevron
+   * would carry that camera's rotation, so only distance and compass point show. It is
+   * named only while connected — a disconnected guide is nowhere to look.
+   */
+  otherCamera?: OtherSolvedCamera | null
+}>(), {
+  bounds: () => ({left: 0, top: 0, width: 400, height: 300}),
+  fovDeg: 0,
+  isCircular: false,
+  otherCamera: null,
 })
+
+const angleDeg = computed(() => props.direction.angleDeg)
+const distanceDeg = computed(() => props.direction.distanceDeg)
+const directionHint = computed(() => props.direction.directionHint)
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
 
-const MAX_DISTANCE = 30
-const MIN_SCALE = 0.3
-const MAX_SCALE = 1.6
-
-const MIN_BASE_SIZE = 60
-const MAX_BASE_SIZE = 240
-const MAX_BASE_SIZE_OFF_SCREEN = 290
-const REFERENCE_CONTAINER_SIZE = 600
-
-const OFF_SCREEN_THRESHOLD = 0.4
-const EDGE_MARGIN_PERCENT = 0.10
-
-// Quadratic ease-in: near-centre targets get squashed more aggressively than
-// a linear mapping would, while near-edge targets reach a larger ceiling.
-const EDGE_PROXIMITY_CURVE = 2
-
-const normalizedDistance = computed(() => {
-  return Math.min(props.distanceDeg / MAX_DISTANCE, 1.0)
-})
-
-const screenSizes = computed(() => {
-  if (props.fovDeg <= 0) return null
-  return props.distanceDeg / props.fovDeg
-})
-
-const isOffScreen = computed(() => {
-  if (screenSizes.value === null) return false
-  return screenSizes.value > OFF_SCREEN_THRESHOLD
-})
-
-// Drive on-screen growth by how close the target is to the frame edge, so
-// chevrons visibly lengthen as the target drifts outward. Fall back to the
-// linear distance-based signal when FOV is unknown (no plate solve yet).
-const edgeProximity = computed(() => {
-  if (screenSizes.value === null) return normalizedDistance.value
-  const raw = Math.min(screenSizes.value / OFF_SCREEN_THRESHOLD, 1.0)
-  return Math.pow(raw, EDGE_PROXIMITY_CURVE)
-})
-
-const arrowScale = computed(() => {
-  return MIN_SCALE + (MAX_SCALE - MIN_SCALE) * edgeProximity.value
-})
-
-const responsiveBaseSize = computed(() => {
-  const minDimension = Math.min(props.imageWidth, props.imageHeight)
-  const sizeFactor = minDimension / REFERENCE_CONTAINER_SIZE
-  const baseSize = 100 * sizeFactor
-  const maxSize = isOffScreen.value ? MAX_BASE_SIZE_OFF_SCREEN : MAX_BASE_SIZE
-  return Math.max(MIN_BASE_SIZE, Math.min(maxSize, baseSize))
-})
+// Another camera's angle says nothing about which way this view's frame runs.
+const span = computed(() => props.otherCamera
+    ? 1
+    : frameSpan(angleDeg.value, props.bounds.width / props.bounds.height, props.isCircular))
+const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg, span.value))
+const offScreen = computed(() => isOffScreen(screenSizes.value))
+const arrowScale = computed(() => scaleFor(distanceDeg.value, screenSizes.value))
+const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bounds.height, offScreen.value))
+const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 
 const isOnTarget = computed(() => {
-  return props.distanceDeg < 0.1 || props.directionHint === 'OnTarget'
+  return distanceDeg.value < 0.1 || directionHint.value === 'OK'
 })
 
-const containerStyle = computed(() => {
-  const imageCenterX = props.imageLeft + props.imageWidth / 2
-  const imageCenterY = props.imageTop + props.imageHeight / 2
-
-  if (!isOffScreen.value || isOnTarget.value) {
-    return {
-      position: 'absolute',
-      top: `${imageCenterY}px`,
-      left: `${imageCenterX}px`,
-      transform: 'translate(-50%, -50%)',
-    }
-  }
-
-  const angleRad = (props.angleDeg * Math.PI) / 180
-  const arrowSize = responsiveBaseSize.value * arrowScale.value
-  // After rotation by angleRad, the SVG's axis-aligned bounding box has
-  // half-extents W|cos θ| + H|sin θ| (x) and W|sin θ| + H|cos θ| (y).
-  const cosA = Math.abs(Math.cos(angleRad))
-  const sinA = Math.abs(Math.sin(angleRad))
-  const svgHalfW = arrowSize * 0.5
-  const svgHalfH = arrowSize * 1.6 * 0.5
-  const halfWRot = svgHalfW * cosA + svgHalfH * sinA
-  const halfHRot = svgHalfW * sinA + svgHalfH * cosA
-
-  const marginX = props.imageWidth * EDGE_MARGIN_PERCENT
-  const marginY = props.imageHeight * EDGE_MARGIN_PERCENT
-
-  // Clamp to 0 so the arrow pins to image centre on viewports where the
-  // rotated arrow plus margin already spans the image half-size.
-  const maxOffsetX = Math.max(0, props.imageWidth / 2 - halfWRot - marginX)
-  const maxOffsetY = Math.max(0, props.imageHeight / 2 - halfHRot - marginY)
-
-  const dirX = Math.sin(angleRad)
-  const dirY = -Math.cos(angleRad)
-
-  let offsetX, offsetY
-
-  if (Math.abs(dirX) < 0.001 && Math.abs(dirY) < 0.001) {
-    offsetX = 0
-    offsetY = 0
-  } else if (props.isCircular) {
-    const radius = Math.min(props.imageWidth, props.imageHeight) / 2
-    const margin = radius * EDGE_MARGIN_PERCENT
-    const maxOffset = Math.max(0, radius - svgHalfH - margin)
-    offsetX = dirX * maxOffset
-    offsetY = dirY * maxOffset
-  } else {
-    const scaleX = Math.abs(dirX) > 0.001 ? maxOffsetX / Math.abs(dirX) : Infinity
-    const scaleY = Math.abs(dirY) > 0.001 ? maxOffsetY / Math.abs(dirY) : Infinity
-    const boundaryScale = Math.min(scaleX, scaleY)
-
-    offsetX = dirX * boundaryScale
-    offsetY = dirY * boundaryScale
-  }
-
-  const finalX = imageCenterX + offsetX
-  const finalY = imageCenterY + offsetY
-
+const containerStyle = computed((): CSSProperties => {
+  const pinned = offScreen.value && !isOnTarget.value && !props.otherCamera
+  const offset = pinned
+      ? edgeOffset({
+        angleDeg: angleDeg.value,
+        arrowSize: arrowSize.value,
+        imageWidth: props.bounds.width,
+        imageHeight: props.bounds.height,
+        isCircular: props.isCircular,
+      })
+      : {x: 0, y: 0}
+  const {left, top, width, height} = props.bounds
   return {
     position: 'absolute',
-    top: `${finalY}px`,
-    left: `${finalX}px`,
+    top: `${top + height / 2 + offset.y}px`,
+    left: `${left + width / 2 + offset.x}px`,
     transform: 'translate(-50%, -50%)',
   }
 })
 
 const rotationStyle = computed(() => {
   return {
-    transform: `rotate(${props.angleDeg}deg)`,
+    transform: `rotate(${angleDeg.value}deg)`,
   }
 })
 
-// Place the info box on the chevrons' "tail" side (opposite the target direction)
-// so it doesn't occlude the target the arrow is pointing at. The SVG drawing tail
-// sits at ~0.3125 of SVG height below SVG centre (viewBox y=130 of 160), so push
-// the info box past that plus a small gap.
-const INFO_TAIL_GAP_PX = 20
 const distanceInfoStyle = computed(() => {
-  const angleRad = (props.angleDeg * Math.PI) / 180
-  const tailDirX = -Math.sin(angleRad)
-  const tailDirY = Math.cos(angleRad)
-  const arrowSize = responsiveBaseSize.value * arrowScale.value
-  const tailOffsetPx = arrowSize * 1.6 * 0.3125 + INFO_TAIL_GAP_PX
+  if (props.otherCamera) return {}
+  const offset = infoOffset(angleDeg.value, arrowSize.value)
   return {
-    top: `calc(50% + ${tailDirY * tailOffsetPx}px)`,
-    left: `calc(50% + ${tailDirX * tailOffsetPx}px)`,
+    top: `calc(50% + ${offset.y}px)`,
+    left: `calc(50% + ${offset.x}px)`,
   }
 })
 
@@ -211,24 +113,7 @@ const chevrons = computed(() => {
   return result
 })
 
-function formatDistance(degrees) {
-  if (degrees < 1) {
-    return `${(degrees * 60).toFixed(1)}'`
-  }
-  return `${degrees.toFixed(1)}°`
-}
-
-function formatScreenSizes(screens) {
-  if (screens === null) return null
-  if (screens < 0.1) return null
-  if (screens < 1) {
-    return `${(screens * 100).toFixed(0)}% screen`
-  }
-  if (screens < 10) {
-    return `${screens.toFixed(1)}× screen`
-  }
-  return `${Math.round(screens)}× screen`
-}
+const screensLabel = computed(() => formatScreens(screenSizes.value))
 </script>
 
 <template>
@@ -257,10 +142,10 @@ function formatScreenSizes(screens) {
     </div>
 
     <template v-else>
-      <div class="arrow-wrapper" :style="rotationStyle">
+      <div v-if="!otherCamera" class="arrow-wrapper" :style="rotationStyle">
         <svg
             viewBox="0 0 100 160" :width="responsiveBaseSize * arrowScale"
-            :height="responsiveBaseSize * 1.6 * arrowScale">
+            :height="responsiveBaseSize * ARROW_ASPECT * arrowScale">
           <defs>
             <linearGradient :id="gradientId" x1="0%" y1="100%" x2="0%" y2="0%">
               <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.32"/>
@@ -284,10 +169,11 @@ function formatScreenSizes(screens) {
         </svg>
       </div>
 
-      <div class="distance-info" :style="distanceInfoStyle">
-        <span class="distance">{{ formatDistance(distanceDeg) }}</span>
-        <span v-if="formatScreenSizes(screenSizes)" class="screen-size">{{ formatScreenSizes(screenSizes) }}</span>
+      <div class="hud-chip distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
+        <span class="distance">{{ formatAngle(distanceDeg) }}</span>
+        <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
         <span class="hint">{{ directionHint }}</span>
+        <span v-if="otherCamera?.connected" class="other-camera">Arrow on {{ otherCamera.name }}</span>
       </div>
     </template>
   </div>
@@ -300,7 +186,7 @@ function formatScreenSizes(screens) {
   align-items: center;
   gap: 0.5rem;
   pointer-events: none;
-  z-index: 20;
+  z-index: var(--z-hud);
 }
 
 .on-target {
@@ -312,7 +198,7 @@ function formatScreenSizes(screens) {
 }
 
 .on-target-label {
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--success);
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
@@ -356,10 +242,7 @@ function formatScreenSizes(screens) {
   flex-direction: column;
   align-items: center;
   gap: 0.15rem;
-  background: var(--surface-elevated);
   padding: 0.45rem 0.9rem;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   opacity: 0.8;
   white-space: nowrap;
 }
@@ -372,20 +255,35 @@ function formatScreenSizes(screens) {
 }
 
 .screen-size {
-  font-size: 0.975rem;
+  font-size: var(--fs-lg);
   font-weight: 500;
   color: var(--primary);
   font-family: var(--font-mono);
 }
 
 .hint {
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
+  color: var(--text-secondary);
+}
+
+/* No chevron to sit behind: the box itself marks the centre of the view. */
+.distance-info.centered {
+  position: static;
+  transform: none;
+}
+
+.other-camera {
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {
   .distance-info {
     transform: translate(-50%, -50%) scale(0.5);
+  }
+
+  .distance-info.centered {
+    transform: scale(0.5);
   }
 }
 </style>

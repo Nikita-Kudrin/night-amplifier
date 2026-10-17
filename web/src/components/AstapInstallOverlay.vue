@@ -1,57 +1,47 @@
-<script setup>
+<script setup lang="ts">
 import {computed, watch} from 'vue'
-import {useAstapInstall} from '../composables/useAstapInstall.js'
+import {useAstapInstall} from '../composables/useAstapInstall'
 import AstapStatusSection from './AstapStatusSection.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
+import type {StageRow} from './ui/InstallStageIndicator.vue'
 import { BaseModal, BaseSpinner } from './ui'
+import type {AstapStatus} from '../composables/api.types'
 
-const props = defineProps({
-  allowManage: {
-    type: Boolean,
-    default: false,
-  },
+const props = withDefaults(defineProps<{
+  allowManage?: boolean
+}>(), {
+  allowManage: false,
 })
 
-const emit = defineEmits(['close', 'installed'])
+const emit = defineEmits<{close: []; installed: []}>()
 
 const {
   loading, installing, error, status, databases, selectedDatabases,
   installProgress, stageCompletion,
   canInstall, hasUninstalledDatabases, progressText, overallProgressText, progressPercent,
-  loadStatus, startInstall, isInstallationComplete,
-} = useAstapInstall()
+  loadStatus, startInstall,
+} = useAstapInstall({onComplete: handleInstalled})
 
-// Handle initial load: if already installed and not managing, close immediately
-watch(loading, async (isLoading, wasLoading) => {
+// Opened on a solver that is already ready and not managing: close at once. The first
+// load only — the reload after an install announces itself, and both once emitted twice.
+watch(loading, (isLoading, wasLoading) => {
   if (wasLoading && !isLoading && status.value?.ready && !props.allowManage) {
     emit('installed')
     emit('close')
   }
-})
+}, {once: true})
 
-// Handle installation completion
-watch(
-    () => isInstallationComplete(),
-    (complete) => {
-      if (!complete) return
-      setTimeout(async () => {
-        await loadStatus()
-        installing.value = false
-        if (status.value?.ready) {
-          emit('installed')
-          if (!props.allowManage) {
-            emit('close')
-          }
-        }
-      }, 500)
-    }
-)
+function handleInstalled(installed: AstapStatus | null) {
+  if (!installed?.ready) return
+  emit('installed')
+  if (!props.allowManage) emit('close')
+}
 
 // Overlay-specific computed
 const stages = computed(() => {
-  const result = []
+  const result: StageRow[] = []
 
   if (!status.value?.binary_installed) {
     result.push({
@@ -125,10 +115,10 @@ const installButtonText = computed(() => {
           Download additional star databases to support different fields of view.
         </p>
 
-        <AstapStatusSection v-if="!allowManage" :status="status"/>
+        <AstapStatusSection v-if="!allowManage && status" :status="status"/>
 
         <div v-if="hasUninstalledDatabases" class="database-section">
-          <h3>Select Star Databases</h3>
+          <h3 class="eyebrow">Select Star Databases</h3>
           <DatabaseSelector
               v-model="selectedDatabases"
               :databases="databases"
@@ -140,7 +130,7 @@ const installButtonText = computed(() => {
         </div>
 
         <div class="actions">
-          <button class="btn btn-secondary" @click="emit('close')">
+          <button class="btn btn-ghost" @click="emit('close')">
             {{ status?.ready ? 'Close' : 'Cancel' }}
           </button>
           <button
@@ -162,8 +152,7 @@ const installButtonText = computed(() => {
   padding: 1.25rem 0 0 0;
 }
 
-.loading-state,
-.error-state,
+/* Over the global .loading-state / .error-state layout */
 .installing-state {
   display: flex;
   flex-direction: column;
@@ -178,8 +167,8 @@ const installButtonText = computed(() => {
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: var(--danger);
-  color: white;
+  background: var(--error);
+  color: var(--on-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -188,13 +177,12 @@ const installButtonText = computed(() => {
 }
 
 .error-message {
-  color: var(--danger);
   margin: 0;
 }
 
 .intro-text {
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   margin: 0 0 1.25rem;
   line-height: 1.5;
 }
@@ -203,17 +191,13 @@ const installButtonText = computed(() => {
   margin-bottom: 1.25rem;
 }
 
-.database-section h3 {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  margin: 0 0 0.75rem;
+.database-section .eyebrow {
+  margin-bottom: 0.75rem;
 }
 
 .all-installed-message {
-  color: var(--success, #22c55e);
-  font-size: 0.875rem;
+  color: var(--success);
+  font-size: var(--fs-base);
   text-align: center;
   padding: 1.5rem 0;
 }
@@ -225,39 +209,5 @@ const installButtonText = computed(() => {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border);
-}
-
-.btn {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, opacity 0.2s;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: var(--primary);
-  color: white;
-  border: none;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--primary-hover, #3a8ee8);
-}
-
-.btn-secondary {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--surface-elevated);
 }
 </style>

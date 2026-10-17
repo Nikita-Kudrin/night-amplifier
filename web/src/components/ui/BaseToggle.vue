@@ -1,39 +1,29 @@
-<script setup>
+<script setup lang="ts">
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-const props = defineProps({
-  modelValue: {
-    type: Boolean,
-    default: false
-  },
-  label: {
-    type: String,
-    default: ''
-  },
-  size: {
-    type: String,
-    default: 'normal',
-    validator: (v) => ['small', 'normal'].includes(v),
-  },
-  help: {
-    type: String,
-    default: ''
-  },
-  disabled: {
-    type: Boolean,
-    default: false
-  },
+const props = withDefaults(defineProps<{
+  modelValue?: boolean
+  label?: string
+  size?: 'small' | 'normal'
+  help?: string
+  disabled?: boolean
+}>(), {
+  modelValue: false,
+  label: '',
+  size: 'normal',
+  help: '',
+  disabled: false
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{'update:modelValue': [value: boolean]}>()
 
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+import { useScrollProtect } from '../../composables/useScrollProtect'
 
 const { blockIfScrolling } = useScrollProtect()
 
-function handleChange(event) {
+function handleChange(event: Event) {
   if (blockIfScrolling(event, props.modelValue)) return
-  emit('update:modelValue', event.target.checked)
+  emit('update:modelValue', (event.target as HTMLInputElement).checked)
 }
 </script>
 
@@ -71,7 +61,7 @@ function handleChange(event) {
   border-radius: 10px;
   position: relative;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background var(--transition-normal);
   flex-shrink: 0;
 }
 
@@ -84,8 +74,8 @@ function handleChange(event) {
   background: var(--text-muted);
   top: 3px;
   left: 3px;
-  transition: transform 0.2s,
-  background 0.2s;
+  transition: transform var(--transition-normal),
+  background var(--transition-normal);
 }
 
 .toggle:checked {
@@ -94,11 +84,11 @@ function handleChange(event) {
 
 .toggle:checked::before {
   transform: translateX(16px);
-  background: white;
+  background: var(--on-primary);
 }
 
 .toggle-text {
-  font-size: 0.825rem;
+  font-size: var(--fs-md);
   color: var(--text-primary);
   display: inline-flex;
   align-items: center;
@@ -121,7 +111,7 @@ function handleChange(event) {
 }
 
 .toggle-small .toggle-text {
-  font-size: 0.715rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-secondary);
   letter-spacing: 0.03em;

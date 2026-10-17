@@ -1,10 +1,11 @@
-use night_amplifier::push_to::{PushToError, PUSH_TO_PLUGIN};
-use night_amplifier::stacking::{StackingType, COMET_PLUGIN};
+use night_amplifier::plugins::Plugins;
+use night_amplifier::push_to::PushToError;
+use night_amplifier::stacking::StackingType;
 
 #[tokio::test]
 async fn test_comet_plugin_gating() {
-    // In Community repo, COMET_PLUGIN should be empty by default
-    assert!(COMET_PLUGIN.get().is_none());
+    // Community installs no plugin, so its comet slot is empty
+    assert!(Plugins::installed().comet().is_none());
 
     // Check if StackingType::Comet is still reported but with appropriate info
     let info = StackingType::Comet.info();
@@ -22,8 +23,8 @@ fn test_stacking_type_info_comet() {
 fn test_push_to_plugin_not_registered_in_community() {
     // In the Community version, no Push-To plugin should be registered
     assert!(
-        PUSH_TO_PLUGIN.get().is_none(),
-        "PUSH_TO_PLUGIN must not be registered in the Community version"
+        Plugins::installed().registered().is_empty(),
+        "Community must not install any plugin"
     );
 }
 

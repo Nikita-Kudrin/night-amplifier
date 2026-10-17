@@ -1,0 +1,32 @@
+name: Setup npm project
+description: Set up Node.js with the npm cache, install a project's locked dependencies, optionally run one script.
+inputs:
+  working-directory:
+    description: Directory holding package.json and package-lock.json.
+    default: web
+  node-version:
+    description: Node.js version.
+    default: '24'
+  script:
+    description: npm script to run after the install (e.g. build); none when empty.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npm ci
+    - name: Run npm script
+      if: inputs.script != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SCRIPT: ${{ inputs.script }}
+      run: npm run "$SCRIPT"

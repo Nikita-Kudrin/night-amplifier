@@ -1,201 +1,136 @@
-<script setup>
-import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
-import {useImageStream} from '../composables/useWebSocket.js'
-import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
-import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
-import {useFullscreen} from '../composables/useFullscreen.js'
-import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
-import {getAppState} from '../composables/useAppState.js'
-import {fetchEyepieceSnapshot} from '../composables/api.js'
-import {saveBlob} from '../utils/saveBlob.js'
+<script setup lang="ts">
+import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
+import type {ComponentPublicInstance} from 'vue'
+import {useImageStream} from '../composables/useImageStream'
+import {useFrameRenderer} from '../composables/useFrameRenderer'
+import {useEventListener} from '../composables/useEventListener'
+import {useFullscreen} from '../composables/useFullscreen'
+import {useOverlayVisibility} from '../composables/useOverlayVisibility'
+import {useEyepieceZoom} from '../composables/useEyepieceZoom'
+import {useTimeouts} from '../composables/useTimeouts'
+import {
+  useCapabilities,
+  useEventStreamContext,
+  useGuideCamera,
+  useMainCamera,
+  useSettings,
+} from '../composables/appContext'
+import {fetchEyepieceSnapshot} from '../composables/api'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {saveBlob} from '../utils/saveBlob'
+import {offsetBounds} from '../utils/viewGeometry'
+import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
+import type {ScreenRect} from '../composables/useCometRoi'
 
-const eventStream = inject('eventStream')
-const settings = inject('settings')
-const appState = getAppState()
-const capabilities = appState.capabilities
+const eventStream = useEventStreamContext()
+const settings = useSettings()
+const {debugLogging} = useCapabilities()
+const {later} = useTimeouts()
+
+const mainCamera = useMainCamera()
+const guideCamera = useGuideCamera()
 
 const routePath = window.location.pathname
-const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
+// No source in the URL: the server streams whichever camera the operator views on `/`,
+// switching this socket in place.
+const endpoint = eyepieceStreamEndpoint(routePath)
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
-const canvasLeftRef = ref(null)
-const canvasRightRef = ref(null)
-const canvasSingleRef = ref(null)
 
-const webglLeft = useWebGLRenderer()
-const canvas2dLeft = useCanvas2DRenderer()
-
-const webglRight = useWebGLRenderer()
-const canvas2dRight = useCanvas2DRenderer()
-
-const webglSingle = useWebGLRenderer()
-const canvas2dSingle = useCanvas2DRenderer()
-
-const leftEyeRef = ref(null)
-const rightEyeRef = ref(null)
-const singleEyeRef = ref(null)
-
-const leftEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
-const rightEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
-const singleViewBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
-
-const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
-const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
+const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
+const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+
+const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'guide')
+const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
+const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
  * observer puts their eye to. `/eyepiece_quality` still honours the setting.
  */
 const isBinoview = computed(() => {
-  if (routePath === '/eyepiece') return false
-  return settings.value?.eyepiece?.binoview ?? true
+  if (routePath === PAGES.EYEPIECE) return false
+  return settings.value?.eyepiece.binoview ?? true
 })
-const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
+const isCircularView = computed(() => settings.value?.eyepiece.circular_view ?? true)
 const showFocusImage = computed(() => settings.value?.show_focus_image ?? false)
 const forceFocusImageNow = computed(() => settings.value?.force_focus_image_now ?? false)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 const effectiveHasFrame = computed(() => hasFrame.value && !forceFocusImageNow.value)
 
-// Active renderer backend (assuming both eyes use same backend)
-const renderBackend = computed(() => {
-  if (isJpeg.value) return 'jpeg'
-  if (isBinoview.value) {
-    if (webglLeft.isInitialized()) return webglLeft.backend.value
-    if (canvas2dLeft.isInitialized()) return canvas2dLeft.backend.value
+/** The eyes on screen, by class name: each one is a canvas drawn from the same frame. */
+const BINOVIEW_EYES = ['left-eye', 'right-eye'] as const
+const SINGLE_EYES = ['single-view'] as const
+type Eye = (typeof BINOVIEW_EYES)[number] | (typeof SINGLE_EYES)[number]
+const eyes = computed((): readonly Eye[] => (isBinoview.value ? BINOVIEW_EYES : SINGLE_EYES))
+
+const eyeElements: Partial<Record<Eye, Element>> = {}
+const canvasElements: Partial<Record<Eye, HTMLCanvasElement>> = {}
+const eyeBounds = ref<Partial<Record<Eye, ScreenRect>>>({})
+const NO_BOUNDS: Readonly<ScreenRect> = Object.freeze({left: 0, top: 0, width: 0, height: 0})
+
+let resizeObserver: ResizeObserver | null = null
+
+function setEye(eye: Eye, target: Element | ComponentPublicInstance | null) {
+  const element = target instanceof Element ? target : null
+  const previous = eyeElements[eye]
+  if (previous === element) return
+  if (previous) resizeObserver?.unobserve(previous)
+  if (element) {
+    eyeElements[eye] = element
+    resizeObserver?.observe(element)
   } else {
-    if (webglSingle.isInitialized()) return webglSingle.backend.value
-    if (canvas2dSingle.isInitialized()) return canvas2dSingle.backend.value
-  }
-  return 'none'
-})
-
-// Map backend names to user-friendly labels
-const backendLabel = computed(() => {
-  const res = dimensions.value.width > 0 
-    ? ` (${dimensions.value.width}x${dimensions.value.height})`
-    : ''
-
-  const labels = {
-    jpeg: `Dynamic JPEG${res}`,
-    'webgl2-16bit': `WebGL2 16-bit${res}`,
-    'webgl2-8bit': `WebGL2 8-bit${res}`,
-    webgl1: `WebGL1${res}`,
-    canvas2d: `Canvas 2D${res}`,
-    none: 'No renderer',
-    unknown: '...',
-  }
-  return labels[renderBackend.value] || renderBackend.value
-})
-
-function initRenderer() {
-  if (canvasLeftRef.value) {
-    if (!webglLeft.init(canvasLeftRef.value)) canvas2dLeft.init(canvasLeftRef.value)
-  }
-  if (canvasRightRef.value) {
-    if (!webglRight.init(canvasRightRef.value)) canvas2dRight.init(canvasRightRef.value)
-  }
-  if (canvasSingleRef.value) {
-    if (!webglSingle.init(canvasSingleRef.value)) canvas2dSingle.init(canvasSingleRef.value)
+    delete eyeElements[eye]
   }
 }
 
-function renderFrame() {
-  if (!frameData.value) return
-  const {width, height} = dimensions.value
-
-  if (isJpeg.value) {
-    window.createImageBitmap(frameData.value).then((bitmap) => {
-      if (isBinoview.value) {
-        if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dLeft.isInitialized()) canvas2dLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
-    
-        if (webglRight.isInitialized()) webglRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dRight.isInitialized()) canvas2dRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
-      } else {
-        if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
-      }
-      bitmap.close()
-    }).catch(() => { /* frame was replaced before decode finished */ })
-    return
-  }
-
-  if (isBinoview.value) {
-    if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, frameData.value, width, height)
-    else if (canvas2dLeft.isInitialized()) canvas2dLeft.render(canvasLeftRef.value, frameData.value, width, height)
-
-    if (webglRight.isInitialized()) webglRight.render(canvasRightRef.value, frameData.value, width, height)
-    else if (canvas2dRight.isInitialized()) canvas2dRight.render(canvasRightRef.value, frameData.value, width, height)
-  } else {
-    if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, frameData.value, width, height)
-    else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, frameData.value, width, height)
-  }
+function setCanvas(eye: Eye, target: Element | ComponentPublicInstance | null) {
+  const element = target instanceof HTMLCanvasElement ? target : null
+  if (element) canvasElements[eye] = element
+  else delete canvasElements[eye]
 }
 
-function cleanupRenderer() {
-  webglLeft.cleanup()
-  canvas2dLeft.cleanup()
-  webglRight.cleanup()
-  canvas2dRight.cleanup()
-  webglSingle.cleanup()
-  canvas2dSingle.cleanup()
+function updateBounds() {
+  const bounds: Partial<Record<Eye, ScreenRect>> = {}
+  for (const eye of eyes.value) {
+    const canvas = canvasElements[eye]
+    if (canvas) bounds[eye] = offsetBounds(canvas)
+  }
+  eyeBounds.value = bounds
 }
 
-watch(frameData, () => {
-  if (frameData.value) renderFrame()
+// Off the circular view the canvas takes the frame's own aspect, so a new size moves it
+// inside an eye that stays put, and the eye's ResizeObserver never fires.
+const {label: rendererLabel, redraw} = useFrameRenderer({
+  frameData,
+  dimensions,
+  isJpeg,
+  canvases: () => eyes.value.map((eye) => canvasElements[eye]),
+  onSizeChange: updateBounds,
 })
 
-watch(isBinoview, () => {
-  // Re-render immediately if we switch views so it's not blank
-  setTimeout(() => {
-    if (frameData.value) renderFrame()
-  }, 10)
-})
+const backendLabel = computed(() =>
+  showsGuideCamera.value ? `${rendererLabel.value} · Guide camera` : rendererLabel.value
+)
 
-let initialDist = 0
-let initialScale = 1
-let initialCx = 0
-let initialCy = 0
-let initialPanX = 0
-let initialPanY = 0
+// Switching layout mounts new canvases: draw the held frame on them and measure them.
+watch(eyes, () => {
+  redraw()
+  updateBounds()
+}, {flush: 'post'})
 
-const isZoomAllowed = computed(() => routePath === '/eyepiece')
-const zoomScale = ref(1)
-const panX = ref(0)
-const panY = ref(0)
-const isPinching = ref(false)
+const isZoomAllowed = computed(() => routePath === PAGES.EYEPIECE)
+const zoom = useEyepieceZoom(() => isZoomAllowed.value && effectiveHasFrame.value)
+const zoomScale = zoom.scale
+const zoomStyle = zoom.style
+const resetZoom = zoom.reset
 
-const zoomStyle = computed(() => {
-  if (zoomScale.value === 1) return {}
-  return {
-    transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoomScale.value})`,
-    transformOrigin: '0 0',
-  }
-})
-
-function clampPan(x, y, scale) {
-  if (scale <= 1) return { x: 0, y: 0 }
-  const W = window.innerWidth
-  const H = window.innerHeight
-  const minX = W * (1 - scale)
-  const minY = H * (1 - scale)
-  return {
-    x: Math.min(0, Math.max(minX, x)),
-    y: Math.min(0, Math.max(minY, y))
-  }
-}
-
-function resetZoom() {
-  zoomScale.value = 1
-  panX.value = 0
-  panY.value = 0
-}
-
-const rootRef = ref(null)
+const rootRef = useTemplateRef<HTMLDivElement>('root')
 
 // Fit all on both fullscreen edges — the viewport changes size going in and
 // coming out — and again whenever it changes shape under fullscreen, so a
@@ -226,16 +161,16 @@ const {
 const DOWNLOAD_ERROR_MS = 4000
 
 const downloading = ref(false)
-const downloadError = ref(null)
+const downloadError = ref<string | null>(null)
 const menuOpen = ref(false)
-let errorTimer = null
+let errorTimer: ReturnType<typeof setTimeout> | null = null
 
 // The controls stay put while a menu is open or a download is running: a retry
 // against a busy server can take fifteen seconds, and the spinner saying so must
 // not fade out halfway through it.
 watch([menuOpen, downloading], ([open, busy]) => holdOverlay(open || busy))
 
-function reportDownloadError(message) {
+function reportDownloadError(message: string) {
   if (errorTimer) clearTimeout(errorTimer)
   downloadError.value = message
   errorTimer = setTimeout(() => {
@@ -247,13 +182,12 @@ function reportDownloadError(message) {
 /**
  * Save the frame the server last rendered, at its own resolution rather than the
  * tier this screen happens to be streaming. `circular` is the round eyepiece
- * image; without it, the same picture as the uncropped stretched result.
+ * image; without it, the uncropped stretched result.
  *
- * The server names the file — the timestamp in it is its to stamp — and the name
- * travels with the bytes, because the blob the fetch produced has none of the
- * headers it arrived with.
+ * The server names the file (it owns the timestamp); the name travels with the
+ * bytes since the fetch's blob carries none of the headers it arrived with.
  */
-async function downloadSnapshot(circular) {
+async function downloadSnapshot(circular: boolean) {
   if (downloading.value) return
   downloading.value = true
   showOverlay()
@@ -261,192 +195,63 @@ async function downloadSnapshot(circular) {
     const {blob, filename} = await fetchEyepieceSnapshot(circular)
     saveBlob(blob, filename)
   } catch (e) {
-    reportDownloadError(e.message || 'Download failed')
+    reportDownloadError((e instanceof Error && e.message) || 'Download failed')
   } finally {
     downloading.value = false
   }
 }
 
-function handleWheel(e) {
+function handleWheel(e: WheelEvent) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  const zoomSensitivity = 0.001
-  const delta = -e.deltaY * zoomSensitivity
-  
-  const oldScale = zoomScale.value
-  let newScale = oldScale + delta
-  newScale = Math.min(2, Math.max(1, newScale))
-  
-  if (newScale === oldScale) return
-
-  const cx = e.clientX
-  const cy = e.clientY
-  
-  let newX = cx - (cx - panX.value) * (newScale / oldScale)
-  let newY = cy - (cy - panY.value) * (newScale / oldScale)
-  
-  const clamped = clampPan(newX, newY, newScale)
-  panX.value = clamped.x
-  panY.value = clamped.y
-  zoomScale.value = newScale
+  zoom.wheel(e)
 }
 
-function getDist(touches) {
-  const dx = touches[0].clientX - touches[1].clientX
-  const dy = touches[0].clientY - touches[1].clientY
-  return Math.sqrt(dx * dx + dy * dy)
-}
-
-function getCenter(touches) {
-  if (touches.length === 1) {
-    return { x: touches[0].clientX, y: touches[0].clientY }
-  }
-  return {
-    x: (touches[0].clientX + touches[1].clientX) / 2,
-    y: (touches[0].clientY + touches[1].clientY) / 2
-  }
-}
-
-function handleTouchStart(e) {
+function handleTouchStart(e: TouchEvent) {
   handlePressStart(e)
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2) {
-    isPinching.value = true
-    initialDist = getDist(e.touches)
-    initialScale = zoomScale.value
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  } else if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
+  zoom.touchStart(e)
 }
 
-function handleTouchMove(e) {
+function handleTouchMove(e: TouchEvent) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2 && isPinching.value) {
-    const currentDist = getDist(e.touches)
-    const scaleRatio = currentDist / initialDist
-    let newScale = initialScale * scaleRatio
-    newScale = Math.min(2, Math.max(1, newScale))
-    
-    const currentCenter = getCenter(e.touches)
-    let newX = currentCenter.x - (initialCx - initialPanX) * (newScale / initialScale)
-    let newY = currentCenter.y - (initialCy - initialPanY) * (newScale / initialScale)
-    
-    const clamped = clampPan(newX, newY, newScale)
-    panX.value = clamped.x
-    panY.value = clamped.y
-    zoomScale.value = newScale
-  } else if (e.touches.length === 1 && zoomScale.value > 1 && !isPinching.value) {
-    const currentCenter = getCenter(e.touches)
-    const dx = currentCenter.x - initialCx
-    const dy = currentCenter.y - initialCy
-    
-    let newX = initialPanX + dx
-    let newY = initialPanY + dy
-    
-    const clamped = clampPan(newX, newY, zoomScale.value)
-    panX.value = clamped.x
-    panY.value = clamped.y
-  }
+  zoom.touchMove(e)
 }
 
-function handleTouchCancel(e) {
+function handleTouchCancel(e: TouchEvent) {
   cancelPress(e)
-  isPinching.value = false
+  zoom.touchCancel()
 }
 
-function handleTouchEnd(e) {
+function handleTouchEnd(e: TouchEvent) {
   handlePressEnd(e)
-  if (e.touches.length < 2) {
-    isPinching.value = false
-  }
-  if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
-}
-
-let resizeObserver = null
-let windowResizeTimeout = null
-
-function handleWindowResize() {
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
-  windowResizeTimeout = setTimeout(() => {
-    // Fullscreen only, for the same reason as the live view: a windowed resize
-    // must not throw away a zoom the user set deliberately.
-    if (isFullscreen.value) resetZoom()
-  }, 200)
-}
-
-function updateBounds() {
-  if (isBinoview.value) {
-    if (leftEyeRef.value && canvasLeftRef.value) {
-      leftEyeBounds.value = {
-        left: canvasLeftRef.value.offsetLeft,
-        top: canvasLeftRef.value.offsetTop,
-        width: canvasLeftRef.value.offsetWidth,
-        height: canvasLeftRef.value.offsetHeight,
-      }
-    }
-    if (rightEyeRef.value && canvasRightRef.value) {
-      rightEyeBounds.value = {
-        left: canvasRightRef.value.offsetLeft,
-        top: canvasRightRef.value.offsetTop,
-        width: canvasRightRef.value.offsetWidth,
-        height: canvasRightRef.value.offsetHeight,
-      }
-    }
-  } else {
-    if (singleEyeRef.value && canvasSingleRef.value) {
-      singleViewBounds.value = {
-        left: canvasSingleRef.value.offsetLeft,
-        top: canvasSingleRef.value.offsetTop,
-        width: canvasSingleRef.value.offsetWidth,
-        height: canvasSingleRef.value.offsetHeight,
-      }
-    }
-  }
+  zoom.touchEnd(e)
 }
 
 watch(hasFrame, (newVal) => {
-  if (newVal) setTimeout(updateBounds, 10)
+  if (newVal) later(updateBounds, 10)
 })
 
+// Fullscreen only, for the same reason as the live view: a windowed resize must not
+// throw away a zoom the user set deliberately. Rotation is listened to three ways, as
+// the live view does: Safari before 16.4 has no `screen.orientation`, and mobile Safari
+// rotates without always firing a `resize`.
+function handleWindowResize() {
+  if (isFullscreen.value) resetZoom()
+}
+
+useEventListener(window, 'resize', handleWindowResize)
+useEventListener(window, 'orientationchange', handleWindowResize)
+useEventListener(window.screen.orientation, 'change', handleWindowResize)
+useEventListener(document, 'fullscreenchange', handleFullscreenChange)
+
 onMounted(() => {
-  window.addEventListener('resize', handleWindowResize)
-  // Not redundant with `resize`: mobile Safari rotates without always firing one.
-  window.addEventListener('orientationchange', handleWindowResize)
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  initRenderer()
   updateBounds()
-  resizeObserver = new ResizeObserver(updateBounds)
-  if (leftEyeRef.value) resizeObserver.observe(leftEyeRef.value)
-  if (rightEyeRef.value) resizeObserver.observe(rightEyeRef.value)
-  if (singleEyeRef.value) resizeObserver.observe(singleEyeRef.value)
+  const observer = new ResizeObserver(updateBounds)
+  resizeObserver = observer
+  Object.values(eyeElements).forEach((element) => observer.observe(element))
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleWindowResize)
-  window.removeEventListener('orientationchange', handleWindowResize)
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   if (errorTimer) clearTimeout(errorTimer)
-  cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -456,7 +261,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    ref="rootRef"
+    ref="root"
     class="eyepiece-view"
     :class="{ 'zoom-active': isZoomAllowed && zoomScale > 1 }"
     @wheel="handleWheel"
@@ -477,56 +282,26 @@ onUnmounted(() => {
     </div>
 
     <div v-show="effectiveHasFrame" class="zoom-wrapper" :style="zoomStyle">
-      <div v-show="isBinoview" class="binoview-container">
-        <div ref="leftEyeRef" class="eye left-eye">
-          <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+      <div class="eyes" :class="{ 'binoview-container': isBinoview }">
+        <div
+            v-for="eye in eyes"
+            :key="eye"
+            :ref="(element) => setEye(eye, element)"
+            :class="['eye', eye]"
+        >
+          <canvas
+              :ref="(element) => setCanvas(eye, element)"
+              :class="['live-canvas', {circular: isCircularView}]"
+          ></canvas>
           <GuideArrow
-            v-if="showGuideArrow"
-            :angle-deg="pushDirection.angleDeg"
-            :distance-deg="pushDirection.distanceDeg"
-            :is-close="pushDirection.isClose"
-            :direction-hint="pushDirection.directionHint"
-            :image-left="leftEyeBounds.left"
-            :image-top="leftEyeBounds.top"
-            :image-width="leftEyeBounds.width"
-            :image-height="leftEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
-            :is-circular="isCircularView"
+              v-if="showGuideArrow && pushDirection"
+              :direction="pushDirection"
+              :bounds="eyeBounds[eye] ?? NO_BOUNDS"
+              :fov-deg="displayedFovDeg"
+              :other-camera="arrowCamera"
+              :is-circular="isCircularView"
           />
         </div>
-        <div ref="rightEyeRef" class="eye right-eye">
-          <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-          <GuideArrow
-            v-if="showGuideArrow"
-            :angle-deg="pushDirection.angleDeg"
-            :distance-deg="pushDirection.distanceDeg"
-            :is-close="pushDirection.isClose"
-            :direction-hint="pushDirection.directionHint"
-            :image-left="rightEyeBounds.left"
-            :image-top="rightEyeBounds.top"
-            :image-width="rightEyeBounds.width"
-            :image-height="rightEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
-            :is-circular="isCircularView"
-          />
-        </div>
-      </div>
-
-      <div v-show="!isBinoview" ref="singleEyeRef" class="single-view">
-        <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-        <GuideArrow
-          v-if="showGuideArrow"
-          :angle-deg="pushDirection.angleDeg"
-          :distance-deg="pushDirection.distanceDeg"
-          :is-close="pushDirection.isClose"
-          :direction-hint="pushDirection.directionHint"
-          :image-left="singleViewBounds.left"
-          :image-top="singleViewBounds.top"
-          :image-width="singleViewBounds.width"
-          :image-height="singleViewBounds.height"
-          :fov-deg="pushDirection.fovDeg || 0"
-          :is-circular="isCircularView"
-        />
       </div>
     </div>
 
@@ -574,7 +349,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="capabilities?.debug_logging && effectiveHasFrame" class="debug-overlay">
+      <div v-if="debugLogging && effectiveHasFrame" class="debug-overlay">
         {{ backendLabel }}
       </div>
     </div>
@@ -608,7 +383,7 @@ onUnmounted(() => {
   position: absolute;
   bottom: 1rem;
   right: 1rem;
-  z-index: 10;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -622,39 +397,39 @@ onUnmounted(() => {
 }
 
 .eyepiece-btn {
-  background: rgba(30, 30, 30, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  color: #fff;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  color: var(--on-primary);
   padding: 0.5rem 1rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background var(--transition-normal);
 }
 
 .eyepiece-btn:hover {
-  background: rgba(50, 50, 50, 0.9);
+  background: var(--glass-bg-hover);
 }
 
 .eyepiece-btn:active {
-  background: rgba(70, 70, 70, 0.9);
+  background: var(--glass-bg-active);
 }
 
 /* The split button's own halves, styled to match the plain buttons beside it. */
 .download-btn :deep(.btn) {
-  background: rgba(30, 30, 30, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
+  border: 1px solid var(--glass-border);
+  color: var(--on-primary);
   padding: 0.5rem 0.75rem;
 }
 
 .download-btn :deep(.btn:hover:not(:disabled)) {
-  background: rgba(50, 50, 50, 0.9);
+  background: var(--glass-bg-hover);
 }
 
 .download-btn :deep(.btn:disabled) {
@@ -663,34 +438,25 @@ onUnmounted(() => {
 }
 
 .download-btn :deep(.split-button-main) {
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
 }
 
 .download-btn :deep(.split-button-toggle) {
-  border-radius: 0 8px 8px 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  border-left: 1px solid var(--glass-border);
 }
 
 .download-error {
-  background: rgba(30, 30, 30, 0.85);
-  border: 1px solid var(--error, #ef4444);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 0.8rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-lg);
+  color: var(--on-primary);
+  font-size: var(--fs-md);
   padding: 0.4rem 0.6rem;
 }
 
-.overlay-fade {
-  transition: opacity 0.35s ease;
-}
-
-.overlay-hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .placeholder {
-  color: #fff;
+  color: var(--on-primary);
   font-family: sans-serif;
   display: flex;
   flex-direction: column;
@@ -705,7 +471,7 @@ onUnmounted(() => {
   opacity: 0.8;
 }
 
-.binoview-container {
+.eyes {
   display: flex;
   width: 100%;
   height: 100%;
@@ -717,22 +483,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid #333;
+  border-right: 1px solid var(--border);
   container-type: size;
 }
 
 .eye:last-child {
   border-right: none;
-}
-
-.single-view {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  container-type: size;
 }
 
 .live-canvas {
@@ -750,11 +506,11 @@ onUnmounted(() => {
 
 .debug-overlay {
   background: rgba(0, 0, 0, 0.6);
-  color: #fff;
+  color: var(--on-primary);
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
 }
 </style>

@@ -1,67 +1,48 @@
-<script setup>
+<script setup lang="ts">
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 
-defineProps({
-  scale: {
-    type: Number,
-    default: 1.0
-  },
-  fps: {
-    type: Number,
-    default: 0
-  },
-  backendLabel: {
-    type: String,
-    default: 'Canvas2D'
-  },
-  debugLogging: {
-    type: Boolean,
-    default: false
-  },
-  isFullscreen: {
-    type: Boolean,
-    default: false
-  },
-  hasFrame: {
-    type: Boolean,
-    default: false
-  },
-  isCometMode: {
-    type: Boolean,
-    default: false
-  },
-  isSelectingCometRoi: {
-    type: Boolean,
-    default: false
-  },
+withDefaults(defineProps<{
+  scale?: number
+  fps?: number
+  backendLabel?: string
+  debugLogging?: boolean
+  isFullscreen?: boolean
+  hasFrame?: boolean
+  isCometMode?: boolean
+  isSelectingCometRoi?: boolean
   /** A guide camera is connected, so the source toggle has something to switch to. */
-  hasGuideCamera: {
-    type: Boolean,
-    default: false
-  },
-  /** True while the view is showing the guide camera rather than the imaging one. */
-  showGuide: {
-    type: Boolean,
-    default: false
-  },
+  hasGuideCamera?: boolean
+  /** True while the server views the guide camera — here and on the eyepiece pages. */
+  showGuide?: boolean
+}>(), {
+  scale: 1.0,
+  fps: 0,
+  backendLabel: 'Canvas2D',
+  debugLogging: false,
+  isFullscreen: false,
+  hasFrame: false,
+  isCometMode: false,
+  isSelectingCometRoi: false,
+  hasGuideCamera: false,
+  showGuide: false,
 })
 
-defineEmits([
-  'zoomIn',
-  'zoomOut',
-  'fitToView',
-  'resetView',
-  'toggleFullscreen',
-  'startCometRoiSelection',
-  'update:showGuide',
-])
+defineEmits<{
+  zoomIn: []
+  zoomOut: []
+  fitToView: []
+  resetView: []
+  toggleFullscreen: []
+  startCometRoiSelection: []
+  'update:showGuide': [show: boolean]
+}>()
 </script>
 
 <template>
   <!-- `data-overlay-control` marks the whole cluster as controls rather than image,
        so a press on the FPS readout refreshes the auto-hide instead of toggling it. -->
   <div class="controls-overlay" data-overlay-control>
-    <div v-if="hasFrame" class="frame-info">
+    <div v-if="hasFrame" class="hud-chip frame-info">
       <span class="frame-info-line">
         <span class="fps-container">
           <span class="fps-display">FPS {{ fps }}</span>
@@ -75,17 +56,17 @@ defineEmits([
          source switch is not one of its buttons. -->
     <button
         v-if="hasGuideCamera"
-        class="btn btn-sm guide-toggle"
+        class="btn btn-sm hud-chip guide-toggle"
         :class="{ active: showGuide }"
         type="button"
         :aria-pressed="showGuide ? 'true' : 'false'"
-        title="Show the guide camera's view instead of the imaging camera's"
+        title="Show the guide camera's view instead of the imaging camera's, here and on the eyepiece pages"
         @click="$emit('update:showGuide', !showGuide)"
     >
       Guide camera
     </button>
 
-    <div class="zoom-controls">
+    <div class="hud-chip zoom-controls">
       <button class="btn btn-icon btn-overlay" title="Fit to view" @click="$emit('fitToView')">
         <svg
             viewBox="0 0 24 24"
@@ -159,16 +140,13 @@ defineEmits([
   flex-direction: row;
   align-items: stretch;
   gap: 0.25rem;
-  z-index: 10;
+  z-index: var(--z-overlay);
 }
 
 .zoom-controls {
   display: flex;
   gap: 0.25rem;
-  background: var(--surface-elevated);
-  border-radius: 6px;
   padding: 0.15rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .btn-overlay {
@@ -176,7 +154,7 @@ defineEmits([
   height: 30px;
   padding: 0.35rem;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .btn-overlay:hover {
@@ -185,25 +163,22 @@ defineEmits([
 
 .btn-overlay.active {
   background: var(--primary);
-  color: white;
+  color: var(--on-primary);
 }
 
 .guide-toggle {
   display: flex;
   align-items: center;
   padding: 0 0.6rem;
-  background: var(--surface-elevated);
   border: none;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  color: var(--text-secondary, #9ca3af);
-  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
 .guide-toggle.active {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
 }
 
 .frame-info {
@@ -212,12 +187,9 @@ defineEmits([
   align-items: flex-end;
   justify-content: center;
   gap: 0;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
-  background: var(--surface-elevated);
   padding: 0.15rem 0.5rem;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   white-space: nowrap;
 }
 
@@ -226,7 +198,7 @@ defineEmits([
   gap: 0.5rem;
 }
 
-.zoom-level, .fps-display, .render-backend {
+.fps-display, .render-backend {
   font-family: var(--font-mono);
 }
 
@@ -238,7 +210,7 @@ defineEmits([
 
 .render-backend {
   color: var(--text-muted);
-  font-size: 0.6rem;
+  font-size: var(--fs-3xs);
 }
 
 @media (max-width: 768px) {

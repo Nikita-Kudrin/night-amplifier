@@ -1,70 +1,75 @@
-<script setup>
+<script setup lang="ts">
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-const props = defineProps({
-  modelValue: {
-    type: Number,
-    required: true,
-  },
-  label: {
-    type: String,
-    default: ''
-  },
-  min: {
-    type: Number,
-    default: 0,
-  },
-  max: {
-    type: Number,
-    default: 100,
-  },
-  step: {
-    type: Number,
-    default: 1,
-  },
+const props = withDefaults(defineProps<{
+  modelValue: number
+  label?: string
+  min?: number
+  max?: number
+  step?: number
   /**
    * Show a number input beside the slider. It replaces the read-only value in
    * the label rather than joining it — two copies of the same number a few
    * pixels apart read as two different settings.
    */
-  showInput: {
-    type: Boolean,
-    default: false,
-  },
-  formatValue: {
-    type: Function,
-    default: (v) => v,
-  },
-  help: {
-    type: String,
-    default: ''
-  },
-  disabled: {
-    type: Boolean,
-    default: false
-  },
-  largeGap: {
-    type: Boolean,
-    default: false
-  },
+  showInput?: boolean
+  formatValue?: (value: number) => string | number
+  help?: string
+  disabled?: boolean
+  largeGap?: boolean
+}>(), {
+  label: '',
+  min: 0,
+  max: 100,
+  step: 1,
+  showInput: false,
+  formatValue: (v: number) => v,
+  help: '',
+  disabled: false,
+  largeGap: false,
 })
 
-const emit = defineEmits(['update:modelValue', 'change'])
+const emit = defineEmits<{
+  'update:modelValue': [value: number]
+  change: [value: number]
+}>()
 
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+import { useScrollProtect } from '../../composables/useScrollProtect'
 
 const { blockIfScrolling } = useScrollProtect()
 
-function handleInput(event) {
-  if (blockIfScrolling(event, props.modelValue)) return
-  const value = Number(event.target.value)
-  emit('update:modelValue', value)
+/** The value the number box held when focused: what an emptied one goes back to. */
+let valueAtFocus: number | null = null
+
+function rememberValueAtFocus() {
+  valueAtFocus = props.modelValue
 }
 
-function handleChange(event) {
+/** `null` while the number box holds no number: `Number('')` is 0, which an emptied Gain committed. */
+function readNumber(event: Event) {
+  const raw = (event.target as HTMLInputElement).value
+  const value = raw === '' ? NaN : Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+function handleInput(event: Event) {
   if (blockIfScrolling(event, props.modelValue)) return
-  const value = Number(event.target.value)
-  emit('change', value)
+  const value = readNumber(event)
+  if (value !== null) emit('update:modelValue', value)
+}
+
+function handleChange(event: Event) {
+  if (blockIfScrolling(event, props.modelValue)) return
+  const value = readNumber(event)
+  if (value !== null) {
+    valueAtFocus = value
+    emit('change', value)
+    return
+  }
+  const previous = valueAtFocus ?? props.modelValue
+  const input = event.target as HTMLInputElement
+  input.value = String(previous)
+  if (previous !== props.modelValue) emit('update:modelValue', previous)
 }
 </script>
 
@@ -100,6 +105,7 @@ function handleChange(event) {
           :step="step"
           :disabled="disabled"
           class="input input-sm"
+          @focus="rememberValueAtFocus"
           @input="handleInput"
           @change="handleChange"
       />
@@ -115,7 +121,7 @@ function handleChange(event) {
 }
 
 .current-value {
-  font-size: 0.77rem;
+  font-size: var(--fs-sm);
 }
 
 .label-text-wrapper {

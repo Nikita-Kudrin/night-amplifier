@@ -1,21 +1,20 @@
-<script setup>
-defineProps({
-  type: {
-    type: String,
-    default: 'error',
-    validator: (v) => ['error', 'warning', 'info', 'success'].includes(v),
-  },
-  dismissible: {
-    type: Boolean,
-    default: true,
-  },
+<script setup lang="ts">
+withDefaults(defineProps<{
+  type?: 'error' | 'warning' | 'info' | 'success'
+  dismissible?: boolean
+  /** Dialog size: roomier, with a rule in its own colour. */
+  bordered?: boolean
+}>(), {
+  type: 'error',
+  dismissible: true,
+  bordered: false,
 })
 
-const emit = defineEmits(['dismiss'])
+const emit = defineEmits<{dismiss: []}>()
 </script>
 
 <template>
-  <div class="alert" :class="`alert-${type}`">
+  <div class="alert" :class="[`alert-${type}`, {bordered}]">
     <slot/>
     <button v-if="dismissible" class="btn-close" @click="emit('dismiss')">&times;</button>
   </div>
@@ -29,29 +28,42 @@ const emit = defineEmits(['dismiss'])
   align-items: center;
   justify-content: space-between;
   padding: 0.375rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-bottom: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   gap: 0.5rem;
 }
 
 .alert-error {
   background: var(--error-bg);
   color: var(--error);
+  border-color: var(--error-border);
 }
 
 .alert-warning {
   background: var(--warning-bg);
   color: var(--warning);
+  border-color: var(--warning-border);
 }
 
 .alert-info {
   background: var(--primary-bg);
   color: var(--primary);
+  border-color: var(--primary-border);
 }
 
 .alert-success {
   background: var(--success-bg);
   color: var(--success);
+  border-color: var(--success-border);
+}
+
+.alert.bordered {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
 }
 </style>

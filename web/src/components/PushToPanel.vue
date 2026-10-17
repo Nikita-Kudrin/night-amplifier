@@ -1,185 +1,110 @@
-<script setup>
-import {ref, onMounted, onUnmounted, inject, computed, watch} from 'vue'
-import {useError} from '../composables/useError.js'
-import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
-import {usePushToTarget} from '../composables/usePushToTarget.js'
-import {useCoordinateInput, formatRA, formatDec} from '../composables/useCoordinates.js'
-import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
+<script setup lang="ts">
+import {ref, onMounted, computed, watch} from 'vue'
+import {useError} from '../composables/useError'
+import {usePushToTarget} from '../composables/usePushToTarget'
+import {useCapabilities, useEventStreamContext, useSelectedCamera} from '../composables/appContext'
+import {formatDec, formatRA} from '../utils/coordinates'
+import {fovWarning as warnOnFov} from '../utils/fovWarning'
+import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel, CollapseToggle} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
+import CatalogSearch from './CatalogSearch.vue'
+import {HELP_TEXTS, PRO_UPGRADE_URL} from '../constants'
 import EquipmentSection from './EquipmentSection.vue'
-import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
+import ManualCoordinates from './ManualCoordinates.vue'
+import {ignoreProOnly, updatePushToConfig} from '../composables/api'
+import {fetchAstapState} from '../composables/useAstapInstall'
+import type {TypedCoordinates} from '../composables/useCoordinates'
+import type {FieldOfView} from '../composables/useTelescopeSetup'
+import type {AstapStatus, DatabaseType} from '../composables/api.types'
 
 const {error, clearError, withErrorHandling} = useError()
 
 // Panel state
 const collapsed = ref(false)
-const manualCoordsEnabled = ref(false)
 const showDatabaseManager = ref(false)
-const calculatedFov = ref(null)
+const calculatedFov = ref<FieldOfView | null>(null)
 
 // FOV warning state
-const astapStatus = ref(null)
-const availableDatabases = ref([])
+const astapStatus = ref<AstapStatus | null>(null)
+const availableDatabases = ref<DatabaseType[]>([])
 const showFovWarning = ref(false)
 
 async function fetchAstapStatus() {
   try {
-    const [statusData, dbData] = await Promise.all([
-      getAstapStatus(),
-      getAstapDatabases(),
-    ])
-    astapStatus.value = statusData
-    availableDatabases.value = dbData
-  } catch {
-    // Ignore — plugin may not be available in Community version
+    const state = await fetchAstapState()
+    astapStatus.value = state.status
+    availableDatabases.value = state.databases
+  } catch (e) {
+    ignoreProOnly(e, 'ASTAP status')
   }
 }
 
 // Re-fetch status when database manager is closed (user may have installed a new DB)
 watch(showDatabaseManager, (visible) => {
-  if (!visible) fetchAstapStatus()
+  if (!visible) void fetchAstapStatus()
 })
 
 const installedDatabases = computed(() => astapStatus.value?.installed_databases ?? [])
 
-async function selectDatabase(dbId) {
+async function selectDatabase(dbId: string) {
   const db = installedDatabases.value.find(d => d.id === dbId)
   if (!db || dbId === astapStatus.value?.database_type) return
 
   await withErrorHandling(async () => {
     await updatePushToConfig({database_path: db.database_path})
-    astapStatus.value = {...astapStatus.value, database_type: dbId}
+    if (astapStatus.value) astapStatus.value = {...astapStatus.value, database_type: dbId}
   })
 }
 
 // Compute FOV warning: check height FOV (used by ASTAP) against the active database range
-const fovWarning = computed(() => {
-  if (!astapStatus.value?.database_type || !calculatedFov.value) return null
-  const activeDb = astapStatus.value.installed_databases?.find(
-      db => db.id === astapStatus.value.database_type
-  )
-  if (!activeDb) return null
+const fovWarning = computed(() => warnOnFov({
+  fovDeg: calculatedFov.value?.y ?? null,
+  activeId: astapStatus.value?.database_type ?? null,
+  installed: installedDatabases.value,
+  available: availableDatabases.value,
+}))
 
-  const fovY = calculatedFov.value.y
-  if (fovY >= activeDb.min_fov_deg && fovY <= activeDb.max_fov_deg) return null
-
-  const fovStr = formatFov(fovY)
-  const direction = fovY < activeDb.min_fov_deg ? 'too narrow' : 'too wide'
-  let message = `FOV ${fovStr} is ${direction} for the ${activeDb.id} database (${activeDb.min_fov_deg}°–${activeDb.max_fov_deg}°). Plate solving may fail with this setup.`
-
-  // Suggest alternative databases that cover the user's FOV
-  const matching = availableDatabases.value.filter(
-      db => db.id !== activeDb.id && fovY >= db.min_fov_deg && fovY <= db.max_fov_deg
-  )
-  let suggestion = null
-  if (matching.length > 0) {
-    const installed = matching.filter(db => db.installed)
-    const notInstalled = matching.filter(db => !db.installed)
-    const parts = []
-    if (installed.length > 0) {
-      parts.push(`Switch to ${installed.map(db => db.id).join(', ')}`)
-    }
-    if (notInstalled.length > 0) {
-      parts.push(`download ${notInstalled.map(db => db.id).join(', ')}`)
-    }
-    suggestion = parts.join(' or ')
-  }
-
-  return {
-    database_id: activeDb.id,
-    current_fov: fovStr,
-    message,
-    suggestion,
-  }
-})
-
-// Catalog search
-const {searchQuery, searchResults, searching, showResults, setQueryWithoutSearch, hideResults, revealResults} =
-    useCatalogSearch()
-
-const eventStream = inject('eventStream')
-const cameras = inject('cameras', ref([]))
-const selectedCamera = inject('selectedCamera', ref(null))
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false},
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-})
-
-const hasProSolver = computed(() => capabilities?.value?.push_to?.astap_solver ?? false)
+const eventStream = useEventStreamContext()
+// No stand-in for the server's socket: the panel cannot follow a target without one.
+if (!eventStream) throw new Error('PushToPanel needs the provided event stream')
+const selectedCamera = useSelectedCamera()
+const {astapSolver: hasProSolver} = useCapabilities()
 const showProOverlay = computed(() => !hasProSolver.value)
 
 // Target management
-const {currentTarget, selectTargetByName, clearTarget, isSolving, cancelSolve} = usePushToTarget({
+const {
+  currentTarget,
+  selectTargetByName,
+  selectTargetByCoordinates,
+  clearTarget,
+  isSolving,
+  cancelSolve,
+} = usePushToTarget({
   withErrorHandling,
   eventStream,
 })
 
-// Coordinate input
-const {raInput, decInput, coordError, validateCoordinates, clearInputs} = useCoordinateInput()
+// A target set by coordinates has neither a name nor a designation.
+const namedTarget = computed(() => {
+  const target = currentTarget.value
+  return target && 'designation' in target ? target : null
+})
 
 // Connected camera info for auto-fill and profile switching
-const connectedCameraInfo = computed(() => {
-  if (!selectedCamera?.value || !cameras?.value) return null
-  const cam = cameras.value.find(c => c.id === selectedCamera.value)
-  return cam?.info || null
-})
+const connectedCameraInfo = computed(() => selectedCamera.value?.info || null)
 
-function formatFov(deg) {
-  if (deg >= 1) return `${deg.toFixed(2)}\u00B0`
-  return `${(deg * 60).toFixed(1)}'`
+/** Resolves `true` once the target took, so `ManualCoordinates` can clear its fields. */
+async function setCoordinateTarget(coords: TypedCoordinates) {
+  return (await selectTargetByCoordinates(coords.ra, coords.dec)) !== undefined
 }
 
-async function selectTarget(entry) {
-  setQueryWithoutSearch(entry.name || entry.designation)
-  await selectTargetByName(entry.designation)
-}
-
-async function setCoordinateTarget() {
-  const coords = validateCoordinates()
-  if (!coords) return
-
-  await withErrorHandling(async () => {
-    const {setTargetByCoordinates} = await import('../composables/api.js')
-    const result = await setTargetByCoordinates(coords.ra, coords.dec)
-    currentTarget.value = result.target
-    clearInputs()
-  })
-}
-
-function handleClickOutside(event) {
-  if (!event.target.closest('.search-container')) {
-    hideResults()
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-  fetchAstapStatus()
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-})
+onMounted(fetchAstapStatus)
 </script>
 
 <template>
   <BasePanel class="push-to-panel" :bordered="false">
     <template #header>
-      <button class="collapse-toggle" title="Toggle Push-To panel" @click="collapsed = !collapsed">
-        <svg
-            :class="{ collapsed }"
-            viewBox="0 0 24 24"
-            width="12"
-            height="12"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <path d="M6 9l6 6 6-6"/>
-        </svg>
-      </button>
+      <CollapseToggle v-model="collapsed" title="Toggle Push-To panel"/>
       <h2>Push-To Navigation</h2>
       <button
           v-if="fovWarning"
@@ -197,7 +122,7 @@ onUnmounted(() => {
       <BaseInfoIcon
           v-if="!calculatedFov && hasProSolver"
           type="warning"
-          message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can increase the success rate of Push-To."
+          :message="HELP_TEXTS.push_to_without_optics"
           class="header-warning-icon"
       />
     </template>
@@ -216,11 +141,10 @@ onUnmounted(() => {
       <!-- Pro Only Overlay -->
       <div v-if="showProOverlay" class="pro-overlay">
         <div class="pro-message">
-          <BaseProLock feature="Plate Solving" size="32px" style="margin-bottom: 0.5rem"/>
+          <BaseProLock feature="Plate Solving" size="32px" class="pro-message-lock"/>
           <h3>Pro Feature</h3>
-          <p>Plate solving and Push-To navigation require Night Amplifier Pro.</p>
-          <a href="https://skycontrast.com/software/night-amplifier-pro" target="_blank" class="btn btn-primary btn-sm">Upgrade
-            to Pro</a>
+          <p>{{ HELP_TEXTS.push_to_pro }}</p>
+          <a :href="PRO_UPGRADE_URL" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Upgrade to Pro</a>
         </div>
       </div>
 
@@ -231,9 +155,9 @@ onUnmounted(() => {
           <button class="btn-clear" title="Clear target" @click="clearTarget">&times;</button>
         </div>
         <div class="target-info">
-          <span class="target-name">{{ currentTarget.name || currentTarget.designation || 'Custom' }}</span>
-          <span v-if="currentTarget.designation" class="target-designation">{{
-              currentTarget.designation
+          <span class="target-name">{{ namedTarget?.name || namedTarget?.designation || 'Custom' }}</span>
+          <span v-if="namedTarget?.designation" class="target-designation">{{
+              namedTarget.designation
             }}</span>
         </div>
         <div class="target-coords">
@@ -242,102 +166,15 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <CatalogSearch :solving="isSolving" @select="selectTargetByName" @cancel="cancelSolve"/>
 
-      <!-- Object Search -->
-      <div class="search-container">
-        <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Search Messier, NGC, Stars..."
-            class="search-input"
-            :disabled="isSolving"
-            @focus="revealResults"
-        />
-        <div v-if="searching || isSolving" class="search-spinner-wrapper">
-          <BaseSpinner size="sm" />
-        </div>
-        <button
-            v-if="isSolving"
-            class="btn-cancel-solve"
-            title="Cancel solving"
-            @click="cancelSolve"
-        >
-          Cancel
-        </button>
-
-        <!-- Search Results Dropdown -->
-        <div v-if="showResults && searchResults.length > 0" class="search-results">
-          <div
-              v-for="entry in searchResults"
-              :key="entry.designation"
-              class="search-result-item"
-              @click="selectTarget(entry)"
-          >
-            <div class="result-main">
-              <span v-if="messierLabel(entry)" class="catalog-badge badge-messier">
-                {{ messierLabel(entry) }}
-              </span>
-              <span :class="['catalog-badge', getCatalogClass(entry.catalog_type)]">
-                {{ entry.designation }}
-              </span>
-              <span class="result-name">{{ entry.name }}</span>
-            </div>
-            <div v-if="entry.matched_name" class="result-matched">Matched: {{ entry.matched_name }}</div>
-            <div class="result-details">
-              <span class="result-type">{{ entry.object_type }}</span>
-              <span class="result-constellation">{{ entry.constellation }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Manual Coordinates -->
-      <div class="section manual-coords-section">
-        <div class="manual-coords-header">
-          <h3 class="section-title">Manual Coordinates</h3>
-          <BaseToggle
-              :model-value="manualCoordsEnabled"
-              size="small"
-              @update:model-value="manualCoordsEnabled = $event"
-          />
-        </div>
-        <div v-if="manualCoordsEnabled" class="manual-coords-content">
-          <div class="coord-inputs">
-            <div class="coord-field">
-              <label>RA</label>
-              <input
-                  v-model="raInput"
-                  type="text"
-                  placeholder="HH:MM:SS or degrees"
-                  class="coord-input"
-              />
-            </div>
-            <div class="coord-field">
-              <label>Dec</label>
-              <input
-                  v-model="decInput"
-                  type="text"
-                  placeholder="DD:MM:SS or degrees"
-                  class="coord-input"
-              />
-            </div>
-          </div>
-          <div v-if="coordError" class="coord-error">{{ coordError }}</div>
-          <button
-              class="btn btn-sm btn-primary set-coords-btn"
-              :disabled="!raInput || !decInput"
-              @click="setCoordinateTarget"
-          >
-            Set Target
-          </button>
-        </div>
-      </div>
+      <ManualCoordinates :submit="setCoordinateTarget"/>
 
       <!-- Equipment -->
       <EquipmentSection
           :connected-camera-info="connectedCameraInfo"
           :installed-databases="installedDatabases"
-          :active-database-type="astapStatus?.database_type"
+          :active-database-type="astapStatus?.database_type ?? null"
           @fov-changed="calculatedFov = $event"
           @database-select="selectDatabase"
       />
@@ -372,7 +209,7 @@ onUnmounted(() => {
 
 .current-target {
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.5rem;
   border-left: 3px solid var(--primary);
 }
@@ -385,7 +222,7 @@ onUnmounted(() => {
 }
 
 .target-label {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -401,7 +238,7 @@ onUnmounted(() => {
 }
 
 .btn-clear:hover {
-  color: var(--danger);
+  color: var(--error);
 }
 
 .target-info {
@@ -412,20 +249,20 @@ onUnmounted(() => {
 }
 
 .target-name {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .target-designation {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--primary);
 }
 
 .target-coords {
   display: flex;
   gap: 1rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   font-family: monospace;
 }
@@ -434,259 +271,45 @@ onUnmounted(() => {
   margin-top: 0.25rem;
 }
 
-.section-title {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  margin-bottom: 0.375rem;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.manual-coords-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.375rem;
-}
-
-.manual-coords-header .section-title {
-  margin-bottom: 0;
-}
-
-.manual-coords-content {
-  margin-top: 0.375rem;
-}
-
-.search-container {
-  position: relative;
-}
-
-.search-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.search-input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-spinner-wrapper {
-  position: absolute;
-  right: 0.5rem;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-}
-
-.search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 0.25rem;
-  max-height: 200px;
-  overflow-y: auto;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.search-result-item {
-  padding: 0.5rem;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
-}
-
-.search-result-item:last-child {
-  border-bottom: none;
-}
-
-.search-result-item:hover {
-  background: var(--surface-hover);
-}
-
-.result-main {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.125rem;
-}
-
-.catalog-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 0.125rem 0.375rem;
-  border-radius: 4px;
-}
-
-.badge-messier {
-  background: #4a9eff30;
-  color: #4a9eff;
-}
-
-.badge-ngc {
-  background: #ff9f4a30;
-  color: #ff9f4a;
-}
-
-.badge-ic {
-  background: #9f4aff30;
-  color: #9f4aff;
-}
-
-.badge-star {
-  background: #facc1530;
-  color: #facc15;
-}
-
-.badge-other {
-  background: var(--surface);
-  color: var(--text-secondary);
-}
-
-.result-name {
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.result-matched {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 0.125rem;
-}
-
-.result-details {
-  display: flex;
-  gap: 0.5rem;
-  font-size: 0.65rem;
-  color: var(--text-muted);
-}
-
-.coord-inputs {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.375rem;
-}
-
-.coord-field {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.coord-field label {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-}
-
-.coord-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.375rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  font-family: monospace;
-}
-
-.coord-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.coord-input::placeholder {
-  color: var(--text-muted);
-  font-family: inherit;
-}
-
-.coord-error {
-  font-size: 0.65rem;
-  color: var(--danger);
-  margin-bottom: 0.25rem;
-}
-
-.set_coords-btn {
-  width: 100%;
-}
-
 .pro-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 10;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--backdrop);
   backdrop-filter: blur(6px);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1.5rem 1rem;
   text-align: center;
   border: 1px dashed var(--border);
 }
 
+.pro-message-lock {
+  margin-bottom: 0.5rem;
+}
+
 .pro-message h3 {
-  font-size: 1rem;
+  font-size: var(--fs-xl);
   margin: 0.5rem 0;
   color: var(--text-primary);
 }
 
 .pro-message p {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   color: var(--text-secondary);
   margin-bottom: 1rem;
-}
-
-.btn-cancel-solve {
-  position: absolute;
-  right: 2rem;
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.65rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  z-index: 5;
-}
-
-.btn-cancel-solve:hover {
-  background: var(--surface-hover);
-  color: var(--danger);
-  border-color: var(--danger);
 }
 
 .btn-manage-databases {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
   text-decoration: underline;
   padding: 0.25rem 0;
@@ -702,7 +325,7 @@ onUnmounted(() => {
   border: none;
   padding: 0.1rem 0.2rem;
   cursor: pointer;
-  color: #f59e0b;
+  color: var(--warning);
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -710,7 +333,7 @@ onUnmounted(() => {
 }
 
 .fov-warning-btn:hover {
-  color: #d97706;
+  color: var(--warning-hover);
 }
 
 .header-warning-icon {

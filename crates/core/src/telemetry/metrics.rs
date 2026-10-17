@@ -1,0 +1,475 @@
+#[cfg(feature = "telemetry")]
+use opentelemetry::metrics::MeterProvider;
+#[cfg(feature = "telemetry")]
+use opentelemetry::KeyValue;
+
+/// Record the memory usage of a master stack in bytes.
+#[cfg(feature = "telemetry")]
+pub fn record_master_stack_memory(bytes: u64, stack_id: &str) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.stacking");
+        let gauge = meter
+            .u64_gauge("master_stack.memory_bytes")
+            .with_description("Memory usage of master stack storage in bytes")
+            .with_unit("By")
+            .build();
+        gauge.record(bytes, &[KeyValue::new("stack_id", stack_id.to_string())]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_master_stack_memory(_bytes: u64, _stack_id: &str) {}
+
+/// Record the number of frames in a master stack.
+#[cfg(feature = "telemetry")]
+pub fn record_master_stack_frame_count(count: u64, stack_id: &str) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.stacking");
+        let gauge = meter
+            .u64_gauge("master_stack.frame_count")
+            .with_description("Number of frames accumulated in master stack")
+            .with_unit("{frames}")
+            .build();
+        gauge.record(count, &[KeyValue::new("stack_id", stack_id.to_string())]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_master_stack_frame_count(_count: u64, _stack_id: &str) {}
+
+/// Record the number of frame quality entries in a master stack.
+#[cfg(feature = "telemetry")]
+pub fn record_master_stack_qualities_count(count: u64, stack_id: &str) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.stacking");
+        let gauge = meter
+            .u64_gauge("master_stack.frame_qualities_count")
+            .with_description("Number of frame quality entries stored")
+            .with_unit("{entries}")
+            .build();
+        gauge.record(count, &[KeyValue::new("stack_id", stack_id.to_string())]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_master_stack_qualities_count(_count: u64, _stack_id: &str) {}
+
+/// Record the pixel count of a master stack.
+#[cfg(feature = "telemetry")]
+pub fn record_master_stack_pixel_count(pixel_count: u64, stack_id: &str) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.stacking");
+        let pixel_gauge = meter
+            .u64_gauge("master_stack.pixel_count")
+            .with_description("Number of pixels in master stack")
+            .with_unit("{pixels}")
+            .build();
+        pixel_gauge.record(
+            pixel_count,
+            &[KeyValue::new("stack_id", stack_id.to_string())],
+        );
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_master_stack_pixel_count(_pixel_count: u64, _stack_id: &str) {}
+
+/// Record the disk writer queue depth.
+#[cfg(feature = "telemetry")]
+pub fn record_disk_writer_queue_depth(depth: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.disk");
+        let gauge = meter
+            .u64_gauge("disk_writer.queue_depth")
+            .with_description("Current number of frames queued for writing")
+            .with_unit("{frames}")
+            .build();
+        gauge.record(depth, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_disk_writer_queue_depth(_depth: u64) {}
+
+/// Record the disk writer queue capacity.
+#[cfg(feature = "telemetry")]
+pub fn record_disk_writer_queue_capacity(capacity: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.disk");
+        let gauge = meter
+            .u64_gauge("disk_writer.queue_capacity")
+            .with_description("Maximum queue size for disk writer")
+            .with_unit("{frames}")
+            .build();
+        gauge.record(capacity, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_disk_writer_queue_capacity(_capacity: u64) {}
+
+/// Record the catalog entry count and search key counts.
+#[cfg(feature = "telemetry")]
+pub fn record_catalog_stats(entries_count: u64, name_key_count: u64, identifier_key_count: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.catalog");
+
+        let entries_gauge = meter
+            .u64_gauge("catalog.entries_count")
+            .with_description("Number of catalog entries loaded")
+            .with_unit("{entries}")
+            .build();
+        entries_gauge.record(entries_count, &[]);
+
+        let index_gauge = meter
+            .u64_gauge("catalog.index_size")
+            .with_description("Number of search keys in catalog index")
+            .with_unit("{keys}")
+            .build();
+        index_gauge.record(name_key_count, &[KeyValue::new("index", "name")]);
+        index_gauge.record(identifier_key_count, &[KeyValue::new("index", "identifier")]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_catalog_stats(_entries_count: u64, _name_key_count: u64, _identifier_key_count: u64) {}
+
+/// Record the number of connected cameras.
+#[cfg(feature = "telemetry")]
+pub fn record_cameras_count(count: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.server");
+        let gauge = meter
+            .u64_gauge("server.cameras_count")
+            .with_description("Number of connected cameras")
+            .with_unit("{cameras}")
+            .build();
+        gauge.record(count, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_cameras_count(_count: u64) {}
+
+/// Record the number of event subscribers.
+#[cfg(feature = "telemetry")]
+pub fn record_event_subscribers(count: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.server");
+        let gauge = meter
+            .u64_gauge("server.event_subscribers")
+            .with_description("Number of active event subscribers")
+            .with_unit("{subscribers}")
+            .build();
+        gauge.record(count, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_event_subscribers(_count: u64) {}
+
+/// Record the latest frame size in bytes for one payload family (`jpeg` or `lossless`).
+/// Labelled because both families publish every frame, at independently chosen sizes.
+#[cfg(feature = "telemetry")]
+pub fn record_latest_frame_size(format: &'static str, bytes: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.server");
+        let gauge = meter
+            .u64_gauge("server.latest_frame_size")
+            .with_description("Size of latest rendered frame in bytes")
+            .with_unit("By")
+            .build();
+        gauge.record(bytes, &[KeyValue::new("format", format)]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_latest_frame_size(_format: &'static str, _bytes: u64) {}
+
+// ============================================================================
+// Per-frame pipeline instrumentation
+// ============================================================================
+// The instruments above rebuild their meter/instrument per call (used only a few
+// times per session); these fire once per frame, so they cache the instrument in a
+// `OnceLock` — per-call cost is a single atomic add. Keep this section to *pipeline
+// stages*: anything finer (per row, per pixel, per tile) would distort what it
+// measures.
+
+/// A high-level pipeline stage, timed once per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameStage {
+    /// Blocking `Camera::capture` call. Dominated by exposure time on real hardware.
+    Capture,
+    /// The raw-CFA stage (`cfa::CfaPipeline`): hot pixels and row/column FPN,
+    /// on the mosaic, before demosaic. Separate from `Debayer` because these are
+    /// per-frame corrections that can be turned off, and turning them off is a
+    /// decision an observer makes against this number.
+    CfaCorrection,
+    /// Bayer → RGB conversion, wherever it runs (camera provider or simulator).
+    Debayer,
+    /// One full iteration of the stacking task.
+    Stack,
+    /// `process_preview_frame` — the preview render pipeline only.
+    Render,
+    /// LZ4 encode for the lossless eyepiece stream.
+    EncodeLz4,
+    /// Inline cooled-camera status poll on the capture thread (`camera.status()`).
+    /// Fires once per `STATUS_POLL_INTERVAL`, not per frame.
+    StatusPoll,
+    /// Storing a frame to disk (raw, stacked, or PNG).
+    Storage,
+    /// Plate solving the frame (Pro edition).
+    PlateSolving,
+}
+
+impl FrameStage {
+    /// Only reached from the OTLP histogram builder, which is behind the
+    /// `telemetry` feature.
+    #[allow(dead_code)]
+    const fn metric_name(self) -> &'static str {
+        match self {
+            Self::Capture => "frame.capture_ms",
+            Self::CfaCorrection => "frame.cfa_correction_ms",
+            Self::Debayer => "frame.debayer_ms",
+            Self::Stack => "frame.stack_ms",
+            Self::Render => "frame.render_ms",
+            Self::EncodeLz4 => "frame.encode_lz4_ms",
+            Self::StatusPoll => "frame.status_poll_ms",
+            Self::Storage => "frame.storage_ms",
+            Self::PlateSolving => "frame.plate_solving_ms",
+        }
+    }
+}
+
+/// Times a pipeline stage and records it on drop.
+///
+/// Costs one `Instant::now()` pair when telemetry is compiled in, and nothing
+/// at all when it is not.
+#[must_use = "the stage is recorded when this guard is dropped"]
+pub struct StageTimer {
+    #[cfg(feature = "telemetry")]
+    stage: FrameStage,
+    #[cfg(feature = "telemetry")]
+    started: std::time::Instant,
+    #[cfg(not(feature = "telemetry"))]
+    _phantom: std::marker::PhantomData<()>,
+}
+
+/// Start timing a pipeline stage. The measurement is recorded when the returned
+/// guard is dropped.
+#[cfg(feature = "telemetry")]
+pub fn time_stage(stage: FrameStage) -> StageTimer {
+    StageTimer {
+        stage,
+        started: std::time::Instant::now(),
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn time_stage(_stage: FrameStage) -> StageTimer {
+    StageTimer {
+        _phantom: std::marker::PhantomData,
+    }
+}
+
+#[cfg(feature = "telemetry")]
+impl Drop for StageTimer {
+    fn drop(&mut self) {
+        if let Some(histogram) = pipeline_histogram(self.stage) {
+            histogram.record(self.started.elapsed().as_secs_f64() * 1000.0, &[]);
+        }
+    }
+}
+
+/// Cached duration histogram for a stage.
+///
+/// Nothing is cached until the meter provider exists, so recording before
+/// `init_telemetry` cannot poison the slot with a dead instrument.
+#[cfg(feature = "telemetry")]
+fn pipeline_histogram(
+    stage: FrameStage,
+) -> Option<&'static opentelemetry::metrics::Histogram<f64>> {
+    use opentelemetry::metrics::Histogram;
+    use std::sync::OnceLock;
+
+    static CAPTURE: OnceLock<Histogram<f64>> = OnceLock::new();
+    static CFA_CORRECTION: OnceLock<Histogram<f64>> = OnceLock::new();
+    static DEBAYER: OnceLock<Histogram<f64>> = OnceLock::new();
+    static STACK: OnceLock<Histogram<f64>> = OnceLock::new();
+    static RENDER: OnceLock<Histogram<f64>> = OnceLock::new();
+    static ENCODE_LZ4: OnceLock<Histogram<f64>> = OnceLock::new();
+    static STATUS_POLL: OnceLock<Histogram<f64>> = OnceLock::new();
+    static STORAGE: OnceLock<Histogram<f64>> = OnceLock::new();
+    static PLATE_SOLVING: OnceLock<Histogram<f64>> = OnceLock::new();
+
+    let cell = match stage {
+        FrameStage::Capture => &CAPTURE,
+        FrameStage::CfaCorrection => &CFA_CORRECTION,
+        FrameStage::Debayer => &DEBAYER,
+        FrameStage::Stack => &STACK,
+        FrameStage::Render => &RENDER,
+        FrameStage::EncodeLz4 => &ENCODE_LZ4,
+        FrameStage::StatusPoll => &STATUS_POLL,
+        FrameStage::Storage => &STORAGE,
+        FrameStage::PlateSolving => &PLATE_SOLVING,
+    };
+
+    if let Some(histogram) = cell.get() {
+        return Some(histogram);
+    }
+
+    let provider = super::METER_PROVIDER.get()?;
+    let histogram = provider
+        .meter("night_amplifier.pipeline")
+        .f64_histogram(stage.metric_name())
+        .with_description("Wall time spent in a live-view pipeline stage")
+        .with_unit("ms")
+        .build();
+    Some(cell.get_or_init(|| histogram))
+}
+
+/// Record the JPEG encode time at the Streaming Resolution in effect.
+///
+/// Separate from [`StageTimer`] because it carries a `resolution` attribute: the setting
+/// changes the cost several-fold, so timings from different settings must not mix.
+#[cfg(feature = "telemetry")]
+pub fn record_jpeg_encode_ms(resolution: &'static str, millis: f64) {
+    use opentelemetry::metrics::Histogram;
+    use std::sync::OnceLock;
+
+    static ENCODE_JPEG: OnceLock<Histogram<f64>> = OnceLock::new();
+
+    let histogram = match ENCODE_JPEG.get() {
+        Some(histogram) => histogram,
+        None => {
+            let Some(provider) = super::METER_PROVIDER.get() else {
+                return;
+            };
+            let built = provider
+                .meter("night_amplifier.pipeline")
+                .f64_histogram("frame.encode_jpeg_ms")
+                .with_description("Wall time spent encoding the JPEG stream payload")
+                .with_unit("ms")
+                .build();
+            ENCODE_JPEG.get_or_init(|| built)
+        }
+    };
+    histogram.record(millis, &[KeyValue::new("resolution", resolution)]);
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_jpeg_encode_ms(_resolution: &'static str, _millis: f64) {}
+
+/// Count a frame published to stream clients. The rate of this counter is the
+/// delivered live-view frame rate.
+#[cfg(feature = "telemetry")]
+pub fn record_frame_published() {
+    use opentelemetry::metrics::Counter;
+    use std::sync::OnceLock;
+    static PUBLISHED: OnceLock<Counter<u64>> = OnceLock::new();
+
+    if let Some(counter) = frame_counter(
+        &PUBLISHED,
+        "frame.published",
+        "Frames published to stream clients",
+    ) {
+        counter.add(1, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_frame_published() {}
+
+/// Record how full one of the three pipeline channels is.
+///
+/// `SyncSender` exposes no length, so this is the only signal that separates "the stage
+/// behind this channel is slower than capture" — a depth that sits at the ceiling — from
+/// "it stalled once" — a depth that spikes and drains. The capacity travels alongside
+/// because it is derived per session from the frame size and the exposure, so a raw
+/// depth means nothing without it.
+#[cfg(feature = "telemetry")]
+pub fn record_pipeline_queue_depth(channel: &'static str, depth: u64, capacity: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.pipeline");
+        let attrs = [opentelemetry::KeyValue::new("channel", channel)];
+        meter
+            .u64_gauge("pipeline.queue_depth")
+            .with_description("Frames queued in a pipeline channel and not yet taken")
+            .with_unit("{frames}")
+            .build()
+            .record(depth, &attrs);
+        meter
+            .u64_gauge("pipeline.queue_capacity")
+            .with_description("Slots in a pipeline channel")
+            .with_unit("{frames}")
+            .build()
+            .record(capacity, &attrs);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_pipeline_queue_depth(_channel: &'static str, _depth: u64, _capacity: u64) {}
+
+/// Count a frame dropped by pipeline back-pressure.
+#[cfg(feature = "telemetry")]
+pub fn record_frame_dropped() {
+    use opentelemetry::metrics::Counter;
+    use std::sync::OnceLock;
+    static DROPPED: OnceLock<Counter<u64>> = OnceLock::new();
+
+    if let Some(counter) = frame_counter(
+        &DROPPED,
+        "frame.dropped",
+        "Frames dropped because a pipeline stage was busy",
+    ) {
+        counter.add(1, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_frame_dropped() {}
+
+/// Count frames the render task discarded to catch up to the newest one.
+///
+/// A non-zero rate here means the render stage is behind the rest of the
+/// pipeline — the cheapest signal that the queues are backing up.
+#[cfg(feature = "telemetry")]
+pub fn record_frames_skipped_to_latest(count: u64) {
+    use opentelemetry::metrics::Counter;
+    use std::sync::OnceLock;
+    static SKIPPED: OnceLock<Counter<u64>> = OnceLock::new();
+
+    if count == 0 {
+        return;
+    }
+    if let Some(counter) = frame_counter(
+        &SKIPPED,
+        "frame.render_skipped",
+        "Stale frames discarded by the render task to reach the newest one",
+    ) {
+        counter.add(count, &[]);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_frames_skipped_to_latest(_count: u64) {}
+
+/// Cached counter, following the same "don't cache before the provider exists"
+/// rule as [`pipeline_histogram`].
+#[cfg(feature = "telemetry")]
+fn frame_counter(
+    cell: &'static std::sync::OnceLock<opentelemetry::metrics::Counter<u64>>,
+    name: &'static str,
+    description: &'static str,
+) -> Option<&'static opentelemetry::metrics::Counter<u64>> {
+    if let Some(counter) = cell.get() {
+        return Some(counter);
+    }
+    let provider = super::METER_PROVIDER.get()?;
+    let counter = provider
+        .meter("night_amplifier.pipeline")
+        .u64_counter(name)
+        .with_description(description)
+        .build();
+    Some(cell.get_or_init(|| counter))
+}

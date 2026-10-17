@@ -5,7 +5,8 @@
 # plus LICENSE and README.md.
 #
 # Usage:
-#   ./scripts/build-dist.sh                                              # Native-optimized local build
+#   ./scripts/build-dist.sh                                              # Local build (x86-64-v3 on x86-64, native on Arm)
+#   ./scripts/build-dist.sh --target-cpu native                          # Tuned to this CPU only; will not run on older ones
 #   ./scripts/build-dist.sh --target aarch64-unknown-linux-gnu           # Cross-compile for ARM64
 #   ./scripts/build-dist.sh --target-cpu cortex-a76                      # Specific CPU optimization
 #   ./scripts/build-dist.sh --cross --target aarch64-unknown-linux-gnu   # Use 'cross' tool
@@ -23,7 +24,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 TARGET=""
-TARGET_CPU="native"
+TARGET_CPU=""
 USE_CROSS="${CROSS:-0}"
 BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
@@ -58,6 +59,17 @@ if [[ -z "${TARGET}" ]]; then
     echo "Target (auto-detected): ${TARGET}"
 else
     echo "Target: ${TARGET}"
+fi
+
+# A dist archive gets copied to other computers, and an x86-64 `native` build dies there with
+# SIGILL: an Alder Lake laptop's build on an i3-6006U mini PC, which lacks GFNI, VAES and SHA.
+# x86-64-v3 is what releases ship. Arm keeps `native`: building on the Pi itself is how it
+# gets the Pi's tuning.
+if [[ -z "${TARGET_CPU}" ]]; then
+    case "${TARGET}" in
+        x86_64-*) TARGET_CPU="x86-64-v3" ;;
+        *)        TARGET_CPU="native" ;;
+    esac
 fi
 
 # ── Resolve version and package from Cargo.toml ──────────────────────
@@ -246,6 +258,8 @@ mkdir -p "${DIST_DIR}"
 cp "${BINARY_PATH}" "${DIST_DIR}/${OUT_BINARY_NAME}"
 cp "${PROJECT_ROOT}/LICENSE" "${DIST_DIR}/"
 cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
+# What cameras and AI compute units need installed; one copy, in this repo, for both builds.
+cp "${SCRIPT_DIR}/../system-dependencies.md" "${DIST_DIR}/"
 
 # Vendor camera SDKs are dlopen'd from the user's own install, never shipped: QHY grants no
 # redistribution right, and the binary has no RUNPATH to find a copy next to it anyway.

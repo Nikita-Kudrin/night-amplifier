@@ -1,14 +1,19 @@
 //! Capture control API handlers
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
+use crate::server::error::HttpStatus;
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::IntoResponse,
+};
 use std::sync::Arc;
 
 use super::super::dto::{
     ApiResponse, CaptureStatusResponse, MessageResponse, StartCaptureRequest, StopCaptureRequest,
 };
-use super::super::error::ApiError;
-use super::super::services::CaptureService;
-use super::super::state::{AppState, CameraRole};
+use crate::session::error::ApiError;
+use crate::session::services::CaptureService;
+use crate::session::state::{AppState, CameraRole};
 use super::optional_body::OptionalBody;
 
 /// POST /api/capture/start
@@ -28,14 +33,22 @@ pub async fn start_capture(
             ApiResponse::ok(MessageResponse {
                 message: match role {
                     CameraRole::Main => "Capture started".to_string(),
-                    CameraRole::Guide => "Guide camera started".to_string(),
+                    CameraRole::Guide => "Guide camera running".to_string(),
                 },
                 camera_id: Some(camera_id),
             }),
-        ),
-        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => {
+            let retry_after = matches!(e, ApiError::HardwareBenchmarkRunning)
+                .then_some([(header::RETRY_AFTER, BENCHMARK_RETRY_AFTER_SECS)]);
+            (e.status_code(), retry_after, ApiResponse::err::<()>(e.to_string())).into_response()
+        }
     }
 }
+
+/// A first-start benchmark takes seconds on a laptop and up to a minute on a Pi.
+const BENCHMARK_RETRY_AFTER_SECS: &str = "5";
 
 /// POST /api/capture/stop
 ///
@@ -68,7 +81,8 @@ pub async fn stop_capture(
 ///
 /// Get current capture status
 pub async fn get_capture_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let session = state.session.read().await;
-    let response = CaptureStatusResponse::from(&*session);
+    let capture_state = state.capture_state();
+    let settings = state.settings.snapshot();
+    let response = CaptureStatusResponse::new(capture_state, &state.stats, &settings);
     (StatusCode::OK, ApiResponse::ok(response))
 }

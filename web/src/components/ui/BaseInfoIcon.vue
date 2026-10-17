@@ -1,26 +1,24 @@
-<script setup>
-import {ref, onMounted, onUnmounted, nextTick} from 'vue'
+<script setup lang="ts">
+import {ref, nextTick, useTemplateRef} from 'vue'
+import type {CSSProperties} from 'vue'
+import {useClickOutside} from '../../composables/useClickOutside'
+import {useEventListener} from '../../composables/useEventListener'
 
-defineProps({
-  message: {
-    type: String,
-    required: true
-  },
-  type: {
-    type: String,
-    default: 'info',
-    validator: (v) => ['info', 'warning'].includes(v)
-  }
+withDefaults(defineProps<{
+  message: string
+  type?: 'info' | 'warning'
+}>(), {
+  type: 'info'
 })
 
 const showTooltip = ref(false)
-const iconRef = ref(null)
-const bubbleRef = ref(null)
-const bubbleStyle = ref({})
+const iconRef = useTemplateRef<HTMLElement>('icon')
+const bubbleRef = useTemplateRef<HTMLElement>('bubble')
+const bubbleStyle = ref<CSSProperties>({})
 const arrowPosition = ref('50%')
 const isFlipped = ref(false)
 
-async function toggleTooltip(e) {
+async function toggleTooltip(e: Event) {
   e.preventDefault()
   e.stopPropagation()
   showTooltip.value = !showTooltip.value
@@ -81,25 +79,14 @@ function calculatePosition() {
   arrowPosition.value = `${Math.max(10, Math.min(90, arrowPercent))}%`
 }
 
-function handleClickOutside(e) {
-  if (showTooltip.value && iconRef.value && !iconRef.value.contains(e.target)) {
-    showTooltip.value = false
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-  window.addEventListener('resize', calculatePosition)
+useClickOutside([iconRef], () => {
+  showTooltip.value = false
 })
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('resize', calculatePosition)
-})
+useEventListener(window, 'resize', calculatePosition)
 </script>
 
 <template>
-  <div ref="iconRef" class="info-icon-container">
+  <div ref="icon" class="info-icon-container">
     <span
         class="info-icon"
         :class="type"
@@ -130,7 +117,7 @@ onUnmounted(() => {
 
     <div
         v-if="showTooltip"
-        ref="bubbleRef"
+        ref="bubble"
         class="help-bubble animate-fade-in"
         :class="{ 'is-flipped': isFlipped }"
         :style="bubbleStyle"
@@ -173,11 +160,11 @@ onUnmounted(() => {
 }
 
 .info-icon.warning {
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .info-icon.warning:hover {
-  color: #d97706;
+  color: var(--warning-hover);
   transform: scale(1.1);
 }
 
@@ -191,15 +178,15 @@ onUnmounted(() => {
   width: min(300px, 80vw);
   background: var(--surface-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0.75rem;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
-  z-index: 1000;
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-popover);
   pointer-events: auto;
 }
 
 .bubble-content {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-primary);
   text-align: left;

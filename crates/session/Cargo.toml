@@ -1,0 +1,36 @@
+[package]
+name = "night_amplifier_session"
+version = "0.0.0-dev"
+edition = "2021"
+authors = ["Night Amplifier Contributors"]
+description = "Night Amplifier's application layer: capture sessions, camera lifecycle, settings"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+night_amplifier_core = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+# LZ4 compression for high-quality RGB16 streaming
+lz4_flex = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# JPEG compression for high-speed dynamic resolution streaming
+turbojpeg = { workspace = true }
+# JSON Schema of the wire types (`api-schema`)
+schemars = { workspace = true, optional = true }
+
+[features]
+test-support = ["night_amplifier_core/test-support"]
+telemetry = ["night_amplifier_core/telemetry"]
+api-schema = ["dep:schemars", "night_amplifier_core/api-schema"]
+
+[dev-dependencies]
+night_amplifier_core = { workspace = true, features = ["test-support"] }
+image = { version = "0.25.10" }
+tempfile = { workspace = true }

@@ -1,37 +1,68 @@
-<script setup>
-import {ref, inject, computed, onMounted} from 'vue'
+<script setup lang="ts">
+import {ref, computed, onMounted} from 'vue'
+import type {DeepReadonly} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
   configureSimulator,
   getSimulatorConfig,
   removeSimulatedCamera,
-} from '../composables/api.js'
-import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
-import {isCaptureRunning} from '../constants'
+} from '../composables/api'
+import {useCameraBadges} from '../composables/useCameraBadges'
+import {useDisconnectConfirm} from '../composables/useDisconnectConfirm'
+import {useError} from '../composables/useError'
+import {
+  isSimulator,
+  useCameraPhase,
+  useCameras,
+  useCameraStatus,
+  useEventStreamContext,
+  useRefreshCameras,
+  useRefreshSettings,
+  useSelectedCamera,
+  useSelectedCameraId,
+  useSettings,
+  useSimulatorEnabled,
+  useWarmupEndsAt,
+} from '../composables/appContext'
+import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton, CollapseToggle} from './ui'
+import CameraRow from './CameraRow.vue'
+import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
+import {CAPTURE_STATES, HELP_TEXTS, isCaptureRunning} from '../constants'
+import {CAMERA_ROLE_VALUES} from '../composables/api.types'
+import type {Camera, CameraRole, SimulatorConfig} from '../composables/api.types'
+import type {SplitButtonOption} from './ui/BaseSplitButton.vue'
 
-const cameras = inject('cameras')
-const selectedCamera = inject('selectedCamera')
-const refreshCameras = inject('refreshCameras')
-const eventStream = inject('eventStream')
-const simulatorEnabledRef = inject('simulatorEnabled')
-const cameraStatus = inject('cameraStatus', {value: {}})
-const cameraPhase = inject('cameraPhase', {value: {}})
-const settings = inject('settings', ref(null))
+/** A camera as the camera list hands it out. */
+type ListedCamera = DeepReadonly<Camera>
 
-const {error, clearError, withErrorHandling} = useError()
+const cameras = useCameras()
+const selectedCamera = useSelectedCameraId()
+const refreshCameras = useRefreshCameras()
+const refreshSettings = useRefreshSettings()
+const eventStream = useEventStreamContext()
+const simulatorEnabledRef = useSimulatorEnabled()
+const cameraStatus = useCameraStatus()
+const cameraPhase = useCameraPhase()
+const warmupEndsAt = useWarmupEndsAt()
+const settings = useSettings()
 
-const isSimulatorEnabled = computed(() => simulatorEnabledRef?.value ?? false)
+const {error, clearError, setError, withErrorHandling} = useError()
 
-const connecting = ref(null)
+/** A role is a kind of camera, not a state: told apart by hue. */
+const ROLE_TONES: Record<CameraRole, string> = {main: 'category-blue', guide: 'category-green'}
+const {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill} =
+    useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings})
+
+const isSimulatorEnabled = computed(() => simulatorEnabledRef.value)
+
+const connecting = ref<string | null>(null)
 const camerasCollapsed = ref(false)
 
 // Simulator state
-const simulatorConfig = ref({configured: false, directory: null, file_count: null})
+const simulatorConfig = ref<SimulatorConfig>({configured: false, directory: null, file_count: null})
 const configuringSimulator = ref(false)
 const showDirectoryInput = ref(false)
-const directoryPath = ref('')
 
 onMounted(async () => {
   try {
@@ -45,7 +76,7 @@ const filteredCameras = computed(() => {
   if (isSimulatorEnabled.value) {
     return cameras.value
   }
-  return cameras.value.filter((c) => c.provider !== 'Simulator')
+  return cameras.value.filter((c) => !isSimulator(c))
 })
 
 const connectedCameras = computed(() => filteredCameras.value.filter((c) => c.connected))
@@ -57,116 +88,88 @@ const hasGuideCamera = computed(() => connectedCameras.value.some((c) => c.role 
  * it is free. The main action stays enabled even with an imaging camera connected: an
  * idle one is swapped, and the server refuses only while it is busy.
  */
-const connectOptions = computed(() => [
+const connectOptions = computed((): SplitButtonOption[] => [
   {value: 'guide', label: 'As guide', disabled: hasGuideCamera.value},
 ])
 
-function roleLabel(cam) {
-  if (cam.role === 'guide') return 'Guide'
-  if (cam.role === 'main') return 'Main'
-  return null
-}
-
 const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.connected))
 
-const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
+const currentCamera = useSelectedCamera()
 
-const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
+/** Without a provided event stream the imaging camera reads as idle, as `useCaptureTarget` has it. */
+const isCapturing = computed(() => isCaptureRunning(eventStream?.captureState.value ?? CAPTURE_STATES.IDLE))
 
-async function handleConnect(cameraId, role = 'main') {
-  connecting.value = cameraId
-  await withErrorHandling(async () => {
+/** Runs `operation` for camera `id`, which reads as busy (its buttons disabled) meanwhile. */
+async function withBusy(id: string, operation: () => Promise<unknown>) {
+  connecting.value = id
+  await withErrorHandling(operation)
+  connecting.value = null
+}
+
+function selectFirstConnectedIf(cameraId: string) {
+  if (selectedCamera.value === cameraId) {
+    selectedCamera.value = connectedCameras.value[0]?.id || null
+  }
+}
+
+function handleConnect(cameraId: string, role: CameraRole = 'main') {
+  return withBusy(cameraId, async () => {
     await connectCamera(cameraId, role)
+    // The settings first: the connect stored this camera's profiles, and Push-To resolved a
+    // camera it found no profile for from the previous camera's optics. Not in parallel:
+    // with nothing selected, the list refresh selects the new camera itself.
+    await refreshSettings()
     await refreshCameras()
     // Focus the newly connected camera for editing, whichever position it took: it is
     // the one the user is about to set an exposure on.
     selectedCamera.value = cameraId
   })
-  connecting.value = null
 }
 
-async function handleDisconnect(cameraId) {
-  connecting.value = cameraId
-  await withErrorHandling(async () => {
-    await disconnectCamera(cameraId)
-    await refreshCameras()
-    if (selectedCamera.value === cameraId) {
-      selectedCamera.value = connectedCameras.value[0]?.id || null
+/** A connect menu option's `value` is the role it connects as (`connectOptions`). */
+function handleConnectOption(cameraId: string, value: string) {
+  const role = CAMERA_ROLE_VALUES.find((r) => r === value)
+  return role ? handleConnect(cameraId, role) : undefined
+}
+
+/** Only the imaging camera captures; a guide camera disconnects whatever the capture does. */
+function capturesOn(cam: ListedCamera) {
+  return cam.role !== 'guide' && isCapturing.value
+}
+
+function handleDisconnect(cam: ListedCamera, {skipWarmup = false} = {}) {
+  return withBusy(cam.id, async () => {
+    if (skipWarmup) {
+      await disconnectCamera(cam.id, {skipWarmup: true})
+    } else {
+      await disconnectCamera(cam.id)
     }
+    await refreshCameras()
+    selectFirstConnectedIf(cam.id)
   })
-  connecting.value = null
 }
 
-function selectCamera(cameraId) {
+const {
+  copy: pendingDisconnectCopy,
+  request: requestDisconnect,
+  confirm: confirmDisconnect,
+  cancel: cancelDisconnect,
+} = useDisconnectConfirm({cameras, isWarmingUp, capturesOn, disconnect: handleDisconnect})
+
+function selectCamera(cameraId: string) {
   selectedCamera.value = cameraId
 }
 
-function formatResolution(cam) {
-  const {max_width: width, max_height: height} = cam?.info ?? {}
-  // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.
-  return width && height ? `${width}x${height}` : '—'
-}
-
-function temperaturePill(cam) {
-  if (!cam?.info?.has_cooler) return null
-  const status = cameraStatus.value?.[cam.name]
-  if (!status) return null
-  return `${status.temperature_c.toFixed(1)}°C`
-}
-
-function phaseOf(cam) {
-  return cameraPhase.value?.[cam?.name] || null
-}
-
-function isWarmingUp(cam) {
-  return phaseOf(cam) === 'warming_up'
-}
-
-function phaseLabel(cam) {
-  const phase = phaseOf(cam)
-  if (phase === 'precooling') return 'Precooling'
-  if (phase === 'warming_up') return 'Warming up'
-  // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
-  // and the green role badge next to it already says so.
-  return null
-}
-
-function sensorModePill(cam) {
-  const modes = cam?.info?.sensor_modes
-  if (!modes || modes.length === 0) return null
-  const isGuide = cam?.role === 'guide'
-  const override = isGuide
-      ? settings.value?.guide_camera?.sensor_mode_override
-      : settings.value?.sensor_mode_override
-  // Mirrors the backend's `is_actively_stacking` gate in
-  // `to_capture_config_with()` (server/state/settings.rs): Low Noise is only
-  // worth its frame-rate cost while frames are actually being integrated.
-  // `stacking_type !== 'planetary'` stands in for "DeepSky or Comet" —
-  // `StackingType::supports_stacking()` is `true` for every variant today,
-  // so the Rust condition reduces to exactly this. `wanderer_mode` doesn't
-  // need to appear here either: the UI always sets `stacking: true`
-  // alongside `wanderer_mode: true` (see `applyStackingMode` in
-  // CaptureControls.vue), so `stacking` alone already covers "Stacking or
-  // Wanderer". Never true for the guide camera: nothing it produces is stacked.
-  const isActivelyStacking =
-      !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
-  const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
-  const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
-  const match = modes.find((m) => needle.test(m.name))
-  return (match ?? modes[0]).name
-}
-
-async function handleConfigureSimulator() {
-  if (!directoryPath.value.trim()) {
-    error.value = 'Please enter a directory path'
+async function handleConfigureSimulator(path: string) {
+  if (!path) {
+    setError('Please enter a directory path')
     return
   }
 
   configuringSimulator.value = true
   await withErrorHandling(async () => {
-    simulatorConfig.value = await configureSimulator(directoryPath.value.trim())
+    simulatorConfig.value = await configureSimulator(path)
     showDirectoryInput.value = false
-    directoryPath.value = ''
     await refreshCameras()
   })
   configuringSimulator.value = false
@@ -177,59 +180,29 @@ function promptSimulatorConfig() {
   clearError()
 }
 
-function isSimulatedCamera(cam) {
-  return cam.provider === 'Simulator'
-}
-
-async function handleRemoveSimulatedCamera(cam) {
-  if (!isSimulatedCamera(cam)) return
-
+async function handleRemoveSimulatedCamera(cam: ListedCamera) {
   // The camera index within the Simulator provider
   const index = cam.index
-  connecting.value = cam.id
-  await withErrorHandling(async () => {
+  if (!isSimulator(cam) || index == null) return
+
+  await withBusy(cam.id, async () => {
     await removeSimulatedCamera(index)
     await refreshCameras()
     simulatorConfig.value = await getSimulatorConfig()
-    if (selectedCamera.value === cam.id) {
-      selectedCamera.value = connectedCameras.value[0]?.id || null
-    }
+    selectFirstConnectedIf(cam.id)
   })
-  connecting.value = null
-}
-
-const HELP = {
-  cameras:
-      'Choose the camera to configure. One imaging camera and one guide camera can be connected at once — use the arrow next to Connect to attach a guide camera.',
-  simulator_dir: 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).',
 }
 </script>
 
 <template>
   <BasePanel class="camera-panel" :bordered="false">
     <template #header>
-      <button
-          class="collapse-toggle"
-          title="Toggle camera list"
-          @click="camerasCollapsed = !camerasCollapsed"
-      >
-        <svg
-            :class="{ collapsed: camerasCollapsed }"
-            viewBox="0 0 24 24"
-            width="12"
-            height="12"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <path d="M6 9l6 6 6-6"/>
-        </svg>
-      </button>
+      <CollapseToggle v-model="camerasCollapsed" title="Toggle camera list"/>
       <h2>
         Camera
-        <BaseInfoIcon :message="HELP.cameras"/>
+        <BaseInfoIcon :message="HELP_TEXTS.cameras"/>
       </h2>
-      <button class="btn btn-sm" title="Refresh" @click="refreshCameras">
+      <button class="btn btn-sm" title="Refresh" @click="refreshCameras()">
         <svg
             viewBox="0 0 24 24"
             width="14"
@@ -248,151 +221,96 @@ const HELP = {
       {{ error }}
     </BaseAlert>
 
-    <div v-if="showDirectoryInput" class="simulator-config">
-      <div class="config-header">
-        <span>
-          Configure Simulator Directory
-          <BaseInfoIcon :message="HELP.simulator_dir"/>
-        </span>
-        <button class="btn-close" @click="showDirectoryInput = false">&times;</button>
-      </div>
-      <div class="config-body">
-        <input
-            v-model="directoryPath"
-            type="text"
-            placeholder="Enter path to image directory..."
-            class="directory-input"
-            @keyup.enter="handleConfigureSimulator"
-        />
-        <button
-            class="btn btn-sm btn-primary"
-            :disabled="configuringSimulator"
-            @click="handleConfigureSimulator"
-        >
-          {{ configuringSimulator ? '...' : 'Set' }}
-        </button>
-      </div>
-      <div class="config-hint">
-        Enter the full path to a directory containing FITS, TIFF, or PNG files
-      </div>
-    </div>
+    <SimulatorDirectoryInput
+        v-if="showDirectoryInput"
+        :busy="configuringSimulator"
+        @submit="handleConfigureSimulator"
+        @close="showDirectoryInput = false"
+    />
 
     <!-- Collapsible camera sections -->
     <div v-show="!camerasCollapsed" class="cameras-container">
       <!-- Connected cameras -->
       <div v-if="connectedCameras.length > 0" class="camera-section">
-        <h3 class="section-title">Connected</h3>
+        <h3 class="section-title section-title-plain">Connected</h3>
         <div class="camera-list">
-          <div
+          <CameraRow
               v-for="cam in connectedCameras"
               :key="cam.id"
-              class="camera-item"
-              :class="{ selected: cam.id === selectedCamera }"
-              @click="selectCamera(cam.id)"
+              :camera="cam"
+              :selected="cam.id === selectedCamera"
+              :removable="isSimulator(cam)"
+              :remove-disabled="connecting === cam.id || isCapturing"
+              @select="selectCamera(cam.id)"
+              @remove="handleRemoveSimulatedCamera(cam)"
           >
-            <button
-                v-if="isSimulatedCamera(cam)"
-                class="btn btn-sm btn-icon"
-                :disabled="connecting === cam.id || isCapturing"
-                title="Remove simulated camera"
-                @click.stop="handleRemoveSimulatedCamera(cam)"
-            >
-              <svg
-                  viewBox="0 0 24 24"
-                  width="14"
-                  height="14"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-              >
-                <path
-                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
-                />
-              </svg>
-            </button>
-            <div class="camera-info">
-              <span class="camera-name">{{ cam.name }}</span>
-              <span class="camera-details">
-                {{ formatResolution(cam) }}
-                <span v-if="roleLabel(cam)" class="role-pill" :class="`role-${cam.role}`">{{
-                    roleLabel(cam)
-                  }}</span>
-                <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
-                <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
-                    sensorModePill(cam)
-                  }}</span>
-                <span v-if="temperaturePill(cam)" class="temp-pill">{{
-                    temperaturePill(cam)
-                  }}</span>
+            <template #details>
+              {{ formatResolution(cam) }}
+              <span v-if="roleLabel(cam)" class="pill role-pill" :class="cam.role && ROLE_TONES[cam.role]">{{
+                  roleLabel(cam)
+                }}</span>
+              <span v-if="phaseLabel(cam)" class="pill pill-warning phase-pill">
+                <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
+                {{ phaseLabel(cam) }}
               </span>
-            </div>
-            <div class="camera-actions">
+              <span v-if="sensorModePill(cam)" class="pill category-purple sensor-mode-pill">{{
+                  sensorModePill(cam)
+                }}</span>
+              <span v-if="temperaturePill(cam)" class="pill pill-primary temp-pill">{{
+                  temperaturePill(cam)
+                }}</span>
+            </template>
+            <template #actions>
               <button
                   class="btn btn-sm btn-danger"
-                  :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
-                  :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
-                  @click.stop="handleDisconnect(cam.id)"
+                  :disabled="connecting === cam.id"
+                  :title="isWarmingUp(cam) ? 'Disconnect without finishing the warm-up' : 'Disconnect'"
+                  @click.stop="requestDisconnect(cam)"
               >
-                <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
                 <span>{{
                     connecting === cam.id
                         ? '...'
                         : isWarmingUp(cam)
-                            ? 'Warming up…'
+                            ? 'Disconnect now'
                             : 'Disconnect'
                   }}</span>
               </button>
-            </div>
-          </div>
+            </template>
+          </CameraRow>
         </div>
       </div>
 
       <!-- Available cameras -->
       <div v-if="availableCameras.length > 0" class="camera-section">
-        <h3 class="section-title">Available</h3>
+        <h3 class="section-title section-title-plain">Available</h3>
         <div class="camera-list">
-          <div v-for="cam in availableCameras" :key="cam.id" class="camera-item available">
-            <button
-                v-if="isSimulatedCamera(cam)"
-                class="btn btn-sm btn-icon"
-                :disabled="connecting === cam.id"
-                title="Remove simulated camera"
-                @click.stop="handleRemoveSimulatedCamera(cam)"
-            >
-              <svg
-                  viewBox="0 0 24 24"
-                  width="14"
-                  height="14"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-              >
-                <path
-                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
-                />
-              </svg>
-            </button>
-            <div class="camera-info">
-              <span class="camera-name">{{ cam.name }}</span>
-              <span class="camera-details">{{ formatResolution(cam) }}</span>
-            </div>
-            <div class="camera-actions">
+          <CameraRow
+              v-for="cam in availableCameras"
+              :key="cam.id"
+              :camera="cam"
+              :resolution="formatResolution(cam)"
+              available
+              :removable="isSimulator(cam)"
+              :remove-disabled="connecting === cam.id"
+              @remove="handleRemoveSimulatedCamera(cam)"
+          >
+            <template #actions>
               <BaseSplitButton
                   :label="connecting === cam.id ? '...' : 'Connect'"
                   menu-label="More connect options"
                   :options="connectOptions"
                   :disabled="connecting === cam.id"
                   @click="handleConnect(cam.id, 'main')"
-                  @select="(role) => handleConnect(cam.id, role)"
+                  @select="(value) => handleConnectOption(cam.id, value)"
               />
-            </div>
-          </div>
+            </template>
+          </CameraRow>
         </div>
       </div>
 
       <!-- Simulator section - always show when simulator enabled -->
       <div v-if="isSimulatorEnabled" class="camera-section">
-        <h3 class="section-title">Simulator</h3>
+        <h3 class="section-title section-title-plain">Simulator</h3>
         <div class="simulator-add">
           <button class="btn btn-sm btn-secondary" @click="promptSimulatorConfig">
             + Add Simulated Camera
@@ -409,9 +327,26 @@ const HELP = {
           class="empty-state"
       >
         <p>No cameras found</p>
-        <button class="btn btn-sm" @click="refreshCameras">Scan</button>
+        <button class="btn btn-sm" @click="refreshCameras()">Scan</button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <BaseModal
+          v-if="pendingDisconnectCopy"
+          :title="pendingDisconnectCopy.title"
+          max-width="420px"
+          @close="cancelDisconnect"
+      >
+        <p class="confirm-text">{{ pendingDisconnectCopy.body }}</p>
+        <template #footer>
+          <button class="btn btn-sm btn-secondary confirm-cancel" @click="cancelDisconnect">Cancel</button>
+          <button class="btn btn-sm btn-danger confirm-disconnect" @click="confirmDisconnect">
+            {{ pendingDisconnectCopy.confirm }}
+          </button>
+        </template>
+      </BaseModal>
+    </Teleport>
 
     <div v-if="camerasCollapsed && currentCamera" class="collapsed-summary">
       <span class="camera-name">{{ currentCamera.name }}</span>
@@ -421,19 +356,8 @@ const HELP = {
 </template>
 
 <style scoped>
-/* Panel header variant with collapse toggle and flex-1 title */
-.panel-header {
-  gap: 0.375rem;
-}
-
-.panel-header h2 {
-  flex: 1;
-}
-
-/* Section title without border (simpler variant) */
+/* Plain: the camera lists sit tight under their titles */
 .section-title {
-  padding-bottom: 0;
-  border-bottom: none;
   margin-bottom: 0.25rem;
 }
 
@@ -456,44 +380,8 @@ const HELP = {
   gap: 0.25rem;
 }
 
-.camera-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.375rem;
-  padding: 0.375rem 0.5rem;
-  background: var(--surface-elevated);
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: border-color 0.15s,
-  background 0.15s;
-  min-height: 2.25rem;
-}
-
-.camera-item:hover {
-  background: var(--surface-hover);
-}
-
-.camera-item.selected {
-  border-color: var(--primary);
-}
-
-.camera-item.available {
-  cursor: default;
-  opacity: 0.8;
-}
-
-.camera-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
-  flex: 1;
-}
-
+/* The rows are `CameraRow`; the folded list's one-line summary reads the same way. */
 .camera-name {
-  font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
@@ -502,87 +390,25 @@ const HELP = {
 }
 
 .camera-details {
-  font-size: 0.65rem;
   color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
 }
 
 .temp-pill {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--primary);
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
   font-variant-numeric: tabular-nums;
 }
 
-.phase-pill {
-  background: rgba(234, 179, 8, 0.18);
-  color: #eab308;
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.sensor-mode-pill {
-  background: rgba(168, 85, 247, 0.18);
-  color: #c084fc;
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
-  font-weight: 500;
+.confirm-text {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .role-pill {
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
   font-weight: 600;
 }
 
-.role-pill.role-main {
-  background: rgba(59, 130, 246, 0.18);
-  color: #60a5fa;
-}
-
-.role-pill.role-guide {
-  background: rgba(34, 197, 94, 0.18);
-  color: #4ade80;
-}
-
-.camera-actions {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-}
-
+/* The details slot renders in CameraRow, but its pills are this component's markup. */
 .warmup-spinner {
-  margin-right: 0.35rem;
-}
-
-.btn-icon {
-  padding: 0.25rem;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s,
-  background 0.15s,
-  border-color 0.15s;
-}
-
-.btn-icon:hover:not(:disabled) {
-  color: var(--danger);
-  background: var(--surface-hover);
-  border-color: var(--danger);
-}
-
-.btn-icon:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  margin-right: 0.25rem;
 }
 
 .collapsed-summary {
@@ -593,62 +419,11 @@ const HELP = {
 }
 
 .collapsed-summary .camera-name {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
 }
 
 .collapsed-summary .camera-details {
-  font-size: 0.65rem;
-}
-
-/* empty-state and btn-close now in main.css */
-
-.simulator-config {
-  background: var(--surface-elevated);
-  border-radius: 6px;
-  padding: 0.5rem;
-  margin-bottom: 0.375rem;
-}
-
-.config-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 0.375rem;
-}
-
-.config-body {
-  display: flex;
-  gap: 0.375rem;
-  align-items: center;
-}
-
-.directory-input {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  min-width: 0;
-}
-
-.directory-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.directory-input::placeholder {
-  color: var(--text-muted);
-}
-
-.config-hint {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
+  font-size: var(--fs-2xs);
 }
 
 .simulator-add {
@@ -657,13 +432,11 @@ const HELP = {
   gap: 0.5rem;
   padding: 0.375rem;
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .simulator-count {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
-
-/* btn-secondary now in main.css */
 </style>

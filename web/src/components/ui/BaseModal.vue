@@ -1,37 +1,26 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits<{close: []}>()
 
-const props = defineProps({
-  title: {
-    type: String,
-    default: ''
-  },
-  maxWidth: {
-    type: String,
-    default: '600px'
-  },
-  noPadding: {
-    type: Boolean,
-    default: false
-  },
-  overlayClass: {
-    type: String,
-    default: ''
-  },
-  persistent: {
-    type: Boolean,
-    default: false
-  },
-  showCloseButton: {
-    type: Boolean,
-    default: true
-  }
+const props = withDefaults(defineProps<{
+  title?: string
+  maxWidth?: string
+  noPadding?: boolean
+  overlayClass?: string
+  persistent?: boolean
+  showCloseButton?: boolean
+}>(), {
+  title: '',
+  maxWidth: '600px',
+  noPadding: false,
+  overlayClass: '',
+  persistent: false,
+  showCloseButton: true
 })
 
 // Handle escape key
-function handleKeydown(e) {
+function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && !props.persistent) {
     emit('close')
   }
@@ -51,7 +40,7 @@ onUnmounted(() => {
     <div class="base-modal-panel" :style="{ maxWidth: maxWidth }" role="dialog" aria-modal="true">
       <div v-if="title || $slots.header" class="base-modal-header">
         <slot name="header">
-          <h2 class="base-modal-title">{{ title }}</h2>
+          <h2 class="base-modal-title">{{ title }}<slot name="title-extra"/></h2>
           <button v-if="showCloseButton" class="btn-close" title="Close" @click="emit('close')">&times;</button>
         </slot>
       </div>
@@ -71,12 +60,12 @@ onUnmounted(() => {
 .base-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--backdrop);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-modal);
   padding: 1rem;
   animation: modal-fade-in 0.2s ease-out;
 }
@@ -84,7 +73,7 @@ onUnmounted(() => {
 .base-modal-panel {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   width: 100%;
   max-height: 90vh;
   display: flex;
@@ -100,7 +89,7 @@ onUnmounted(() => {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   flex-shrink: 0;
 }
 
@@ -127,7 +116,7 @@ onUnmounted(() => {
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 0 0 12px 12px;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;

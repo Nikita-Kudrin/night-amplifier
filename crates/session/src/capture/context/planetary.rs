@@ -1,0 +1,302 @@
+//! Correlation-aligned planetary live stacking.
+
+use tracing::{debug, field, info, instrument, warn, Span};
+
+use super::{LiveStackError, LiveStacker, StackSettings};
+use night_amplifier_core::frame::{Frame, NoiseField};
+use night_amplifier_core::planetary::AlignmentRoi;
+use night_amplifier_core::plugins::Plugins;
+use crate::capture::frame_gate::FrameAdmission;
+use night_amplifier_core::stacking::{FrameQuality, Stacker, StackingType};
+
+/// Holds state for planetary-based live stacking pipeline
+pub struct PlanetaryStackingContext {
+    pub stacker: Stacker,
+    pub is_initialized: bool,
+    pub reference_frame: Option<Frame>,
+    /// Multi-point alignment comes from here, checked frame by frame.
+    plugins: Plugins,
+}
+
+impl PlanetaryStackingContext {
+    pub fn new(
+        width: usize,
+        height: usize,
+        channels: usize,
+        settings: &StackSettings,
+    ) -> Result<Self, LiveStackError> {
+        let config = settings.config.clone();
+        let stacker =
+            Stacker::with_plugins(width, height, channels, config, settings.plugins.clone())?;
+
+        Ok(Self {
+            stacker,
+            is_initialized: false,
+            reference_frame: None,
+            plugins: settings.plugins.clone(),
+        })
+    }
+
+    #[instrument(skip(self, frame))]
+    pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
+        self.reference_frame = Some(frame.clone());
+
+        if let Some(plugin) = self.plugins.planetary() {
+            plugin.clear_cache();
+        }
+
+        // Add reference frame with default quality
+        let quality = FrameQuality::default();
+
+        self.stacker.add_reference_with_quality(frame, quality)?;
+
+        self.is_initialized = true;
+        Ok(())
+    }
+
+    #[instrument(skip(self, frame, settings), fields(
+        dx = field::Empty,
+        dy = field::Empty,
+        ncc = field::Empty,
+        registered = field::Empty,
+    ))]
+    pub fn add_frame(
+        &mut self,
+        frame: &Frame,
+        settings: &StackSettings,
+    ) -> Result<bool, LiveStackError> {
+        if !self.is_initialized {
+            return Err(LiveStackError::NoReference);
+        }
+
+        let reference = self.reference_frame.as_ref().unwrap();
+
+        // Use planetary alignment logic
+        let mut roi = settings.planetary_roi.unwrap_or_else(|| {
+            let width = frame.width();
+            let height = frame.height();
+            let size = (width.min(height) / 2).max(64);
+            AlignmentRoi::centered(width, height, size)
+        });
+
+        if settings.planetary_auto_tracking {
+            let lum = night_amplifier_core::planetary::frame_to_luminance(frame);
+            let (cx, cy) = night_amplifier_core::planetary::compute_centroid(&lum, frame.width(), frame.height());
+            let (base_w, base_h) = match settings.planetary_roi {
+                Some(ref r) => (r.width, r.height),
+                None => {
+                    let size = (frame.width().min(frame.height()) / 2).max(64);
+                    (size, size)
+                }
+            };
+            roi = AlignmentRoi::centered_at(cx, cy, base_w, base_h, frame.width(), frame.height());
+        }
+
+        // Search radius and subpixel factor from planetary defaults
+        let search_radius = 50;
+        let subpixel_factor = 2;
+
+        // Try multi-point alignment via Pro plugin, falling back to single-point correlation.
+        let warped_frame: Option<Frame> = if settings.planetary_multi_point_alignment {
+            settings.plugins.planetary().and_then(|plugin| {
+                match plugin.warp_frame(frame, reference, &roi, search_radius) {
+                    Ok(warped) => Some(warped),
+                    Err(e) => {
+                        debug!(error = %e, "Multi-point planetary alignment failed, falling back");
+                        None
+                    }
+                }
+            })
+        } else {
+            None
+        };
+
+        let transform = if warped_frame.is_some() {
+            Span::current().record("dx", 0.0);
+            Span::current().record("dy", 0.0);
+            Span::current().record("ncc", 1.0);
+            night_amplifier_core::registration::AffineTransform::from_translation(0.0, 0.0)
+        } else {
+            let (dx, dy, ncc) = night_amplifier_core::planetary::compute_alignment(
+                reference,
+                frame,
+                &roi,
+                search_radius,
+                subpixel_factor,
+            );
+
+            debug!(dx, dy, ncc, "Planetary alignment results");
+            Span::current().record("dx", dx);
+            Span::current().record("dy", dy);
+            Span::current().record("ncc", ncc);
+
+            night_amplifier_core::registration::AffineTransform::from_translation(dx, dy)
+        };
+
+        let final_frame = warped_frame.as_ref().unwrap_or(frame);
+
+        // Compute quality (standard FWHM/SNR or planetary-specific)
+        let quality = FrameQuality::default();
+
+        match self
+            .stacker
+            .add_frame_with_quality(final_frame, &transform, quality)
+        {
+            Ok(()) => {
+                Span::current().record("registered", true);
+                Ok(true)
+            }
+            Err(e) => {
+                debug!(error = %e, "Failed to add frame to planetary stack");
+                Span::current().record("registered", false);
+                Ok(false)
+            }
+        }
+    }
+
+    #[instrument(skip(self), fields(frame_count = self.frame_count()))]
+    pub fn compute(&self) -> Result<Frame, LiveStackError> {
+        Ok(self.stacker.compute()?)
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.stacker.frame_count()
+    }
+
+    pub fn width(&self) -> usize {
+        self.stacker.width()
+    }
+
+    pub fn height(&self) -> usize {
+        self.stacker.height()
+    }
+
+    pub fn channels(&self) -> usize {
+        self.stacker.channels()
+    }
+
+    /// Update stacking parameters from current settings dynamically
+    pub fn update_from_settings(&mut self, settings: &StackSettings) {
+        self.stacker.update_config(settings.config.clone());
+    }
+}
+
+impl LiveStacker for PlanetaryStackingContext {
+    fn kind(&self) -> StackingType {
+        StackingType::Planetary
+    }
+
+    fn geometry(&self) -> (usize, usize, usize) {
+        (self.width(), self.height(), self.channels())
+    }
+
+    fn depth(&self) -> usize {
+        self.frame_count()
+    }
+
+    fn has_reference(&self) -> bool {
+        self.is_initialized
+    }
+
+    fn apply_settings(&mut self, settings: &StackSettings) {
+        self.update_from_settings(settings);
+    }
+
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
+        self.initialize_with_reference(frame)?;
+        info!("Planetary stacking initialized with reference frame");
+        Ok(())
+    }
+
+    fn offer(
+        &mut self,
+        frame: &Frame,
+        settings: &StackSettings,
+    ) -> Result<FrameAdmission, LiveStackError> {
+        // An error leaves the accumulated stack on screen, as a failed alignment does.
+        let added = match self.add_frame(frame, settings) {
+            Ok(true) => {
+                info!(frame_count = self.frame_count(), "Frame added to planetary stack");
+                true
+            }
+            Ok(false) => {
+                info!(
+                    frame_count = self.frame_count(),
+                    "Planetary alignment failed, frame not added to stack"
+                );
+                false
+            }
+            Err(e) => {
+                warn!(error = %e, "Error adding frame to planetary stack");
+                false
+            }
+        };
+        Ok(FrameAdmission::unreasoned(added))
+    }
+
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), LiveStackError> {
+        self.compute().map(|frame| (frame, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use night_amplifier_core::frame::Frame;
+    use crate::state::CaptureSettings;
+
+    fn defaults() -> StackSettings {
+        StackSettings::of(&CaptureSettings::default(), &Plugins::none())
+    }
+
+    #[test]
+    fn a_frame_before_the_reference_is_refused() {
+        let settings = defaults();
+        let mut ctx = PlanetaryStackingContext::new(100, 100, 1, &settings).unwrap();
+        let frame = Frame::zeros(100, 100, 1).unwrap();
+        assert_eq!(ctx.add_frame(&frame, &settings), Err(LiveStackError::NoReference));
+    }
+
+    #[test]
+    fn test_planetary_stacking_context_initialization() {
+        let settings = defaults();
+        let mut ctx = PlanetaryStackingContext::new(100, 100, 3, &settings).unwrap();
+
+        let frame = Frame::zeros(100, 100, 3).unwrap();
+        ctx.initialize_with_reference(&frame).unwrap();
+
+        assert!(ctx.is_initialized);
+        assert_eq!(ctx.frame_count(), 1);
+    }
+
+    #[test]
+    fn test_planetary_stacking_context_add_frame() {
+        let settings = defaults();
+        let mut ctx = PlanetaryStackingContext::new(100, 100, 1, &settings).unwrap();
+
+        // Create a reference frame with a "planet" (a square)
+        let mut ref_frame = Frame::zeros(100, 100, 1).unwrap();
+        for y in 40..60 {
+            for x in 40..60 {
+                ref_frame.set_pixel(x, y, 0, 1.0);
+            }
+        }
+        ctx.initialize_with_reference(&ref_frame).unwrap();
+
+        // Create a second frame shifted by (5, 3)
+        let mut next_frame = Frame::zeros(100, 100, 1).unwrap();
+        for y in 43..63 {
+            for x in 45..65 {
+                next_frame.set_pixel(x, y, 0, 1.0);
+            }
+        }
+
+        let added = ctx.add_frame(&next_frame, &settings).unwrap();
+        assert!(added);
+        assert_eq!(ctx.frame_count(), 2);
+
+        let stacked = ctx.compute().unwrap();
+        // The stacked frame should have the square back at (40, 40)
+        assert!(stacked.get_pixel(40, 40, 0) > 0.0);
+    }
+}

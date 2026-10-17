@@ -1,47 +1,33 @@
-<script setup>
-import { ref, onMounted } from 'vue'
-import { getSoftwareLicenses, updateSettings } from '../composables/api.js'
-import { BaseModal, BaseSpinner } from './ui'
+<script setup lang="ts">
+import {ref, computed} from 'vue'
+import {useApplySettings} from '../composables/appContext'
+import {useError} from '../composables/useError'
+import {useSoftwareLicenses} from '../composables/useSoftwareLicenses'
+import {BaseAlert, BaseModal, BaseSpinner} from './ui'
+import LicenseTexts from './LicenseTexts.vue'
 
-const emit = defineEmits(['accepted'])
+const emit = defineEmits<{accepted: []}>()
+const applySettings = useApplySettings()
 
-const coreLicense = ref('')
-const thirdPartyLicenses = ref('')
-const isLoading = ref(true)
-const isAccepting = ref(false)
+const {
+  coreLicense,
+  thirdPartyLicenses,
+  loading: isLoading,
+  error: loadError,
+  load: fetchLicenses,
+} = useSoftwareLicenses()
+const {error: acceptError, loading: isAccepting, withErrorHandling} = useError()
 const agreed = ref(false)
-const acceptError = ref(null)
-
-async function fetchLicenses() {
-  try {
-    isLoading.value = true
-    const res = await getSoftwareLicenses()
-    coreLicense.value = res.core_license
-    thirdPartyLicenses.value = res.third_party_licenses
-  } catch (err) {
-    console.error('Failed to load licenses:', err)
-  } finally {
-    isLoading.value = false
-  }
-}
+// Agreeing to a text never shown is no agreement.
+const canAccept = computed(() => agreed.value && !!coreLicense.value && !isAccepting.value)
 
 async function handleAccept() {
-  if (!agreed.value || isAccepting.value) return
-  try {
-    isAccepting.value = true
-    acceptError.value = null
-    await updateSettings({ eula_accepted: true })
+  if (!canAccept.value) return
+  await withErrorHandling(async () => {
+    await applySettings({eula_accepted: true})
     emit('accepted')
-  } catch (err) {
-    acceptError.value = err.message
-  } finally {
-    isAccepting.value = false
-  }
+  })
 }
-
-onMounted(() => {
-  fetchLicenses()
-})
 </script>
 
 <template>
@@ -71,30 +57,32 @@ onMounted(() => {
         <p>Loading license information...</p>
       </div>
 
+      <div v-else-if="loadError" class="eula-body">
+        <BaseAlert bordered :dismissible="false">
+          Could not load the license agreement: {{ loadError }}
+        </BaseAlert>
+        <button id="eula-retry-button" class="btn btn-primary eula-accept-btn" @click="fetchLicenses">
+          Retry
+        </button>
+      </div>
+
       <!-- License Content -->
       <div v-else class="eula-body">
         <p class="eula-intro">
           Please review and accept the following license agreements to use NightAmplifier.
         </p>
 
-        <div class="eula-sections">
-          <!-- Core License -->
-          <div class="eula-section">
-            <h3 class="eula-section-title">Software License</h3>
-            <pre id="eula-core-license" class="eula-text">{{ coreLicense }}</pre>
-          </div>
-
-          <!-- Third Party -->
-          <div v-if="thirdPartyLicenses" class="eula-section">
-            <h3 class="eula-section-title">Third-Party Software</h3>
-            <pre id="eula-third-party" class="eula-text">{{ thirdPartyLicenses }}</pre>
-          </div>
-        </div>
+        <LicenseTexts
+            :core="coreLicense"
+            :third-party="thirdPartyLicenses"
+            core-title="Software License"
+            id-prefix="eula"
+        />
 
         <!-- Error -->
-        <div v-if="acceptError" class="eula-error">
+        <BaseAlert v-if="acceptError" bordered :dismissible="false">
           {{ acceptError }}
-        </div>
+        </BaseAlert>
 
         <!-- Agreement -->
         <div class="eula-agreement">
@@ -112,7 +100,7 @@ onMounted(() => {
           <button
             id="eula-accept-button"
             class="btn btn-primary eula-accept-btn"
-            :disabled="!agreed || isAccepting"
+            :disabled="!canAccept"
             @click="handleAccept"
           >
             <BaseSpinner v-if="isAccepting" size="sm" light />
@@ -148,7 +136,7 @@ onMounted(() => {
 
 .eula-subtitle {
   margin: 0.125rem 0 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
@@ -170,48 +158,8 @@ onMounted(() => {
 .eula-intro {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   line-height: 1.5;
-}
-
-/* Sections */
-.eula-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.eula-section-title {
-  margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.eula-text {
-  margin: 0;
-  padding: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 250px;
-  overflow-y: auto;
-  line-height: 1.6;
-}
-
-/* Error */
-.eula-error {
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 /* Agreement footer */
@@ -228,7 +176,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.625rem;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   color: var(--text-primary);
   user-select: none;
 }
@@ -244,12 +192,12 @@ onMounted(() => {
   width: 18px;
   height: 18px;
   border: 2px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: all var(--transition-fast);
   background: var(--surface);
 }
 
@@ -263,7 +211,7 @@ onMounted(() => {
   display: block;
   width: 5px;
   height: 9px;
-  border: solid white;
+  border: solid var(--on-primary);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   margin-top: -1px;
@@ -278,24 +226,12 @@ onMounted(() => {
   align-self: flex-end;
   padding: 0.625rem 2rem;
   font-weight: 600;
-  font-size: 0.95rem;
-  border-radius: 8px;
-}
-
-.eula-accept-btn {
-  align-self: flex-end;
-  padding: 0.625rem 2rem;
-  font-weight: 600;
-  font-size: 0.95rem;
-  border-radius: 8px;
+  font-size: var(--fs-lg);
+  border-radius: var(--radius-lg);
 }
 
 /* Mobile */
 @media (max-width: 768px) {
-  .eula-text {
-    max-height: 180px;
-  }
-
   .eula-accept-btn {
     align-self: stretch;
     text-align: center;

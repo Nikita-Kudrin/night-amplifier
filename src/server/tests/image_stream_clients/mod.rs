@@ -3,10 +3,12 @@
 //! client of a family receives the same payload at the family's configured resolution,
 //! however many clients connect, leave, stall or misbehave around it.
 
+mod auto_crop;
 mod lifecycle;
 mod logging;
 mod serving;
 mod settings_changes;
+mod viewed_camera;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,8 +21,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::helpers::create_test_state;
 use crate::frame::Frame;
-use crate::server::capture::channel::{QueueDepth, StackedFrame};
-use crate::server::state::AppState;
+use crate::session::capture::channel::{QueueDepth, StackedFrame};
+use crate::session::state::AppState;
 
 pub(super) type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -44,9 +46,14 @@ pub(super) async fn start_server() -> TestServer {
         .nest("/ws", crate::server::ws::routes())
         .route(
             "/api/settings",
-            axum::routing::get(crate::server::api::get_settings)
-                .post(crate::server::api::update_settings),
+            axum::routing::get(crate::server::api::settings::get_settings)
+                .post(crate::server::api::settings::update_settings),
         )
+        .route(
+            "/api/view/camera",
+            axum::routing::put(crate::server::api::cameras::select_viewed_camera),
+        )
+
         .with_state(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -70,11 +77,14 @@ impl TestServer {
     /// follows is guaranteed to include this client's family.
     pub async fn connect_registered(&self, path: &str) -> Client {
         let kind = kind_of(path);
-        let stream = if path.contains("source=guide") {
-            Arc::clone(&self.state.guide_stream)
+        let camera = if !path.starts_with(LIVE_VIEW) {
+            self.state.viewed_camera.get()
+        } else if path.contains("source=guide") {
+            crate::session::state::CameraRole::Guide
         } else {
-            Arc::clone(&self.state.main_stream)
+            crate::session::state::CameraRole::Main
         };
+        let stream = Arc::clone(self.state.stream(camera));
         let before = stream.viewer_count(kind);
         let client = self.connect(path).await;
         eventually("the viewer to register", || stream.viewer_count(kind) > before).await;
@@ -84,6 +94,12 @@ impl TestServer {
     /// POST a partial settings update the way the settings panel does.
     pub async fn post_settings(&self, body: serde_json::Value) -> reqwest_like::Response {
         reqwest_like::post_json(self.addr, "/api/settings", body).await
+    }
+
+    /// Flip the operator's Guide toggle the way `/` does.
+    pub async fn view(&self, camera: &str) -> reqwest_like::Response {
+        let body = serde_json::json!({ "camera": camera });
+        reqwest_like::send_json(self.addr, "PUT", "/api/view/camera", body).await
     }
 
     /// Render one frame through the real render task, carrying the live settings — the
@@ -111,48 +127,66 @@ impl TestServer {
         &self,
         size: (usize, usize),
         fill: f32,
-        snapshot: crate::server::state::CaptureSettings,
+        snapshot: crate::session::state::CaptureSettings,
     ) {
         let frame = Frame::filled(size.0, size.1, 3, fill).unwrap();
         self.render_frame_with(frame, snapshot).await;
     }
 
     async fn render_frame(&self, frame: Frame) {
-        let settings = self.state.settings.read().await.clone();
+        let settings = (*self.state.settings.snapshot()).clone();
         self.render_frame_with(frame, settings).await;
     }
 
-    async fn render_frame_with(&self, frame: Frame, mut settings: crate::server::state::CaptureSettings) {
+    async fn render_frame_with(&self, frame: Frame, settings: crate::session::state::CaptureSettings) {
+        self.render_message(frame, settings, false, None).await;
+    }
+
+    /// As [`Self::render`], for a frame showing a stack the stacking task cut to `crop`
+    /// (`None`: shown whole), under the live settings.
+    pub async fn render_stack(&self, size: (usize, usize), fill: f32, crop: Option<crate::stacking::CropRect>) {
+        let settings = (*self.state.settings.snapshot()).clone();
+        self.render_message(Frame::filled(size.0, size.1, 3, fill).unwrap(), settings, true, crop).await;
+    }
+
+    async fn render_message(
+        &self,
+        frame: Frame,
+        mut settings: crate::session::state::CaptureSettings,
+        showing_stack: bool,
+        crop: Option<crate::stacking::CropRect>,
+    ) {
         settings.auto_stretch = false;
         settings.background_subtraction = false;
         settings.saturation_boost = false;
 
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(StackedFrame {
+            noise: None,
             display_frame: Arc::new(frame),
-            showing_stack: false,
-            was_stacked: false,
+            showing_stack,
+            was_stacked: showing_stack,
             frame_number: 1,
-            settings,
-            stack_depth: 0,
+            settings: Arc::new(settings),
+            stack_depth: if showing_stack { 10 } else { 0 },
+            crop,
         })
         .unwrap();
         drop(tx);
-        let rt = tokio::runtime::Handle::current();
         let state = Arc::clone(&self.state);
         tokio::task::spawn_blocking(move || {
-            crate::server::capture::run_render_task(state, rx, QueueDepth::default(), rt)
+            crate::session::capture::run_render_task(state, rx, QueueDepth::default())
         })
         .await
         .unwrap();
     }
 }
 
-fn kind_of(path: &str) -> crate::server::state::StreamKind {
+fn kind_of(path: &str) -> crate::session::state::StreamKind {
     if path.starts_with(LOSSLESS) {
-        crate::server::state::StreamKind::Lossless
+        crate::session::state::StreamKind::Lossless
     } else {
-        crate::server::state::StreamKind::Jpeg
+        crate::session::state::StreamKind::Jpeg
     }
 }
 
@@ -175,6 +209,27 @@ pub(super) async fn next_frame(client: &mut Client) -> Vec<u8> {
     })
     .await
     .expect("no frame arrived")
+}
+
+/// The `/ws/events` messages up to and including the next `synced`, which ends a sync.
+pub(super) async fn events_until_synced(client: &mut Client) -> Vec<serde_json::Value> {
+    events_until(client, |event| event["type"] == "synced").await
+}
+
+/// The `/ws/events` messages up to and including the first `last` accepts.
+pub(super) async fn events_until(client: &mut Client, last: impl Fn(&serde_json::Value) -> bool) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    loop {
+        let event = match tokio::time::timeout(Duration::from_secs(5), client.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            other => panic!("expected a JSON event, got {other:?} after {} events", events.len()),
+        };
+        let done = last(&event);
+        events.push(event);
+        if done {
+            return events;
+        }
+    }
 }
 
 /// Asserts no binary frame arrives within `wait`.
@@ -208,7 +263,7 @@ pub(super) fn dimensions(payload: &[u8]) -> (u32, u32) {
 
 /// Asserts a payload is JPEG (SA10) of the given size.
 pub(super) fn assert_jpeg(payload: &[u8], size: (u32, u32), context: &str) {
-    assert_eq!(magic(payload), crate::server::encoding::JPEG_MAGIC, "{context}: not SA10");
+    assert_eq!(magic(payload), crate::session::encoding::JPEG_MAGIC, "{context}: not SA10");
     assert_eq!(dimensions(payload), size, "{context}");
 }
 
@@ -220,8 +275,8 @@ pub(super) fn assert_lossless(payload: &[u8], size: (u32, u32), context: &str) -
 
 /// Decompress an SA09 payload into interleaved RGB8.
 pub(super) fn decode_sa09(payload: &[u8]) -> Vec<u8> {
-    use crate::server::encoding::{SA09_CHUNK_DESCRIPTOR_SIZE, SA09_HEADER_SIZE};
-    assert_eq!(magic(payload), crate::server::encoding::RGB8_CHUNKED_MAGIC, "not SA09");
+    use crate::session::encoding::{SA09_CHUNK_DESCRIPTOR_SIZE, SA09_HEADER_SIZE};
+    assert_eq!(magic(payload), crate::session::encoding::RGB8_CHUNKED_MAGIC, "not SA09");
     let chunk_count = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
     let mut data_offset = SA09_HEADER_SIZE + chunk_count * SA09_CHUNK_DESCRIPTOR_SIZE;
     let mut rgb = Vec::new();
@@ -267,9 +322,13 @@ pub(super) mod reqwest_like {
     }
 
     pub async fn post_json(addr: SocketAddr, path: &str, body: serde_json::Value) -> Response {
+        send_json(addr, "POST", path, body).await
+    }
+
+    pub async fn send_json(addr: SocketAddr, method: &str, path: &str, body: serde_json::Value) -> Response {
         let body = body.to_string();
         let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );

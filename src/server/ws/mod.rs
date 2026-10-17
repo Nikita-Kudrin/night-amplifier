@@ -1,7 +1,9 @@
 //! WebSocket handlers for real-time image streaming and events
 //!
-//! - `/ws/stream`, `/ws/eyepiece`: dynamic JPEG (SA10), `?source=guide` for the guide camera
-//! - `/ws/eyepiece_quality`: lossless RGB8+LZ4 (SA09), always the imaging camera
+//! - `/ws/stream`: dynamic JPEG (SA10) for the operator on `/`, `?source=guide` for the
+//!   guide camera
+//! - `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless RGB8+LZ4, SA09): whichever
+//!   camera the operator views, switched on the open socket
 //! - `/ws/events`: JSON event notifications
 
 mod image_stream;
@@ -17,10 +19,16 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::broadcast::error::RecvError;
+use tracing::{debug, warn};
 
-use super::events::ServerEvent;
-use super::state::{AppState, CameraRole};
-pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint};
+use crate::session::events::{ServerEvent, SyncCause};
+use crate::session::state::{AppState, CameraRole};
+pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint, StreamSource, NO_FRAME};
+
+/// The close code a page sends as it drops a socket that answered nothing — no message,
+/// no `pong` — for its liveness window (`useWebSocket`'s `dropDead`).
+pub const CLOSE_UNRESPONSIVE: u16 = 4000;
 
 /// Every WebSocket route, relative to the `/ws` nest.
 pub fn routes() -> Router<Arc<AppState>> {
@@ -32,20 +40,24 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 /// Lossless RGB8+LZ4 frames for the eyepiece quality view, at Eyepiece Streaming
-/// Resolution. Always the imaging camera: the guide scope has neither the focal length nor
-/// the field the view is built around.
+/// Resolution, from the camera the operator views. A `?source=` is ignored: the viewers
+/// have no say in it.
 pub async fn eyepiece_quality_handler(
     ws: WebSocketUpgrade,
     PeerAddr(peer): PeerAddr,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let stream = Arc::clone(&state.main_stream);
-    let client = StreamClient {
-        endpoint: StreamEndpoint::EyepieceQuality,
-        camera: CameraRole::Main,
-        peer,
-    };
-    ws.on_upgrade(move |socket| image_stream::serve(socket, state, stream, client))
+    image_stream_socket(ws, StreamEndpoint::EyepieceQuality, StreamSource::Viewed, peer, state)
+}
+
+/// JPEG at Streaming Resolution for the eyepiece overlay page, from the camera the
+/// operator views, like [`eyepiece_quality_handler`].
+pub async fn eyepiece_handler(
+    ws: WebSocketUpgrade,
+    PeerAddr(peer): PeerAddr,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    image_stream_socket(ws, StreamEndpoint::Eyepiece, StreamSource::Viewed, peer, state)
 }
 
 /// JPEG at Streaming Resolution for the live view page.
@@ -55,36 +67,26 @@ pub async fn stream_handler(
     PeerAddr(peer): PeerAddr,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    jpeg_stream(ws, StreamEndpoint::LiveView, source.role(), peer, state)
+    let source = StreamSource::Fixed(source.role());
+    image_stream_socket(ws, StreamEndpoint::LiveView, source, peer, state)
 }
 
-/// JPEG at Streaming Resolution for the eyepiece overlay page.
-pub async fn eyepiece_handler(
-    ws: WebSocketUpgrade,
-    Query(source): Query<StreamSourceQuery>,
-    PeerAddr(peer): PeerAddr,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    jpeg_stream(ws, StreamEndpoint::Eyepiece, source.role(), peer, state)
-}
-
-fn jpeg_stream(
+fn image_stream_socket(
     ws: WebSocketUpgrade,
     endpoint: StreamEndpoint,
-    camera: CameraRole,
+    source: StreamSource,
     peer: Option<std::net::SocketAddr>,
     state: Arc<AppState>,
 ) -> impl IntoResponse {
-    let stream = Arc::clone(state.stream(camera));
     let client = StreamClient {
         endpoint,
-        camera,
+        source,
         peer,
     };
-    ws.on_upgrade(move |socket| image_stream::serve(socket, state, stream, client))
+    ws.on_upgrade(move |socket| image_stream::serve(socket, state, client))
 }
 
-/// Which camera's stream a client asked for, as `?source=main|guide`.
+/// Which camera's stream the live view asked for, as `?source=main|guide`.
 ///
 /// A query parameter rather than a second route: the protocol is byte-for-byte the
 /// same, and the frontend swaps the source on one socket when the *Guide camera* toggle
@@ -112,6 +114,7 @@ impl StreamSourceQuery {
 ///
 /// Protocol:
 /// - Server sends JSON text messages with event data
+/// - Server opens with a sync (see [`send_sync`]) and repeats it after the client lagged
 /// - Client can send "ping" text messages to keep connection alive
 pub async fn events_handler(
     ws: WebSocketUpgrade,
@@ -120,24 +123,31 @@ pub async fn events_handler(
     ws.on_upgrade(move |socket| handle_events(socket, state))
 }
 
+/// Bring a client up to date: every value topic's current events, then `synced`, on which
+/// it re-reads every refetched topic (see `session::events::Topic`). Sent after subscribing,
+/// so a client always converges: a value is changed before its event is sent, and every
+/// event sent after the snapshot was read follows on this socket. Returns `false` once the
+/// socket is gone.
+async fn send_sync(socket: &mut WebSocket, state: &AppState, cause: SyncCause, dropped: u64) -> bool {
+    let synced = ServerEvent::synced(cause, dropped);
+    for event in state.sync_snapshot().into_iter().chain([synced]) {
+        if socket.send(Message::Text(event.to_json().into())).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Handle the events WebSocket connection
 async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
     let mut events_rx = state.subscribe_events();
 
-    // Send initial state
-    let initial_state = state.capture_state().await;
-    let initial_event = ServerEvent::state_changed(initial_state);
-    if socket
-        .send(Message::Text(initial_event.to_json().into()))
-        .await
-        .is_err()
-    {
+    if !send_sync(&mut socket, &state, SyncCause::Connect, 0).await {
         return;
     }
 
     loop {
         tokio::select! {
-            // Check for incoming messages
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -145,17 +155,17 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => {
+                    Some(Ok(Message::Close(frame))) => {
+                        if frame.is_some_and(|frame| frame.code == CLOSE_UNRESPONSIVE) {
+                            warn!("An events client dropped its socket as unresponsive; it reconnects and syncs");
+                        }
                         break;
                     }
-                    Some(Err(_)) => {
-                        break;
-                    }
+                    None | Some(Err(_)) => break,
                     _ => {}
                 }
             }
 
-            // Forward events to client
             event = events_rx.recv() => {
                 match event {
                     Ok(event) => {
@@ -163,17 +173,18 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        // Client is too slow, send warning
-                        let warning = ServerEvent::warning(format!("Dropped {} events (client too slow)", n));
-                        let _ = socket.send(Message::Text(warning.to_json().into())).await;
+                    Err(RecvError::Lagged(dropped)) => {
+                        // The backlog (up to the channel's 256) is stale beside the snapshot
+                        // that replaces it, and feeding it to a slow client lags it again.
+                        events_rx = events_rx.resubscribe();
+                        debug!(dropped, "Events client lagged; resyncing it");
+                        if !send_sync(&mut socket, &state, SyncCause::Lagged, dropped).await {
+                            break;
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
+                    Err(RecvError::Closed) => break,
                 }
             }
         }
     }
 }
-

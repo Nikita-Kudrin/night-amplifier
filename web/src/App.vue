@@ -1,8 +1,12 @@
-<script setup>
-import {ref, provide, onMounted, watch} from 'vue'
-import {useEventStream} from './composables/useWebSocket.js'
-import {useAppState} from './composables/useAppState.js'
-import {getAstapStatus, getCatalogStatus} from './composables/api.js'
+<script setup lang="ts">
+import {ref, onMounted, useTemplateRef} from 'vue'
+import {useEventStream} from './composables/useEventStream'
+import {useAppState} from './composables/useAppState'
+import {provideAppContext} from './composables/appContext'
+import {useAiCompute} from './composables/useAiCompute'
+import {useSidebarTabs} from './composables/useSidebarTabs'
+import {getAstapStatus, getCatalogStatus} from './composables/api'
+import {isEyepiecePage, SIDEBAR_TABS} from './constants'
 
 import CameraPanel from './components/CameraPanel.vue'
 import CaptureControls from './components/CaptureControls.vue'
@@ -14,157 +18,65 @@ import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
+import HardwareBenchmarkOverlay from './components/HardwareBenchmarkOverlay.vue'
 import { BaseSpinner } from './components/ui'
 
 // Routing
-const isEyepieceRoute = ref(window.location.pathname === '/eyepiece' || window.location.pathname === '/eyepiece_quality')
+const isEyepieceRoute = ref(isEyepiecePage(window.location.pathname))
 
 // Centralized state management
-const {
-  loading,
-  globalError: error,
-  simulatorEnabled,
-  settings,
-  refreshSettings,
-  refreshCameras,
-  initializeState,
-  updateCameraStatus,
-  updateCameraPhase,
-  addDiscoveredCamera,
-  _settingsRef,
-  _camerasRef,
-  _selectedCameraIdRef,
-  _cameraStatusRef,
-  _cameraPhaseRef,
-  capabilities,
-  mainCamera,
-  guideCamera,
-  hasGuideCamera,
-  selectedCameraRole,
-} = useAppState()
+const appState = useAppState()
+const {loading, globalError: error, settings, initializeState, capabilities} = appState
 
-const showSettings = ref(false)
-const showPushTo = ref(false)
-const showPushToSetup = ref(false)
-const checkingSetup = ref(false)
 const showAbout = ref(false)
+
+const sidebar = useTemplateRef<HTMLElement>('sidebarElement')
+const {
+  activeTab,
+  visited,
+  checkingSetup,
+  showPushToSetup,
+  toggle: toggleTab,
+  setupComplete,
+  closeSetup,
+} = useSidebarTabs({capabilities, getAstapStatus, getCatalogStatus, scroller: sidebar})
 
 // Event stream for real-time updates
 const eventStream = useEventStream()
 
-// Provide state to children (for backwards compatibility during migration)
-provide('settings', _settingsRef)
-provide('cameras', _camerasRef)
-provide('selectedCamera', _selectedCameraIdRef)
-provide('eventStream', eventStream)
-provide('simulatorEnabled', simulatorEnabled)
-provide('refreshSettings', refreshSettings)
-provide('refreshCameras', refreshCameras)
-provide('capabilities', capabilities)
-provide('cameraStatus', _cameraStatusRef)
-provide('cameraPhase', _cameraPhaseRef)
-provide('mainCamera', mainCamera)
-provide('guideCamera', guideCamera)
-provide('hasGuideCamera', hasGuideCamera)
-provide('selectedCameraRole', selectedCameraRole)
+// The one-time AI compute benchmark blocks the whole UI while it measures.
+const aiCompute = useAiCompute()
+const benchmarking = aiCompute.benchmarking
 
-// Handle Push-To button click - check ASTAP and catalog status first
-async function handlePushToClick() {
-  // If already showing Push-To panel, toggle off
-  if (showPushTo.value) {
-    showPushTo.value = false
-    return
-  }
+provideAppContext(appState, eventStream)
 
-  // If user is not Pro, show the Push-To panel immediately (it handles the lock screen)
-  // This avoids triggering ASTAP/catalog downloads for Community users
-  if (!capabilities.value?.push_to?.astap_solver) {
-    showPushTo.value = true
-    return
-  }
-
-  // Check ASTAP and catalog status before showing Push-To panel
-  checkingSetup.value = true
-  try {
-    const [astapStatus, catalogStatus] = await Promise.all([getAstapStatus(), getCatalogStatus()])
-
-    if (astapStatus.ready && catalogStatus.installed) {
-      // Everything is installed, show Push-To panel
-      showPushTo.value = true
-    } else {
-      // Something is missing, show setup overlay
-      showPushToSetup.value = true
-    }
-  } catch {
-    // If status check fails, show setup overlay anyway
-    showPushToSetup.value = true
-  } finally {
-    checkingSetup.value = false
-  }
-}
-
-// Handle Push-To setup completion
-function handleSetupComplete() {
-  showPushToSetup.value = false
-  showPushTo.value = true
-}
-
-// Watch for external settings updates to sync our state across instances
-watch(
-    () => eventStream.lastEvent.value,
-    (event) => {
-      if (event?.type === 'settings_updated') {
-        refreshSettings()
-      }
-      if (event?.type === 'camera_status_updated') {
-        updateCameraStatus(event.name, {
-          temperature_c: event.temperature_c,
-          cooler_power: event.cooler_power ?? null,
-          cooler_on: event.cooler_on,
-          dew_heater_on: event.dew_heater_on,
-          target_temp_c: event.target_temp_c ?? null,
-        })
-      }
-      if (event?.type === 'camera_phase_changed') {
-        updateCameraPhase(event.name, event.phase)
-      }
-      if (event?.type === 'camera_disconnected') {
-        updateCameraPhase(event.name, 'disconnected')
-        refreshCameras()
-      }
-      if (event?.type === 'camera_discovered') {
-        addDiscoveredCamera(event.camera)
-      }
-    }
-)
-
-function handleEulaAccepted() {
-  refreshSettings()
-}
+// Every store follows the server through the one event stream.
+appState.connectEvents(eventStream)
+aiCompute.connectEvents({stream: eventStream, settings})
 
 // Initialize on mount
 onMounted(() => {
-  initializeState()
+  void initializeState()
+  void aiCompute.refresh()
 })
 </script>
 
 <template>
-  <EyepieceView v-if="isEyepieceRoute"/>
+  <EyepieceView v-if="isEyepieceRoute" :inert="benchmarking"/>
 
   <!-- EULA gate - blocks entire app until accepted -->
   <EulaModal
     v-else-if="!loading && !error && settings?.eula_accepted === false"
-    @accepted="handleEulaAccepted"
+    :inert="benchmarking"
   />
 
-  <div v-else class="app">
+  <div v-else class="app" :inert="benchmarking">
     <!-- Header -->
     <header class="header">
       <h1 class="logo">NightAmplifier</h1>
       <button
           class="btn btn-icon btn-header-icon"
           title="About"
-          style="margin-left: 0.25rem;"
           @click="showAbout = true"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -176,10 +88,12 @@ onMounted(() => {
       <div class="header-spacer"></div>
       <button
           class="btn btn-icon btn-header-icon"
-          :class="{ active: showPushTo, loading: checkingSetup }"
+          :class="{ active: activeTab === SIDEBAR_TABS.PUSH_TO, loading: checkingSetup }"
           title="Push-To Navigation"
+          data-test="tab-push-to"
+          :aria-pressed="activeTab === SIDEBAR_TABS.PUSH_TO"
           :disabled="checkingSetup"
-          @click="handlePushToClick"
+          @click="toggleTab(SIDEBAR_TABS.PUSH_TO)"
       >
         <svg
             v-if="!checkingSetup"
@@ -195,9 +109,11 @@ onMounted(() => {
       </button>
       <button
           class="btn btn-icon btn-header-icon"
-          :class="{ active: showSettings }"
+          :class="{ active: activeTab === SIDEBAR_TABS.SETTINGS }"
           title="Settings"
-          @click="showSettings = !showSettings"
+          data-test="tab-settings"
+          :aria-pressed="activeTab === SIDEBAR_TABS.SETTINGS"
+          @click="toggleTab(SIDEBAR_TABS.SETTINGS)"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
@@ -234,12 +150,28 @@ onMounted(() => {
 
     <!-- Main content -->
     <main v-else class="main">
-      <!-- Left panel (controls) -->
-      <aside class="sidebar" :class="{ 'settings-open': showSettings, 'pushto-open': showPushTo }">
-        <PushToPanel v-if="showPushTo"/>
-        <CameraPanel/>
-        <CaptureControls/>
-        <SettingsPanel v-if="showSettings"/>
+      <!-- Left panel: one tab at a time, each kept mounted once visited (useSidebarTabs) -->
+      <aside ref="sidebarElement" class="sidebar" :class="{ expanded: activeTab !== SIDEBAR_TABS.MAIN }">
+        <div v-show="activeTab === SIDEBAR_TABS.MAIN" class="sidebar-tab" data-test="sidebar-main">
+          <CameraPanel/>
+          <CaptureControls/>
+        </div>
+        <div
+            v-if="visited.has(SIDEBAR_TABS.PUSH_TO)"
+            v-show="activeTab === SIDEBAR_TABS.PUSH_TO"
+            class="sidebar-tab"
+            data-test="sidebar-push-to"
+        >
+          <PushToPanel/>
+        </div>
+        <div
+            v-if="visited.has(SIDEBAR_TABS.SETTINGS)"
+            v-show="activeTab === SIDEBAR_TABS.SETTINGS"
+            class="sidebar-tab"
+            data-test="sidebar-settings"
+        >
+          <SettingsPanel/>
+        </div>
       </aside>
 
       <!-- Live view (center) -->
@@ -254,8 +186,8 @@ onMounted(() => {
     <!-- Push-To Setup Overlay -->
     <PushToSetupOverlay
         v-if="showPushToSetup"
-        @close="showPushToSetup = false"
-        @installed="handleSetupComplete"
+        @close="closeSetup"
+        @installed="setupComplete"
     />
 
     <!-- About / License Dialog -->
@@ -264,6 +196,8 @@ onMounted(() => {
         @close="showAbout = false" 
     />
   </div>
+
+  <HardwareBenchmarkOverlay/>
 </template>
 
 <style scoped>
@@ -286,13 +220,13 @@ onMounted(() => {
 
 @media (min-width: 769px) {
   .header {
-    width: 320px;
+    width: var(--sidebar-width);
   }
 }
 
 @media (max-width: 768px) and (orientation: landscape) {
   .header {
-    width: 280px;
+    width: var(--sidebar-width-landscape);
   }
 }
 
@@ -301,7 +235,7 @@ onMounted(() => {
 }
 
 .logo {
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0;
@@ -323,7 +257,7 @@ onMounted(() => {
 .error-icon {
   width: 64px;
   height: 64px;
-  color: var(--warning, #f59e0b);
+  color: var(--warning);
   margin-bottom: 0.5rem;
 }
 
@@ -348,8 +282,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--text-muted, #6b7280);
-  font-size: 0.875rem;
+  color: var(--text-muted);
+  font-size: var(--fs-base);
   margin-top: 0.5rem;
 }
 
@@ -360,7 +294,7 @@ onMounted(() => {
 }
 
 .sidebar {
-  width: 320px;
+  width: var(--sidebar-width);
   max-width: 100%;
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -369,6 +303,11 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* Lays the tab's panels out as the sidebar's own children, keeping its gap between them. */
+.sidebar-tab {
+  display: contents;
 }
 
 .btn-header-icon {
@@ -400,8 +339,7 @@ onMounted(() => {
     border-bottom: 1px solid var(--border);
   }
 
-  .sidebar.settings-open,
-  .sidebar.pushto-open {
+  .sidebar.expanded {
     max-height: 60vh;
   }
 
@@ -415,7 +353,7 @@ onMounted(() => {
 @media (max-width: 768px) and (orientation: landscape) {
   .sidebar {
     max-height: none;
-    width: 280px;
+    width: var(--sidebar-width-landscape);
     border-right: 1px solid var(--border);
     border-bottom: none;
   }

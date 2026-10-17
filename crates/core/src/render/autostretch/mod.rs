@@ -1,0 +1,456 @@
+//! Automatic stretch factor calculation
+//!
+//! This module provides the autostretch solver that calculates the optimal stretch factor
+//! to map the image's background median to a target brightness.
+
+use crate::error::{Result, StackError};
+use crate::frame::Frame;
+use crate::statistics::compute_image_stats;
+
+mod config;
+pub(crate) mod logic;
+pub mod solver;
+mod stats;
+
+pub use config::{AutoStretchConfig, StretchAggressiveness};
+pub use logic::{
+    compute_auto_stretch, compute_auto_stretch_with_algorithm, depth_grain_gain,
+    DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT, MIN_GRAIN_SPLIT,
+};
+pub use solver::{solve_stretch_factor, solve_stretch_factor_newton};
+pub use stats::{estimate_signal_fraction, AutoStretchResult};
+
+use super::black_point::{
+    calculate_black_points, subtract_black_point, subtract_black_point_uniform, BlackPointConfig,
+};
+use super::stretch::{apply_tone_mapping, ToneMappingAlgorithm};
+
+/// Automatically stretch a frame to target background level
+#[tracing::instrument(skip(frame, contrast_config))]
+pub fn auto_stretch_frame(
+    frame: &mut Frame,
+    config: AutoStretchConfig,
+    contrast_config: Option<&crate::render::output::ContrastConfig>,
+    floor: crate::render::output::ShadowFloorRequest,
+) -> Result<AutoStretchResult> {
+    let channels = frame.channels();
+    if channels != 1 && channels != 3 {
+        return Err(StackError::InvalidConfiguration(format!(
+            "auto_stretch_frame requires 1 or 3 channels, got {}",
+            channels
+        )));
+    }
+
+    let stats = {
+        let _span = tracing::info_span!("compute_image_stats").entered();
+        compute_image_stats(frame)?
+    };
+    let result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
+    let shadow = floor.resolve(crate::render::output::sky_level_after_contrast(
+        result.target_background,
+        contrast_config,
+    ));
+    let floor = shadow.floor;
+
+    // Only the fused kernel can carry the floor for free, and only two of the
+    // five arms below reach it: MTF stretches each channel through its own
+    // midtone, so there is no single scale table to fold the curve into, and a
+    // mono frame never reaches that kernel at all. Those arms get it as an
+    // explicit pass instead — after contrast, which is where the fused table and
+    // the encoder's row tail both put it.
+    let mut floor_pending = !floor.is_none();
+
+    if channels == 3 && config.per_channel_black_point {
+        // `result.adaptive_sigma`, not `config.black_point_sigma`: the curve above was
+        // solved against a gap of that many sigmas, and a subtraction using the raw
+        // setting removes a different one — by the whole depth gain on a deep stack.
+        let bp_config = BlackPointConfig::new(result.adaptive_sigma);
+        let black_points = {
+            let _span = tracing::info_span!("calculate_black_points").entered();
+            calculate_black_points(frame, &stats, bp_config)?
+        };
+        subtract_black_point(frame, &black_points)?;
+
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            let _span = tracing::info_span!("mtf_stretch_frame").entered();
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
+            if let Some(c_cfg) = contrast_config {
+                let _span = tracing::info_span!("apply_contrast_frame").entered();
+                crate::render::output::apply_contrast_frame(frame, c_cfg)?;
+            }
+        } else {
+            let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+            crate::render::stretch::apply_fused_stretch_frame(
+                frame,
+                0.0,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+                contrast_config,
+                floor,
+            )?;
+            floor_pending = false;
+        }
+    } else if channels == 3 {
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            subtract_black_point_uniform(frame, result.black_point)?;
+            let _span = tracing::info_span!("mtf_stretch_frame").entered();
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
+            if let Some(c_cfg) = contrast_config {
+                let _span = tracing::info_span!("apply_contrast_frame").entered();
+                crate::render::output::apply_contrast_frame(frame, c_cfg)?;
+            }
+        } else {
+            let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+            crate::render::stretch::apply_fused_stretch_frame(
+                frame,
+                result.black_point,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+                contrast_config,
+                floor,
+            )?;
+            floor_pending = false;
+        }
+    } else {
+        subtract_black_point_uniform(frame, result.black_point)?;
+        let _span = tracing::info_span!("apply_tone_mapping").entered();
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
+        } else {
+            apply_tone_mapping(
+                frame,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+            )?;
+        }
+    }
+
+    if floor_pending {
+        let _span = tracing::info_span!("apply_shadow_floor_frame").entered();
+        crate::render::output::apply_shadow_floor_frame(frame, floor)?;
+    }
+    if let Some(sky) = shadow.sky {
+        let _span = tracing::info_span!("apply_sky_shadow_frame").entered();
+        crate::render::output::apply_sky_shadow_frame(frame, sky)?;
+    }
+
+    Ok(result)
+}
+
+/// Compute autostretch parameters and subtract black point, but do NOT stretch the frame.
+/// Used for deferred rendering in the Mega-Kernel architecture.
+#[tracing::instrument(skip(frame))]
+pub fn prepare_auto_stretch_frame(
+    frame: &mut Frame,
+    config: AutoStretchConfig,
+) -> Result<AutoStretchResult> {
+    let channels = frame.channels();
+    if channels != 1 && channels != 3 {
+        return Err(StackError::InvalidConfiguration(format!(
+            "prepare_auto_stretch_frame requires 1 or 3 channels, got {}",
+            channels
+        )));
+    }
+
+    let stats = {
+        let _span = tracing::info_span!("compute_image_stats").entered();
+        compute_image_stats(frame)?
+    };
+    prepare_auto_stretch_frame_with_stats(frame, config, &stats)
+}
+
+/// [`prepare_auto_stretch_frame`] against statistics the caller already holds. Splitting
+/// measurement from the solve lets the render task reuse one set of statistics across
+/// several frames of the same stack; see `session::capture::analysis` for when that's sound.
+///
+/// **Statistics must describe the frame as it is now** — after neutralisation, background
+/// subtraction and SCNR — since the black point they yield is subtracted from it;
+/// measuring before those stages would remove a pedestal the frame no longer has.
+pub fn prepare_auto_stretch_frame_with_stats(
+    frame: &mut Frame,
+    config: AutoStretchConfig,
+    stats: &crate::statistics::ImageStats,
+) -> Result<AutoStretchResult> {
+    let channels = frame.channels();
+    if channels != 1 && channels != 3 {
+        return Err(StackError::InvalidConfiguration(format!(
+            "prepare_auto_stretch_frame requires 1 or 3 channels, got {}",
+            channels
+        )));
+    }
+
+    // The two halves scale with completely different things — the solve is a bounded
+    // Newton/bisection iteration over scalars, the subtraction is one pass over every
+    // sample — so 7.0 ms of unattributed self time here could have been either. It is
+    // almost entirely the subtraction, and now says so.
+    let mut result = {
+        let _span = tracing::info_span!("solve_stretch", algorithm = ?config.tone_mapping).entered();
+        compute_auto_stretch_with_algorithm(frame, stats, config, config.tone_mapping)
+    };
+
+    if channels == 3 && config.per_channel_black_point {
+        // See `auto_stretch_frame`: the sigma the solve used, not the raw setting.
+        let bp_config = BlackPointConfig::new(result.adaptive_sigma);
+        let black_points = {
+            let _span = tracing::info_span!("calculate_black_points").entered();
+            calculate_black_points(frame, stats, bp_config)?
+        };
+        let _span = tracing::info_span!("subtract_black_point", per_channel = true).entered();
+        subtract_black_point(frame, &black_points)?;
+        // Set black point to 0 in the result since we already subtracted it per-channel
+        result.black_point = 0.0;
+    } else {
+        let _span = tracing::info_span!("subtract_black_point", per_channel = false).entered();
+        subtract_black_point_uniform(frame, result.black_point)?;
+        // Set black point to 0 in the result since we already subtracted it uniformly
+        result.black_point = 0.0;
+    }
+
+    Ok(result)
+}
+
+/// Automatically stretch a frame with default configuration
+pub fn auto_stretch_default(frame: &mut Frame) -> Result<AutoStretchResult> {
+    auto_stretch_frame(
+        frame,
+        AutoStretchConfig::default(),
+        None,
+        crate::render::output::ShadowFloorRequest::NONE,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::output::ShadowFloorRequest;
+
+    #[test]
+    fn test_autostretch_config_defaults() {
+        let config = AutoStretchConfig::default();
+        assert!((config.target_background - 0.10).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_auto_stretch_frame_end_to_end() {
+        let background = 0.03;
+        // `set_pixel`, not index arithmetic: a fixture that encodes the layout cannot
+        // detect a layout bug. The identical fixture in `session::capture::storage` was
+        // converted during the planar migration and this one was missed.
+        let mut frame = Frame::zeros(64, 64, 3).unwrap();
+
+        let mut seed: u32 = 54321;
+        for y in 0..64 {
+            for x in 0..64 {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.005;
+                    frame.set_pixel(x, y, c, background + noise);
+                }
+            }
+        }
+        let config = AutoStretchConfig::new().with_target_background(0.15);
+        let result =
+            auto_stretch_frame(
+                &mut frame,
+                config,
+                None,
+                crate::render::output::ShadowFloorRequest::NONE,
+            )
+                .unwrap();
+
+        assert!(result.converged);
+        let bg = frame.get_pixel(0, 0, 0);
+        assert!(bg > 0.05 && bg < 0.30);
+    }
+
+    #[test]
+    fn test_auto_stretch_frame_preserves_colors() {
+        let mut data = vec![0.0f32; 32 * 32 * 3];
+
+        let plane = 32 * 32;
+        for i in 0..plane {
+            data[i] = 0.04;
+            data[plane + i] = 0.05;
+            data[plane * 2 + i] = 0.06;
+        }
+
+        let idx = 16 * 32 + 16;
+        data[idx] = 0.8;
+        data[plane + idx] = 0.3;
+        data[plane * 2 + idx] = 0.2;
+
+        let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
+        auto_stretch_frame(
+            &mut frame,
+            AutoStretchConfig::default(),
+            None,
+            ShadowFloorRequest::NONE,
+        )
+        .unwrap();
+
+        let star_r = frame.get_pixel(16, 16, 0);
+        let star_g = frame.get_pixel(16, 16, 1);
+        let star_b = frame.get_pixel(16, 16, 2);
+
+        assert!(star_r > star_g && star_r > star_b);
+        assert!(star_g > star_b);
+    }
+
+    /// A noisy sky with a few stars, so the solver has real statistics to work
+    /// from. `set_pixel` rather than index arithmetic, for the reason
+    /// `test_auto_stretch_frame_end_to_end` gives.
+    fn noisy_sky(channels: usize, background: f32) -> Frame {
+        let mut frame = Frame::zeros(64, 64, channels).unwrap();
+        let mut seed: u32 = 12345;
+        for y in 0..64 {
+            for x in 0..64 {
+                for c in 0..channels {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.01;
+                    frame.set_pixel(x, y, c, (background + noise).max(0.0));
+                }
+            }
+        }
+        for k in 0..8 {
+            for c in 0..channels {
+                frame.set_pixel(4 + k * 7, 5 + k * 5, c, 0.8);
+            }
+        }
+        frame
+    }
+
+    fn median_of_channel(frame: &Frame, channel: usize) -> f32 {
+        let mut values: Vec<f32> = frame.channel_data(channel).to_vec();
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values[values.len() / 2]
+    }
+
+    /// Every arm of this function has to honour the floor it is handed, and only
+    /// two of the five can fuse it into the scale LUT.
+    ///
+    /// The Asinh arms did; the MTF arms and the mono arm accepted the request and
+    /// dropped it on the floor, which meant the shipped configuration — MTF, from
+    /// `StretchAggressiveness::Medium` — was the one that silently ignored it.
+    /// Not visible through `process_preview_frame`, which composes the curve
+    /// itself, so nothing downstream would have caught this.
+    #[test]
+    fn the_floor_reaches_every_arm_of_the_stretch() {
+        let request = ShadowFloorRequest {
+            fraction: 1.0,
+            hard: false,
+        };
+
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for per_channel_black_point in [false, true] {
+                for channels in [1usize, 3] {
+                    // Per-channel black points are a three-channel concept; the
+                    // mono arm ignores the flag, so testing it twice measures
+                    // the same arm twice.
+                    if channels == 1 && per_channel_black_point {
+                        continue;
+                    }
+
+                    let config = AutoStretchConfig {
+                        per_channel_black_point,
+                        ..AutoStretchConfig::default().with_tone_mapping(algorithm)
+                    };
+
+                    let mut plain = noisy_sky(channels, 0.02);
+                    auto_stretch_frame(&mut plain, config, None, ShadowFloorRequest::NONE).unwrap();
+                    let mut floored = noisy_sky(channels, 0.02);
+                    auto_stretch_frame(&mut floored, config, None, request).unwrap();
+
+                    let before = median_of_channel(&plain, 0);
+                    let after = median_of_channel(&floored, 0);
+                    assert!(
+                        after < before * 0.5,
+                        "{algorithm:?} per_channel={per_channel_black_point} \
+                         channels={channels}: the floor left the sky at {after} \
+                         from {before} — this arm is ignoring the request"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The other half of the claim: a floor moves the sky, not the stars. An arm
+    /// that dimmed everything would pass the assertion above while producing the
+    /// complaint the whole feature exists to avoid.
+    #[test]
+    fn the_floor_leaves_white_alone_on_every_arm() {
+        let request = ShadowFloorRequest {
+            fraction: 1.0,
+            hard: false,
+        };
+
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for channels in [1usize, 3] {
+                let config = AutoStretchConfig::default().with_tone_mapping(algorithm);
+                let mut floored = noisy_sky(channels, 0.02);
+                auto_stretch_frame(&mut floored, config, None, request).unwrap();
+                let star = floored.get_pixel(4, 5, 0);
+                assert!(
+                    star > 0.9,
+                    "{algorithm:?} channels={channels}: the floor pulled a star \
+                     core down to {star}"
+                );
+            }
+        }
+    }
+
+    /// A `NONE` request must leave the frame bit-identical, so that turning the
+    /// feature on is the only thing that can change what an observer sees.
+    #[test]
+    fn a_none_request_changes_nothing_on_any_arm() {
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for channels in [1usize, 3] {
+                let config = AutoStretchConfig::default().with_tone_mapping(algorithm);
+                let mut reference = noisy_sky(channels, 0.02);
+                auto_stretch_frame(&mut reference, config, None, ShadowFloorRequest::NONE).unwrap();
+
+                let mut zero_fraction = noisy_sky(channels, 0.02);
+                auto_stretch_frame(
+                    &mut zero_fraction,
+                    config,
+                    None,
+                    ShadowFloorRequest {
+                        fraction: 0.0,
+                        hard: true,
+                    },
+                )
+                .unwrap();
+
+                assert_eq!(
+                    reference.data(),
+                    zero_fraction.data(),
+                    "{algorithm:?} channels={channels}: a zero-fraction request \
+                     was not the identity"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_auto_stretch_frame_wrong_channels() {
+        let mut frame = Frame::filled(10, 10, 2, 0.5).unwrap();
+        let result = auto_stretch_frame(
+            &mut frame,
+            AutoStretchConfig::default(),
+            None,
+            ShadowFloorRequest::NONE,
+        );
+        assert!(matches!(result, Err(StackError::InvalidConfiguration(_))));
+    }
+
+    #[test]
+    fn test_auto_stretch_default_convenience() {
+        let data = vec![0.05f32; 32 * 32 * 3];
+        let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
+
+        let result = auto_stretch_default(&mut frame).unwrap();
+        assert!(result.converged);
+    }
+}

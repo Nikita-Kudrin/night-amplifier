@@ -1,0 +1,324 @@
+//! Capture service for managing capture sessions
+//!
+//! Encapsulates capture-related business logic including starting, stopping,
+//! and monitoring capture sessions.
+
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{info, warn};
+
+use crate::camera::health as camera_health;
+use crate::capture::{guide_task, run_capture_loop};
+use crate::error::{ApiError, ApiResult};
+use crate::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
+use night_amplifier_core::disk_writer::SyncGroup;
+
+/// Service for managing capture operations
+pub struct CaptureService;
+
+impl CaptureService {
+    /// Start the camera in `role`.
+    ///
+    /// The two roles run different things and the button addresses whichever camera the
+    /// list has selected: the imaging camera drives the four-thread capture pipeline,
+    /// the guide camera its own free-running loop. Only the imaging camera takes a
+    /// `camera_id` — the guide slot holds at most one camera, so naming it adds nothing
+    /// beyond a check that the client and the server agree on which one it is.
+    pub async fn start(
+        state: &Arc<AppState>,
+        camera_id: Option<String>,
+        role: CameraRole,
+    ) -> ApiResult<String> {
+        match role {
+            CameraRole::Main => Self::start_capture(state, camera_id).await,
+            CameraRole::Guide => Self::start_guide(state, camera_id).await,
+        }
+    }
+
+    /// Stop the camera in `role`. Returns whether anything was running.
+    pub async fn stop(state: &Arc<AppState>, role: CameraRole) -> bool {
+        match role {
+            CameraRole::Main => Self::stop_capture(state).await,
+            CameraRole::Guide => Self::stop_guide(state).await,
+        }
+    }
+
+    /// Before the process exits: stop both cameras' captures and wait — up to `budget` — for
+    /// the final stack and every saved file to reach the device, and for the settings to be
+    /// written. Without it, `systemctl stop` or a shutdown killed a running capture with no
+    /// stack saved and nothing synced. The sub in flight is cut short, as a Disconnect does.
+    pub async fn shut_down(state: &Arc<AppState>, budget: Duration) {
+        let deadline = tokio::time::Instant::now() + budget;
+        if Self::stop_capture(state).await {
+            state.cancel_active_exposure(CameraRole::Main).await;
+        }
+        Self::stop_guide(state).await;
+        while !matches!(state.capture_state(), CaptureState::Idle | CaptureState::Error) {
+            if tokio::time::Instant::now() >= deadline {
+                warn!("Exiting before the capture finished stopping; its stack may not be saved");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Both groups once more, whatever the cameras' own syncs got to: the guide loop's
+        // trailing sync runs on its thread after the hand-back `stop_guide` waited for, and
+        // jobs are synced in turn, so this answer comes after it.
+        let settled = {
+            let state = Arc::clone(state);
+            tokio::task::spawn_blocking(move || {
+                for group in [SyncGroup::Shared, SyncGroup::Owned] {
+                    if let Err(e) = state.disk_writer.sync(group) {
+                        warn!(?group, error = %e, "Could not sync the captures before exiting");
+                    }
+                }
+                state.flush_settings();
+            })
+        };
+        if tokio::time::timeout_at(deadline, settled).await.is_err() {
+            warn!("Exiting before every file was synced to disk");
+        }
+    }
+
+    /// Start the guide camera's free-running loop.
+    ///
+    /// Ordinarily `connect` has already started it — framing and plate solving want it
+    /// before any imaging session begins — so this is the restart after a deliberate
+    /// Stop.
+    async fn start_guide(state: &Arc<AppState>, camera_id: Option<String>) -> ApiResult<String> {
+        let camera = state
+            .camera_in_role(CameraRole::Guide)
+            .ok_or(ApiError::NoGuideCameraConnected)?;
+
+        // A client that named a camera gets told when it named the wrong one, rather
+        // than silently starting the camera it did not ask for.
+        if let Some(id) = camera_id {
+            if id != camera.id {
+                return match state.role_of(&id) {
+                    Some(role) => Err(ApiError::CameraRoleMismatch {
+                        camera: state.connected_camera_name(&id).unwrap_or(id),
+                        held: role.label(),
+                        requested: CameraRole::Guide.label(),
+                    }),
+                    None => Err(ApiError::CameraNotConnected(id)),
+                };
+            }
+        }
+
+        // Already running is the state the observer asked for, not an error. The client
+        // that pressed Start was showing a stopped loop because it had missed the event that
+        // said otherwise — a phone waking up, a reloaded page — and a 409 told it nothing
+        // it could act on (2026-09-20).
+        if Self::guide_loop_active(state) {
+            info!(camera_id = %camera.id, "Start requested for a guide camera that is already running");
+            return Ok(camera.id);
+        }
+
+        info!(camera_id = %camera.id, "Starting the guide camera");
+        camera_health::forget_frameless_opens(state, CameraRole::Guide, &camera.info.name);
+        guide_task::start(state, &camera);
+        Ok(camera.id)
+    }
+
+    /// A guide loop is registered — starting, exposing, or winding down on its own.
+    /// `guide_loop_running` alone misses one still taking its handle.
+    fn guide_loop_active(state: &AppState) -> bool {
+        state.guide_loops.is_registered() || state.guide_loop_running()
+    }
+
+    /// Stop the guide camera's loop, which also stops its raw-frame saving.
+    async fn stop_guide(state: &Arc<AppState>) -> bool {
+        if !Self::guide_loop_active(state) {
+            return false;
+        }
+        info!("Stopping the guide camera");
+        guide_task::stop(state).await;
+
+        // A deliberate stop ends the observation, the same call `stop_capture` makes on
+        // the imaging camera's resume plan: drop the folder the loop was filling so a
+        // later Start opens a fresh one instead of resuming the numbering into it.
+        // Deliberately not inside `guide_task::stop` — the disconnect paths call that
+        // too, and a dropout *must* keep the record so the reconnect rejoins one
+        // session's frames into one folder.
+        state.slot(CameraRole::Guide).set_raw_session(None);
+
+        // Nothing will refresh the guide preview until it is started again, so let go of
+        // the last frame rather than leaving a viewer looking at a still image of a
+        // camera that stopped.
+        state.guide_stream.clear();
+        true
+    }
+
+    /// Start a capture session
+    pub async fn start_capture(
+        state: &Arc<AppState>,
+        camera_id: Option<String>,
+    ) -> ApiResult<String> {
+        if night_amplifier_core::render::denoise::ai::benchmark_pending(&state.plugins) {
+            return Err(ApiError::HardwareBenchmarkRunning);
+        }
+
+        // A capture paused for recovery is still running. One still stopping polls the
+        // cancel flag this Start would reset, and would capture on behind an `Idle` state.
+        let refusal = |current| match current {
+            CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering => {
+                Some(ApiError::CaptureInProgress)
+            }
+            CaptureState::Stopping => Some(ApiError::CaptureStillStopping),
+            CaptureState::Idle | CaptureState::Error => None,
+        };
+        if let Some(refused) = refusal(state.capture_state()) {
+            return Err(refused);
+        }
+
+        // A capture always runs on the imaging camera. The roster's selection is what the
+        // settings panel is editing, which since roles exist can be the guide camera —
+        // resolving through it would start a stacking session on the guide scope.
+        let camera_id = match camera_id {
+            Some(id) => id,
+            None => state
+                .camera_in_role(CameraRole::Main)
+                .map(|info| info.id)
+                .ok_or(ApiError::NoCameraSelected)?,
+        };
+
+        // Verify the named camera is connected, and is the imaging one.
+        //
+        // Both arms name the camera rather than its id: the id is what the client sent,
+        // not something the reader recognises. A camera that is not connected has no
+        // name to look up, so that arm falls back to the id — which is the honest
+        // answer there, since nothing in the rig claims it.
+        match state.role_of(&camera_id) {
+            Some(CameraRole::Main) => {}
+            Some(role) => {
+                let camera = state
+                    .connected_camera_name(&camera_id)
+                    .unwrap_or(camera_id);
+                return Err(ApiError::CaptureCameraIsNotMain {
+                    camera,
+                    held: role.label(),
+                });
+            }
+            None => return Err(ApiError::CameraNotConnected(camera_id)),
+        }
+
+        // The check above answers early; this one decides. A bare read lets two concurrent
+        // Starts both pass, each spawning a capture loop on the one camera.
+        state
+            .transition_capture_state(|current| {
+                refusal(current).is_none().then_some(CaptureState::Starting)
+            })
+            .map_err(|current| refusal(current).unwrap_or(ApiError::CaptureInProgress))?;
+
+        // A fresh start discards any stack a previous session parked for a reconnect —
+        // only `resume_capture` inherits one.
+        state.reset_cancel();
+        state.reset_session();
+        state.resume.clear_stack();
+        // What the view still shows is the previous session's picture. 2026-10-12: a
+        // Start whose camera never delivered served it as live for three minutes.
+        state.main_stream.clear();
+        // The observer's own Start is a fresh attempt, not one more frameless reopen.
+        if let Some(camera) = state.camera_in_role(CameraRole::Main) {
+            camera_health::forget_frameless_opens(state, CameraRole::Main, &camera.info.name);
+        }
+
+        // *After* the state moves off `Idle`, which is what closes the window: from here
+        // `update_settings` refuses to enter the mode, so nothing can turn it back on
+        // between this call and the first frame. Clearing before the state change left a
+        // request that had already read `Idle` free to land behind us.
+        Self::leave_focus_mode_for_capture(state).await;
+
+        info!(camera_id = %camera_id, "Starting capture session");
+
+        // The resume plan is recorded by the capture loop once the disk session
+        // exists — recording it here would capture the *previous* session's
+        // directory, or none at all.
+        Self::spawn_capture(state, camera_id.clone(), None);
+
+        Ok(camera_id)
+    }
+
+    /// Leave Focus/Finder mode if the capture about to run would stack under it.
+    ///
+    /// The mode drops a raw-mosaic correction, and a stack integrated without it can
+    /// never be cleaned again. `update_settings` refuses to *enter* the mode while
+    /// stacking; this closes the other order, where the observer was already focusing
+    /// and then pressed Start (live view keeps the mode). Silent by design: it restores
+    /// the observer's own values at the moment they start mattering, and the
+    /// `SettingsUpdated` broadcast moves the toggle in every client.
+    async fn leave_focus_mode_for_capture(state: &Arc<AppState>) {
+        // Both callers have just moved the state to `Starting`; a resume has already
+        // restored the plan's stacking mode (`reconnect::restore_settings`).
+        if state
+            .leave_focus_mode_if_conflicting(CaptureState::Starting)
+        {
+            info!("Leaving Focus/Finder mode: a stacking capture is starting");
+        }
+    }
+
+    /// Restart the capture a device fault interrupted, in the mode it was running in
+    /// and on top of the stack it had already accumulated.
+    ///
+    /// Deliberately not `start_capture`: that resets the session counters and opens a
+    /// new raw-frame directory, throwing away a live-stacking session's last hour.
+    /// Only a capture paused for recovery resumes, and it leaves the pause with one
+    /// compare-and-set: a Stop or Disconnect that ends the pause first makes this
+    /// `CaptureNotPaused` instead of a capture restarted behind the observer's back.
+    pub async fn resume_capture(state: &Arc<AppState>, plan: &SessionResumePlan) -> ApiResult<()> {
+        if !state.roster.contains(&plan.camera_id) {
+            return Err(ApiError::CameraNotConnected(plan.camera_id.clone()));
+        }
+        let paused =
+            |current| (current == CaptureState::Recovering).then_some(CaptureState::Starting);
+        if let Err(current) = state.transition_capture_state(paused) {
+            return Err(match current {
+                CaptureState::Capturing | CaptureState::Starting => ApiError::CaptureInProgress,
+                _ => ApiError::CaptureNotPaused,
+            });
+        }
+
+        state.reset_cancel();
+
+        // After the state change, for the reason `start_capture` gives.
+        Self::leave_focus_mode_for_capture(state).await;
+
+        info!(camera_id = %plan.camera_id, "Resuming capture session");
+
+        Self::spawn_capture(state, plan.camera_id.clone(), Some(plan.clone()));
+        Ok(())
+    }
+
+    fn spawn_capture(state: &Arc<AppState>, camera_id: String, resume: Option<SessionResumePlan>) {
+        let state = Arc::clone(state);
+        tokio::spawn(async move {
+            run_capture_loop(state, camera_id, resume).await;
+        });
+    }
+
+    /// Stop the current capture session
+    pub async fn stop_capture(state: &Arc<AppState>) -> bool {
+        let stopped = state.transition_capture_state(|current| match current {
+            CaptureState::Idle => None,
+            // A capture paused for recovery has no pipeline left to wind down and report
+            // `Idle` when it has; the camera keeps recovering, with nothing to resume.
+            CaptureState::Recovering => Some(CaptureState::Idle),
+            _ => Some(CaptureState::Stopping),
+        });
+        if stopped.is_err() {
+            return false;
+        }
+        state.request_cancel();
+
+        // A deliberate stop is not something to recover from: drop the resume
+        // plan and the parked stack rather than holding full-resolution
+        // accumulators until the next session.
+        state.resume.clear();
+
+        // Clear Push-To target when capture is stopped
+        let _ = super::PushToService::clear_target(state).await;
+
+        info!("Capture session stopping");
+        true
+    }
+}

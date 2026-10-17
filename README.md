@@ -22,18 +22,9 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Camera SDK Support
 
-Camera SDKs are loaded at runtime and are **optional**: without one installed the binary still runs, with that brand
-disabled. They are not shipped with Night Amplifier — install each from its vendor (see Camera SDK Setup below). Every provider is a default Cargo feature (`playerone`, `zwo`, `qhy`, `touptek`, `svbony`, `indi`).
-
-| Provider   | SDK Required                                                         | Supported                                                 |
-|------------|----------------------------------------------------------------------|-----------------------------------------------------------|
-| Player One | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                        |
-| ZWO (ASI)  | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| ToupTek    | [ToupTek SDK](http://www.touptek.com/download/)                      | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| QHYCCD     | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| SVBony     | [SVBony SDK](https://www.svbony.com/downloads)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| INDI       | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| Simulated  | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                        |
+Player One, ZWO, ToupTek, QHYCCD, SVBony and INDI cameras, plus a simulator. Camera SDKs are optional and loaded at
+runtime; install the ones you need as described in [System dependencies](system-dependencies.md), which also lists what
+AI denoising needs to use a GPU or an NPU.
 
 ## Features
 
@@ -54,6 +45,7 @@ disabled. They are not shipped with Night Amplifier — install each from its ve
 > - **Comet Stacking** - aligns frames on the comet's nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
 > - **Advanced Outlier Rejection** - removes satellites, planes and hot pixels (Sigma clipping, Winsorized, Min-Max)
 > - **Advanced Background Extraction** - Radial Basis Function background model
+> - **AI Denoising** - a neural network on the fastest NPU or GPU found by a one-time hardware benchmark
 
 ## Frame Storage
 
@@ -127,8 +119,9 @@ cd night-amplifier-*/
 
 ### Building Locally
 
-Local builds are optimized for your specific CPU architecture (`-C target-cpu=native`), which is critical for maximum
-performance on devices like Raspberry Pi 5 or Orange Pi 5.
+Local Arm builds are optimized for the CPU they are built on (`-C target-cpu=native`), which is critical for maximum
+performance on devices like Raspberry Pi 5 or Orange Pi 5. x86-64 builds target `x86-64-v3` (any CPU with AVX2) so the
+archive runs on other computers; pass `--target-cpu native` to tune it to this machine only.
 
 ```bash
 ./scripts/build-dist.sh
@@ -148,7 +141,7 @@ The archive is created in `dist/`. Extract and run `./night-amplifier`.
 | Flag                 | Description                          |
 |----------------------|--------------------------------------|
 | `--target <triple>`  | Rust target triple (default: host)   |
-| `--target-cpu <cpu>` | CPU optimization (default: `native`) |
+| `--target-cpu <cpu>` | CPU optimization (default: `x86-64-v3` on x86-64, `native` on Arm) |
 | `--cross`            | Use `cross` for cross-compilation    |
 | `--no-frontend`      | Skip web frontend build              |
 | `--appimage`         | Also create an AppImage              |
@@ -174,62 +167,7 @@ cargo build --release       # or `cargo build` for a debug build
 cargo test
 ```
 
-#### Camera SDK Setup (Linux, optional)
-
-Each SDK is needed only to use its brand. Install udev rules (USB permissions) and the shared library as shown per
-vendor below, then **unplug and replug the camera**; `ldconfig -p | grep <library>` confirms the library is found.
-Player One, ZWO, QHYCCD and SVBony SDKs need **libusb-1.0**; Player One also lists **libclang** (bindgen):
-
-```bash
-sudo apt-get install libusb-1.0-0 libclang-dev   # Debian/Ubuntu/Raspberry Pi OS
-sudo dnf install libusb-1.0 clang-devel          # Fedora
-sudo pacman -S libusb clang                      # Arch Linux/Manjaro
-```
-
-#### Player One Setup
-
-From the extracted [Player One SDK](https://player-one-astronomy.com/service/software/):
-
-```bash
-sudo install 99-player_one_astronomy.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp libPlayerOneCamera.so /usr/local/lib/ && sudo ldconfig
-ldconfig -p | grep PlayerOne
-```
-
-#### ZWO Setup
-
-From the extracted [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers):
-
-```bash
-sudo install lib/asi.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp include/ASICamera2.h /usr/local/include/                   # header, required for building
-sudo cp lib/x64/libASICamera2.so /usr/local/lib/ && sudo ldconfig  # ARM (Raspberry Pi): lib/armv8/libASICamera2.so
-ldconfig -p | grep ASICamera
-```
-
-#### QHY Setup
-
-From the extracted [QHYCCD SDK](https://www.qhyccd.com/download/):
-
-```bash
-sudo install sdk/linux/mac/rules/85-qhyccd.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp sdk/linux/mac/lib/libqhyccd.so* /usr/local/lib/ && sudo ldconfig
-ldconfig -p | grep qhyccd
-```
-
-#### ToupTek Setup
-
-Needs `libtoupcam.so` / `libtoupcam.dylib` / `toupcam.dll`: the Linux SDK from the
-[ToupTek Download Page](http://www.touptek.com/download/), or up-to-date binaries for all architectures from the
-[INDIGO repository](https://github.com/indigo-astronomy/indigo/tree/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam).
-Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera (often shipped by the
-manufacturer or INDI), then replug. Check: `ldconfig -p | grep toupcam`.
-
-#### SVBony Setup
-
-Needs `libSVBony.so` / `libSVBCameraSDK.dylib` / `SVBony.dll` from the [SVBony Downloads Page](https://www.svbony.com/downloads).
-Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera, then replug. Check:
-`ldconfig -p | grep SVBony`.
+Camera SDK installation and udev rules: see [System dependencies](system-dependencies.md#camera-sdks).
 
 ### Web Server
 
@@ -312,6 +250,12 @@ Push-To events on `/ws/events`:
 | `plate_solving_restarted` | Abandoned because something it depended on changed; a retry follows |
 | `push_to_blocked`         | Why solving is idle (`reason: null` clears the notice)              |
 | `push_direction_updated`  | Sent only when the direction actually changes                       |
+| `push_direction_cleared`  | No direction (the target changed or was cleared)                    |
+| `plate_solving_status`    | The whole solve state: running, stage, last verdict                 |
+
+Target, direction, solve and blocker are each restated in the sync snapshot a client gets on connect and after a lag
+(`target_*`, `push_direction_*`, `plate_solving_status`, `push_to_blocked`), and `GET /api/push-to/status` carries the
+same solve and blocker, so a lost event never leaves "Searching…" or a stale arrow up.
 
 #### Live Stream Scaling
 
@@ -324,10 +268,10 @@ receives the same frame, so ten phones cost one encode per frame, and a stream n
 
 To add support for a new camera manufacturer:
 
-1. Create a new module in `src/camera/` (e.g., `zwo.rs`)
+1. Create a new module in `crates/core/src/camera/` (e.g., `zwo.rs`)
 2. Implement the `Camera` trait for your camera handle
 3. Implement the `CameraProvider` trait for discovery/factory
-4. Add the feature flag to `Cargo.toml`
+4. Add the feature flag to `crates/core/Cargo.toml`, forwarded from the root `Cargo.toml`
 5. Register in `CameraRegistry::register_defaults()`
 
 ### OpenTelemetry
@@ -362,7 +306,7 @@ OpenTelemetry Collector, Prometheus (metrics) and Grafana (dashboards); then run
 
 ### Web Frontend
 
-Vue 3 interface for camera control from any browser: mobile-first, dark theme for night use, real-time WebSocket
+Vue 3 and strict TypeScript interface for camera control from any browser: mobile-first, dark theme for night use, real-time WebSocket
 streaming (dynamic JPEG for WiFi, LZ4 for the lossless eyepiece), WebGL rendering with Canvas2D fallback,
 pinch-to-zoom, and Push-To and Comet Stacking panels (Pro). All npm commands run from `web/`:
 
@@ -371,9 +315,18 @@ npm install
 npm run dev       # development server, proxies API to localhost:9955
 npm run build     # production build to web/dist/, which the server binary embeds
 npm test          # tests in watch mode (npm run test:run: single run)
-npm run lint      # check for issues (npm run lint:fix: auto-fix)
-npm run format    # format with Prettier
+npm run typecheck # vue-tsc over the TypeScript (CI runs it; build does not)
+npm run lint      # check for issues, type-aware for promises (npm run lint:fix: auto-fix)
 ```
+
+`src/composables/api.types.ts` (TypeScript types of the server's answers) is generated from the Rust types,
+`src/composables/api.settings.ts` (default settings and the ranges the server clamps them to) from the code that
+enforces them, and `src/composables/api.events.ts` (every `/ws/events` event, and `SERVER_EVENTS`: the topic each
+states) from `ServerEvent` and one sample per variant (`ServerEvent::examples()`), which the tests' event builder
+also starts from (`src/test/api.examples.ts`); after changing any, run
+`UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types` from the repository root. A new event
+needs a sample, and the frontend's guard tests (`useEventStream.catalogue.test.ts`) fail one that states a topic
+nobody follows.
 
 ## License
 

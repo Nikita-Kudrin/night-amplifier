@@ -10,16 +10,13 @@ use std::f32::consts::PI;
 use std::hint::black_box;
 use std::time::Duration;
 
-/// Warp invocations per measured iteration.
+/// Warp invocations per measured iteration. A 2048x2048 warp is ~9 ms; twelve passes
+/// clears the ~100 ms floor with the frame size — and therefore the rayon task shape —
+/// left alone. **The reported `time:` is for `REPS` warps, not one.**
 ///
-/// A 2048x2048 warp is ~9 ms. Twelve passes clears the ~100 ms floor with the frame
-/// size — and therefore the rayon task shape — left alone.
-/// **The reported `time:` is for `REPS` warps, not one.**
-///
-/// Sound because `warp_frame` is pure: it reads a `&Frame` and returns a fresh one.
-///
-/// The 1024x1024 cases were dropped rather than repeated harder; they exercised the
-/// same kernel as the 2048x2048 ones and the bench binary has a ~30 s budget.
+/// Sound because `warp_frame` is pure: reads a `&Frame`, returns a fresh one. The
+/// 1024x1024 cases were dropped rather than repeated harder — same kernel as the
+/// 2048x2048 ones, and the bench binary has a ~30 s budget.
 const REPS: usize = 12;
 
 /// Generate a synthetic frame for benchmarking

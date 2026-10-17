@@ -8,9 +8,25 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
+/// How long a shutdown waits for the captures to stop and their files to reach the disk:
+/// inside systemd's default 90 s `TimeoutStopSec`, after which it kills the process anyway.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(75);
+
+/// The version the binary reports — the release's, when `build-dist.sh` names one — set
+/// by `main` before `run`.
 pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Pro's own `git describe`, set by the Pro binary: Community's build script sees only
+/// Community's checkout, so a Pro build's commit was in no log.
+pub static PRO_GIT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// [`APP_VERSION`], or this crate's own when `main` set none (tests).
+fn app_version() -> &'static str {
+    APP_VERSION.get().map_or(env!("CARGO_PKG_VERSION"), String::as_str)
+}
 
 /// Command line arguments
 struct Args {
@@ -125,7 +141,7 @@ impl Args {
         //
         // This used to be hardcoded to `web`, which meant that running the binary
         // anywhere near a checkout served the Vite *source* template — the one that
-        // loads `/src/main.js` and untransformed `.vue` files — in place of the built
+        // loads `/src/main.ts` and untransformed `.vue` files — in place of the built
         // bundle, for a frontend that could not start. Nothing depends on it: `npm run
         // dev` serves the UI from Vite and proxies `/api` and `/ws` here, so the
         // embedded bundle is the right default for every way the server is actually run.
@@ -203,14 +219,14 @@ async fn check_otlp_reachable(endpoint: &str) {
     let connect = tokio::net::TcpStream::connect((host.as_str(), port));
     match tokio::time::timeout(std::time::Duration::from_millis(500), connect).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => warn!(
+        Ok(Err(e)) => tracing::warn!(
             endpoint,
             error = %e,
             "OTLP collector unreachable — traces/metrics will not export until it is. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
              than this app (the default only works when both are on the same machine)."
         ),
-        Err(_) => warn!(
+        Err(_) => tracing::warn!(
             endpoint,
             "OTLP collector did not respond within 500ms — traces/metrics may not export. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
@@ -235,54 +251,35 @@ fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// Run the Night Amplifier server. Call `register_plugins` before logging is
-/// initialized, to register Pro plugin implementations into the global OnceLock
-/// registries — pass a no-op closure (or nothing) for the Community edition.
-///
-/// ```ignore
-/// night_amplifier::app::run(|| { BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok(); }).await;
-/// ```
 /// What the startup system report needs from the application (`system_info::AppContext`).
 fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_info::AppContext {
-    let plugins = [
-        ("push_to", crate::PUSH_TO_PLUGIN.get().is_some()),
-        (
-            "rejection",
-            crate::stacking::REJECTION_PLUGIN.get().is_some(),
-        ),
-        ("comet", crate::stacking::COMET_PLUGIN.get().is_some()),
-        (
-            "background",
-            crate::background::BACKGROUND_PLUGIN.get().is_some(),
-        ),
-        (
-            "planetary",
-            crate::planetary::PLANETARY_PLUGIN.get().is_some(),
-        ),
-        (
-            "saturation",
-            crate::render::SATURATION_PLUGIN.get().is_some(),
-        ),
-    ];
     crate::system_info::AppContext {
         port: args.port,
         static_dir: args.static_dir.clone(),
         log_dir,
-        settings_file: crate::server::DEFAULT_SETTINGS_FILE.into(),
+        settings_file: crate::session::settings_persistence::DEFAULT_SETTINGS_FILE.into(),
         pro_active: crate::license::is_pro_active(),
-        plugins: plugins
-            .into_iter()
-            .filter_map(|(name, registered)| registered.then_some(name))
-            .collect(),
-        frame_queue_budget_bytes: crate::server::capture::channel::frame_queue_budget_bytes(),
+        plugins: crate::plugins::Plugins::installed().registered(),
+        frame_queue_budget_bytes: crate::session::capture::channel::frame_queue_budget_bytes(),
+        build: crate::system_info::BuildFacts {
+            version: app_version(),
+            git: option_env!("NIGHT_AMPLIFIER_GIT_DESCRIBE").unwrap_or("unknown"),
+            pro_git: PRO_GIT.get().copied(),
+            target: option_env!("NIGHT_AMPLIFIER_TARGET").unwrap_or("unknown"),
+            target_cpu: option_env!("NIGHT_AMPLIFIER_TARGET_CPU").unwrap_or("unknown"),
+            rustc: option_env!("NIGHT_AMPLIFIER_RUSTC_VERSION").unwrap_or("unknown"),
+        },
     }
 }
 
-pub async fn run(register_plugins: impl FnOnce()) {
+/// Run the Night Amplifier server with `plugins` — [`Plugins::none`] for Community, Pro's
+/// set for Pro. Installed before anything else, so every later reader sees them.
+///
+/// [`Plugins::none`]: crate::plugins::Plugins::none
+pub async fn run(plugins: crate::plugins::Plugins) {
     let args = Args::parse();
 
-    // Register plugins before anything else
-    register_plugins();
+    crate::plugins::install(plugins);
 
     // Build logging configuration
     #[cfg(feature = "telemetry")]
@@ -320,7 +317,7 @@ pub async fn run(register_plugins: impl FnOnce()) {
     let log_dir = log_config.log_dir.clone();
     let _log_guard = init_logging(log_config).expect("Failed to initialize logging");
 
-    info!("Night Amplifier - EAA Live Stacking Server");
+    info!(version = app_version(), "========== Night Amplifier - EAA Live Stacking Server is starting");
     crate::system_info::log_startup_report(startup_context(&args, log_dir)).await;
 
     if args.span_timings {
@@ -363,19 +360,58 @@ pub async fn run(register_plugins: impl FnOnce()) {
 
     // Apply CLI overrides for INDI if present
     if args.indi_host.is_some() || args.indi_port.is_some() {
-        let state = server.state();
-        let mut settings = state.settings.write().await;
-        if let Some(host) = args.indi_host {
-            settings.indi_server_host = host;
-        }
-        if let Some(port) = args.indi_port {
-            settings.indi_server_port = port;
-        }
+        server.state().settings.update(|settings| {
+            if let Some(host) = args.indi_host {
+                settings.indi_server_host = host;
+            }
+            if let Some(port) = args.indi_port {
+                settings.indi_server_port = port;
+            }
+        });
     }
 
-    if let Err(e) = server.run().await {
-        error!("Server error: {}", e);
-        std::process::exit(1);
+    let state = server.state();
+    tokio::select! {
+        served = server.run() => {
+            if let Err(e) = served {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        () = shutdown_signal() => {
+            info!("Shutting down: stopping the cameras and saving to disk (a second signal exits at once)");
+            tokio::select! {
+                () = crate::session::services::CaptureService::shut_down(&state, SHUTDOWN_BUDGET) => info!("Shut down"),
+                () = shutdown_signal() => warn!("Second signal: exiting without waiting for the captures"),
+            }
+            // Not a return: the runtime's drop waits on every blocking task, and a vendor
+            // call stuck in one would hold the exit past systemd's patience.
+            drop(_log_guard);
+            std::process::exit(0);
+        }
+    }
+}
+
+/// Ctrl-C, or `SIGTERM` from `systemctl stop` and a system shutdown. A handler that cannot
+/// be installed waits for ever, so it never reads as a signal.
+async fn shutdown_signal() {
+    let interrupt = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => drop(terminate.recv().await),
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = interrupt => {}
+        () = terminate => {}
     }
 }
 
@@ -393,7 +429,7 @@ mod tests {
 
     /// The regression this flag exists for. `static_dir` was hardcoded to `web`, so a
     /// binary run from anywhere near a checkout served the Vite *source* template —
-    /// which loads `/src/main.js` and untransformed `.vue` files — instead of the
+    /// which loads `/src/main.ts` and untransformed `.vue` files — instead of the
     /// embedded bundle, and the frontend never started. Nothing may infer it.
     #[test]
     fn the_frontend_is_embedded_unless_asked_otherwise() {

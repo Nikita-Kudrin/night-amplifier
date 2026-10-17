@@ -1,36 +1,11 @@
-//! Benchmark for `compute_image_stats` — the robust per-channel median/MAD.
-//!
-//! Run with: cargo bench --bench statistics_benchmark
-//!
-//! This runs at least once per rendered frame, inside `prepare_auto_stretch_frame`, and
-//! its output is what the whole tone curve is solved against. It had no benchmark, which
-//! is how a stage reported at 13.3 ms of a 300 ms `render_iteration` in production traces
-//! stayed invisible to CI.
-//!
-//! Uncontended it is **3.3 ms**, near the 4.4 ms *minimum* the same traces recorded and
-//! well under their 13.3 ms mean. That gap is not this stage getting slower under load;
-//! it is the render and stacking threads sharing one rayon pool. Worth remembering before
-//! reading any single trace figure as the cost of the work.
-//!
-//! A separate binary rather than a fifth group in `render_benchmark`: that file is
-//! already at ~28 s of the ~30 s budget with four groups, which is the same reason
-//! `scale_lut_benchmark` was split out of it.
-//!
-//! # What the cases are for
-//!
-//! `max_samples` is the one lever this stage has, and the cases bracket it: the shipped
-//! 100 k, a quarter of it, and no sampling at all.
-//!
-//! `full_precision` is not a production candidate — it reads every pixel of every plane
-//! — but it is the case that says where the time goes. It puts **42x** the samples
-//! through the same median and MAD arithmetic with no gather at all, so comparing it
-//! against `default_100k` separates the strided gather from the two `select_nth` passes
-//! that follow it. That comparison is the reason this file exists: the gather was
-//! assumed to dominate, and it does not.
-//!
-//! `compute_image_stats_with_config` is pure (`&Frame` in, fresh `ImageStats` out), so
-//! each case repeats it `REPS` times inside `b.iter`.
-//! **The reported `time:` is for `REPS` invocations, not one.**
+//! Benchmark for `compute_image_stats` — the robust per-channel median/MAD, run at least
+//! once per frame inside `prepare_auto_stretch_frame`. Unbenchmarked, it stayed invisible
+//! at 13.3 ms of a 300 ms `render_iteration` in production traces; uncontended it's
+//! **3.3 ms** — the traced mean is contention from sharing one rayon pool with stacking,
+//! not a slower stage. Separate binary: `render_benchmark` already fills ~28/30 s budget.
+//! Cases bracket `max_samples` (shipped 100k / quarter / none) and `full_precision`
+//! (**42x** the samples, no gather) — comparing it to `default_100k` isolates the gather
+//! from the two `select_nth` passes; the gather was assumed to dominate and does not.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
 use night_amplifier::frame::Frame;
@@ -74,12 +49,14 @@ fn create_sky_frame() -> Frame {
     frame
 }
 
-/// A sampled pass is ~3.3 ms, so 24 repeats clears the ~100 ms floor.
-const SAMPLED_REPS: usize = 24;
+/// The shipped pass is ~0.74 ms, so 144 repeats clear the ~100 ms floor.
+const DEFAULT_REPS: usize = 144;
 
-/// `full_precision` reads all 4.2 M pixels of all three planes at ~103 ms a pass, so a
-/// single one already clears the floor. Two would put this binary over the ~30 s budget.
-const FULL_REPS: usize = 1;
+/// A quarter of the samples is ~0.24 ms a pass.
+const QUARTER_REPS: usize = 432;
+
+/// `full_precision` reads all 4.2 M pixels of all three planes at ~20 ms a pass.
+const FULL_REPS: usize = 6;
 
 fn bench_image_stats(c: &mut Criterion) {
     let frame = create_sky_frame();
@@ -93,8 +70,8 @@ fn bench_image_stats(c: &mut Criterion) {
     let default = StatsConfig::default();
 
     for (name, config, reps) in [
-        ("default_100k", default, SAMPLED_REPS),
-        ("sampled_25k", default.with_max_samples(25_000), SAMPLED_REPS),
+        ("default_100k", default, DEFAULT_REPS),
+        ("sampled_25k", default.with_max_samples(25_000), QUARTER_REPS),
         (
             "full_precision",
             StatsConfig::default().full_precision(),

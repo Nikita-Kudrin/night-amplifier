@@ -1,0 +1,113 @@
+import {ref, watch} from 'vue'
+import type {DeepReadonly} from 'vue'
+import {tryOnScopeDispose} from './lifecycle'
+import {formatResolution, formatTemperature} from '../utils/format'
+import {CAMERA_PHASES, STACKING_TYPES} from '../constants'
+import type {AppContext} from './appContext'
+import type {Camera} from './api.types'
+
+/** A camera as the camera list hands it out. */
+type ListedCamera = DeepReadonly<Camera>
+
+/** The shared stores the badges read; nothing here talks to the server. */
+export interface CameraBadgeSources {
+    /** Status by camera name. */
+    cameraStatus: AppContext['cameraStatus']
+    /** Phase by camera name. */
+    cameraPhase: AppContext['cameraPhase']
+    /** Warm-up deadline (ms) by camera name. */
+    warmupEndsAt: AppContext['warmupEndsAt']
+    /** The server settings. */
+    settings: AppContext['settings']
+}
+
+/** "Main" or "Guide" for a connected camera; null for one in neither role. */
+export function roleLabel(cam: Pick<ListedCamera, 'role'> | null | undefined) {
+    if (cam?.role === 'guide') return 'Guide'
+    if (cam?.role === 'main') return 'Main'
+    return null
+}
+
+/**
+ * The badges a camera row carries: its role, resolution, phase (with the warm-up
+ * countdown), sensor mode and temperature. All read from the shared stores the panel is
+ * given; nothing here talks to the server.
+ */
+export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings}: CameraBadgeSources) {
+    function resolutionOf(cam: ListedCamera) {
+        return formatResolution(cam.info.max_width, cam.info.max_height)
+    }
+
+    function temperaturePill(cam: ListedCamera) {
+        if (!cam.info.has_cooler) return null
+        const status = cameraStatus.value[cam.name]
+        if (!status) return null
+        return formatTemperature(status.temperature_c)
+    }
+
+    function phaseOf(cam: ListedCamera) {
+        return cameraPhase.value[cam.name] || null
+    }
+
+    function isWarmingUp(cam: ListedCamera) {
+        return phaseOf(cam) === CAMERA_PHASES.WARMING_UP
+    }
+
+    // Minute resolution is enough for a countdown of a few minutes; ticks only while a
+    // warm-up has a known deadline.
+    const now = ref(Date.now())
+    let clock: ReturnType<typeof setInterval> | undefined
+    watch(
+        () => Object.keys(warmupEndsAt.value).length > 0,
+        (counting) => {
+            clearInterval(clock)
+            clock = counting ? setInterval(() => (now.value = Date.now()), 15000) : undefined
+        },
+        {immediate: true}
+    )
+    tryOnScopeDispose(() => clearInterval(clock))
+
+    /** "up to N min" until the server cuts the warm-up short, when it said when. */
+    function warmupLeft(cam: ListedCamera) {
+        const endsAt = warmupEndsAt.value[cam.name]
+        if (!endsAt) return null
+        return `up to ${Math.max(1, Math.ceil((endsAt - now.value) / 60000))} min`
+    }
+
+    function phaseLabel(cam: ListedCamera) {
+        const phase = phaseOf(cam)
+        if (phase === CAMERA_PHASES.PRECOOLING) return 'Precooling'
+        if (phase === CAMERA_PHASES.WARMING_UP) {
+            const left = warmupLeft(cam)
+            return left ? `Warming up, ${left}` : 'Warming up'
+        }
+        // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
+        // and the green role badge next to it already says so.
+        return null
+    }
+
+    function sensorModePill(cam: ListedCamera) {
+        const modes = cam.info.sensor_modes
+        if (!modes || modes.length === 0) return null
+        const isGuide = cam.role === 'guide'
+        const override = isGuide
+            ? settings.value?.guide_camera.sensor_mode_override
+            : settings.value?.sensor_mode_override
+        // Mirrors the backend's `is_actively_stacking` gate in
+        // `to_capture_config_with()` (session/state/settings.rs): Low Noise only
+        // pays its frame-rate cost while frames are being integrated.
+        // `stacking_type !== 'planetary'` stands for "DeepSky or Comet" since
+        // `StackingType::supports_stacking()` is true for every variant today.
+        // `wanderer_mode` need not appear: the UI always pairs `stacking: true`
+        // with it (see `applyStackingMode` in CaptureControls.vue). Never true
+        // for the guide camera: nothing it produces is stacked.
+        const isActivelyStacking =
+            !isGuide && settings.value?.stacking && settings.value.stacking_type !== STACKING_TYPES.PLANETARY
+        const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
+        const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
+        const match = modes.find((m) => needle.test(m.name))
+        return (match ?? modes[0]).name
+    }
+
+    return {roleLabel, formatResolution: resolutionOf, temperaturePill, isWarmingUp, phaseLabel, sensorModePill}
+}

@@ -1,23 +1,19 @@
-<script setup>
-const props = defineProps({
-  databases: {
-    type: Array,
-    required: true,
-    // Each database: { id, description, min_fov_deg, max_fov_deg, size, installed }
-  },
-  modelValue: {
-    type: Array,
-    default: () => [],
-  },
-  hint: {
-    type: String,
-    default: '',
-  },
+<script setup lang="ts">
+import type {DatabaseType} from '../../composables/api.types'
+
+const props = withDefaults(defineProps<{
+  databases: readonly DatabaseType[]
+  /** The ids of the databases chosen to install. */
+  modelValue?: readonly string[]
+  hint?: string
+}>(), {
+  modelValue: () => [],
+  hint: '',
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{'update:modelValue': [ids: string[]]}>()
 
-function toggleDatabase(dbId) {
+function toggleDatabase(dbId: string) {
   const current = [...props.modelValue]
   const index = current.indexOf(dbId)
   if (index >= 0) {
@@ -28,11 +24,11 @@ function toggleDatabase(dbId) {
   emit('update:modelValue', current)
 }
 
-function isSelected(dbId) {
+function isSelected(dbId: string) {
   return props.modelValue.includes(dbId)
 }
 
-function formatFovRange(db) {
+function formatFovRange(db: DatabaseType) {
   return `${db.min_fov_deg}°–${db.max_fov_deg}°`
 }
 </script>
@@ -73,7 +69,7 @@ function formatFovRange(db) {
 
 <style scoped>
 .section-hint {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   margin: 0 0 0.75rem;
 }
@@ -90,9 +86,9 @@ function formatFovRange(db) {
   gap: 0.75rem;
   padding: 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color var(--transition-normal), background var(--transition-normal);
 }
 
 .database-option:hover:not(.installed) {
@@ -101,12 +97,13 @@ function formatFovRange(db) {
 
 .database-option.selected {
   border-color: var(--primary);
-  background: rgba(74, 158, 255, 0.1);
+  background: var(--primary-bg);
 }
 
+/* Settled, not chosen: untinted, so it does not read as one more selected row (both tints are red). */
 .database-option.installed {
-  border-color: var(--success, #22c55e);
-  background: rgba(34, 197, 94, 0.05);
+  border-color: var(--success-border);
+  background: var(--surface);
   cursor: default;
 }
 
@@ -122,7 +119,7 @@ function formatFovRange(db) {
 }
 
 .database-name {
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -135,7 +132,7 @@ function formatFovRange(db) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -154,9 +151,9 @@ function formatFovRange(db) {
 }
 
 .installed-badge {
-  color: var(--success, #22c55e);
+  color: var(--success);
   font-weight: 600;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
 }
 </style>

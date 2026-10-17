@@ -1,15 +1,12 @@
-<script setup>
+<script setup lang="ts">
 import {computed} from 'vue'
 
-const props = defineProps({
-  feature: {
-    type: String,
-    default: 'This specialized'
-  },
-  size: {
-    type: String,
-    default: '12px'
-  }
+const props = withDefaults(defineProps<{
+  feature?: string
+  size?: string
+}>(), {
+  feature: 'This specialized',
+  size: '12px'
 })
 
 const tooltipText = computed(() => `${props.feature} feature requires Night Amplifier Pro`)
@@ -36,14 +33,14 @@ const tooltipText = computed(() => `${props.feature} feature requires Night Ampl
   align-items: center;
   justify-content: center;
   margin-left: 4px;
-  color: var(--primary, #4a9eff);
+  color: var(--primary);
   cursor: help;
   vertical-align: middle;
 }
 
 .pro-lock-icon {
   opacity: 0.8;
-  transition: transform 0.2s;
+  transition: transform var(--transition-normal);
 }
 
 .pro-lock-container:hover .pro-lock-icon {

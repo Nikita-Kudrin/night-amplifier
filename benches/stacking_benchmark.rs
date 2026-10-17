@@ -5,8 +5,14 @@
 //! `MasterStack::add_frame` without rejection is Community's per-frame stacking kernel, and
 //! also what Pro runs with rejection set to None. Pro's `rejection_benchmark` covers the
 //! clipping kernel; nothing measured this one, so its non-finite skip was priced by hand.
+//!
+//! `registration` prices the all-star refit every registered sub pays after the ladder, and
+//! the whole of `AdaptiveRegistration::register`: on a rich field (the ladder's first
+//! rung) and on a thin sub whose stars only translation voting finds.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
+use night_amplifier::detection::Star;
+use night_amplifier::registration::{refine_transform, AdaptiveRegistration, AffineTransform};
 use night_amplifier::stacking::{MasterStack, RejectionMethod, StackingConfig};
 use night_amplifier::Frame;
 use std::hint::black_box;
@@ -70,8 +76,113 @@ fn plain_mean_benchmark(c: &mut Criterion) {
         })
     });
 
+    // The display copy with and without the coverage map. `compute_with_coverage` takes
+    // both from one read of the 434 MB accumulator, so what it adds over `compute` is one
+    // plane's block medians of counts — the whole of the per-frame noise-map cost.
+    group.bench_function(format!("compute_3008x3008x3_x{REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REPS {
+                black_box(stack.compute().expect("compute"));
+            }
+        })
+    });
+    group.bench_function(format!("compute_with_coverage_3008x3008x3_x{REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REPS {
+                black_box(stack.compute_with_coverage().expect("compute_with_coverage"));
+            }
+        })
+    });
+
     group.finish();
 }
 
-criterion_group!(benches, plain_mean_benchmark);
+/// Stars per list: `detect_stars_adaptive`'s cap, which every dense field reaches.
+const STARS: usize = 200;
+
+/// Refits per measured iteration: one is ~26 us on x86, so 4000 clear the ~100 ms floor.
+const REFINE_REPS: usize = 4000;
+
+/// Whole registrations per measured iteration: the rich field's is the faster, at
+/// ~0.24 ms on x86 (the thin sub's ~1.5 ms, voting at nine turns), so 500 clear the
+/// ~100 ms floor.
+const REGISTER_REPS: usize = 500;
+
+/// `STARS` stars scattered over the sensor from a fixed seed, as detection hands them over.
+fn star_field() -> Vec<Star> {
+    scattered(STARS, 0x2545_F491, 100.0)
+}
+
+/// `count` stars of about `flux` scattered over the sensor from `seed`, brightest first.
+fn scattered(count: usize, seed: u64, flux: f32) -> Vec<Star> {
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 33) as f32 / (1u64 << 31) as f32
+    };
+    let mut stars: Vec<Star> = (0..count)
+        .map(|_| Star::new(next() * WIDTH as f32, next() * HEIGHT as f32, flux * (0.5 + next()), 0.5, 30.0))
+        .collect();
+    stars.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+    stars
+}
+
+/// `stars` as a sub displaced by `truth` would see them (target -> reference is `truth`).
+fn observed(stars: &[Star], truth: &AffineTransform) -> Vec<Star> {
+    stars
+        .iter()
+        .map(|s| {
+            let (x, y) = truth.inverse_transform_point(s.x, s.y);
+            Star::new(x, y, s.flux, s.peak, s.snr)
+        })
+        .collect()
+}
+
+/// A sub drifted and rotated against the reference, refined from a guess as far off as
+/// the ladder's on a real session (0.03 degrees, a pixel).
+fn refine_benchmark(c: &mut Criterion) {
+    let reference = star_field();
+    let truth = AffineTransform::new(0.0008, 1.0, -142.0, 110.0);
+    let target = observed(&reference, &truth);
+    let rough = AffineTransform::new(0.0013, 1.0, -141.0, 110.6);
+
+    let mut group = c.benchmark_group("registration");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(3));
+    group.bench_function(format!("refine_{STARS}_stars_x{REFINE_REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REFINE_REPS {
+                black_box(refine_transform(black_box(&reference), black_box(&target), &rough));
+            }
+        })
+    });
+
+    // A thin sub: 15 faint stars under 185 brighter detections that do not repeat.
+    let stars = scattered(15, 0x51ED_270B, 1.0);
+    let thin = |seed, shift: &AffineTransform| {
+        let mut list = observed(&stars, shift);
+        list.extend(scattered(STARS - stars.len(), seed, 100.0));
+        list.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+        list
+    };
+    let drift = AffineTransform::from_translation(-30.0, 7.0);
+    let cases = [
+        ("rich_field", reference.clone(), target.clone()),
+        ("thin_sub", thin(1, &AffineTransform::identity()), thin(2, &drift)),
+    ];
+    let registration = AdaptiveRegistration::new();
+    for (name, reference, target) in &cases {
+        group.bench_function(format!("register_{name}_x{REGISTER_REPS}"), |b| {
+            b.iter(|| {
+                for _ in 0..REGISTER_REPS {
+                    black_box(registration.register(black_box(reference), black_box(target)).ok());
+                }
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, plain_mean_benchmark, refine_benchmark);
 criterion_main!(benches);

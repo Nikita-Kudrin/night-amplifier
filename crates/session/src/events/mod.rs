@@ -1,0 +1,842 @@
+//! Server events for WebSocket communication
+//!
+//! Events are serialized to JSON using serde with automatic snake_case naming.
+
+mod ai_compute;
+mod camera_list;
+#[cfg(any(test, feature = "api-schema"))]
+mod examples;
+mod install;
+mod push_to;
+mod sync;
+
+pub use ai_compute::spawn_ai_compute_watcher;
+pub use camera_list::{CameraInfoResponse, CameraListEntry, SensorModeDto};
+pub use push_to::{PushDirection, PushToTarget, SolveStage, SolveStatus, SolveVerdict};
+pub use sync::{SyncCause, Topic, TopicKind};
+
+use night_amplifier_core::push_to::{InstallStage, PushToDirectionResponse};
+use serde::Serialize;
+
+use super::state::{
+    CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus, StorageSyncState, StorageSyncStatus,
+};
+
+/// Where the main stream's frames were cut from the stack, in the stack's pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct StreamCrop {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+    /// The uncropped stack's size.
+    pub source_width: usize,
+    pub source_height: usize,
+}
+
+/// The size of the `/ws/stream` frame a [`ServerEvent::StackCropChanged`] arrives with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct StreamFrameSize {
+    pub width: usize,
+    pub height: usize,
+}
+
+/// Event types sent to WebSocket clients
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerEvent {
+    /// Capture state changed
+    StateChanged { state: CaptureStateDto },
+
+    /// New frame captured
+    FrameCaptured {
+        frame_number: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        /// Why this frame did not join the stack, when it did not.
+        ///
+        /// Separate from [`ServerEvent::FrameRejected`], which means the camera
+        /// failed to deliver a frame at all and feeds the capture-abort burst
+        /// detector. A frame that arrived fine and merely aligned badly must not
+        /// go through that path — a night of soft seeing would stop the capture.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rejection_reason: Option<String>,
+    },
+
+    /// Frame was rejected
+    FrameRejected {
+        frame_number: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        reason: String,
+    },
+
+    /// Settings were updated
+    SettingsUpdated,
+
+    /// Camera connected
+    CameraConnected { name: String },
+
+    /// Camera disconnected
+    CameraDisconnected { name: String },
+
+    /// Camera discovered asynchronously (e.g. INDI)
+    CameraDiscovered {
+        camera: CameraListEntry,
+    },
+
+    /// Cooled camera status sample (sensor temperature, cooler power, cooler state)
+    CameraStatusUpdated {
+        name: String,
+        temperature_c: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cooler_power: Option<f64>,
+        cooler_on: bool,
+        dew_heater_on: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_temp_c: Option<f64>,
+    },
+
+    /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected).
+    /// `role` tells two bodies of one model apart, which `name` cannot.
+    CameraPhaseChanged {
+        name: String,
+        role: CameraRole,
+        phase: CameraPhaseDto,
+        /// Seconds until a warm-up is cut short, at the latest; with `WarmingUp` only.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warmup_remaining_s: Option<u64>,
+    },
+
+    /// Every connected camera's phase at once, replacing what the client holds. Sent when
+    /// a client connects and after it fell behind: phases otherwise arrive only as
+    /// changes, and a page that missed one showed "Start guide" for a running loop.
+    CameraPhases { cameras: Vec<CameraPhaseEntry> },
+
+    /// The camera the eyepiece pages show. Also sent when a client connects and after it
+    /// fell behind, since `/` derives its Guide toggle from it.
+    ViewedCameraChanged { camera: CameraRole },
+
+    /// The main stream's frames became, or stopped being, an `auto_crop` cut of the stack.
+    /// Announced just before the first frame cut the new way is published, and sent when a
+    /// client connects and after it fell behind: the live view shifts its pan by the
+    /// origin's move rather than refitting, which would undo the observer's zoom every few subs.
+    /// `frame` is the live stream's payload size cut the new way: the event and the frame
+    /// travel on different sockets, so a frame cut the old way can land after the event, and
+    /// the view waits for this size rather than reframing the old picture.
+    StackCropChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crop: Option<StreamCrop>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frame: Option<StreamFrameSize>,
+    },
+
+    /// The camera hit a run of consecutive status-poll watchdog timeouts across
+    /// reconnects — likely a persistent hardware/USB fault rather than an
+    /// isolated hiccup. Sent in addition to (not instead of) the ordinary
+    /// `Error` event that accompanies every individual timeout.
+    CameraPersistentlyUnresponsive {
+        name: String,
+        consecutive_timeouts: u32,
+    },
+
+    /// An automatic reconnect is under way after the camera dropped out.
+    /// `attempt` counts from 1; `next_attempt_in_s` is the wait before this
+    /// attempt runs.
+    CameraReconnecting {
+        name: String,
+        role: CameraRole,
+        attempt: u32,
+        of: u32,
+        next_attempt_in_s: u64,
+    },
+
+    /// Automatic reconnect gave up. The camera stays disconnected until
+    /// somebody intervenes.
+    CameraReconnectFailed {
+        name: String,
+        role: CameraRole,
+        attempts: u32,
+        reason: String,
+    },
+
+    /// A reconnect succeeded and the interrupted capture resumed, keeping the
+    /// stack it had already accumulated.
+    CaptureResumed { name: String, stacked_count: u64 },
+
+    /// `role` has no recovery to report: its camera came back, or the observer disconnected
+    /// or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed`.
+    CameraRecoveryCleared { role: CameraRole },
+
+    /// The server left Focus/Finder mode on its own: a running capture switched to stacking,
+    /// which needs the correction the mode holds off. Pressing Start stays silent — the
+    /// observer asked for the stack, and `SettingsUpdated` moves the toggle.
+    FocusModeLeft,
+
+    /// The AI compute report changed (benchmark progress, a result, a unit that failed at
+    /// runtime). Clients refetch `GET /api/ai-compute`, which resolves their preference.
+    AiComputeChanged,
+
+    /// Error occurred
+    Error { message: String },
+
+    /// Disk writer queue warning (queue depth exceeds threshold)
+    DiskWriterWarning { queue_depth: usize },
+
+    /// Disk writer queue warning cleared
+    DiskWriterWarningCleared,
+
+    /// Whether `role`'s last capture is on the storage device, not just in the OS's cache:
+    /// what the observer waits for before powering off. `files` were synced; `failed`
+    /// writes or syncs did not land, the first one's reason in `error`.
+    StorageSync {
+        role: CameraRole,
+        state: StorageSyncState,
+        files: usize,
+        failed: usize,
+        error: Option<String>,
+    },
+
+    /// Frame was dropped because the pipeline couldn't keep up.
+    ///
+    /// `delivered_count` travels with it so the client can show a *rate*. The count
+    /// alone grows all night and means nothing without the cadence it grew against.
+    FrameDropped {
+        dropped_count: u64,
+        delivered_count: u64,
+    },
+
+    /// Every frame counter at once, replacing the client's: sent when a client connects
+    /// and after it fell behind, since the per-frame events carry only some of them.
+    CaptureCounts {
+        frame_count: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        dropped_count: u64,
+        delivered_count: u64,
+        last_rejection_reason: Option<String>,
+    },
+
+    /// Warning message
+    Warning { message: String },
+
+    /// The sync snapshot just sent is complete: the client re-reads every
+    /// [`TopicKind::Refetch`] topic. `dropped` counts the events a lagged client missed.
+    Synced { cause: SyncCause, dropped: u64 },
+
+    // ========================================================================
+    // Push-To Navigation Events
+    // ========================================================================
+    /// Plate solving started
+    PlateSolvingStarted { target_name: Option<String> },
+
+    /// Progress within a plate solve that is trying several strategies in turn.
+    ///
+    /// A cold solve works down an ordered list of attempts, and the last of those can
+    /// legitimately run for a minute or more. Without this the UI cannot tell a slow
+    /// solve from a hung one. `stage` is a human-readable description supplied by the
+    /// solver, not an enum, so the strategy list can change without a protocol change.
+    PlateSolvingProgress {
+        stage: String,
+        attempt: usize,
+        total: usize,
+    },
+
+    /// Position solved successfully
+    PositionSolved {
+        ra_degrees: f64,
+        dec_degrees: f64,
+        ra_string: String,
+        dec_string: String,
+        /// Stars ASTAP reported finding, or `None` when it never said.
+        stars_detected: Option<usize>,
+        confidence: f64,
+        rotation_deg: f64,
+    },
+
+    /// Position solve failed
+    PositionSolveFailed { reason: String },
+
+    /// A solve in flight was abandoned on request.
+    ///
+    /// Separate from [`ServerEvent::PositionSolveFailed`] because the two mean
+    /// opposite things to the user: a failure says the sky could not be matched,
+    /// a cancel says "you asked me to stop". Reporting a cancel as a failure also
+    /// left the last known position looking untrustworthy when it was still good.
+    PlateSolvingCancelled,
+
+    /// A solve was abandoned and will be retried, because something it depended on
+    /// changed (telescope optics, binning, sensor mode).
+    PlateSolvingRestarted { reason: String },
+
+    /// Plate solving cannot run, and why.
+    ///
+    /// Emitted only when the reason changes, so it costs nothing per frame. `reason`
+    /// is `None` once solving is possible again, which clears the notice.
+    PushToBlocked { reason: Option<String> },
+
+    /// Push direction updated.
+    PushDirectionUpdated(PushDirection),
+
+    /// No push direction: no target, or none computed for the current one yet.
+    PushDirectionCleared,
+
+    /// The whole solve state, as the sync snapshot restates it.
+    PlateSolvingStatus(SolveStatus),
+
+    /// Target changed
+    TargetChanged(PushToTarget),
+
+    /// Target cleared
+    TargetCleared,
+
+    // ========================================================================
+    // ASTAP Installation Events
+    // ========================================================================
+    /// ASTAP installation starting
+    AstapInstallStarting { component: String },
+
+    /// ASTAP installation progress (downloading)
+    AstapInstallProgress {
+        component: String,
+        bytes_downloaded: u64,
+        total_bytes: Option<u64>,
+        /// Percentage of current operation (0-100)
+        percent: Option<f32>,
+        /// Current installation stage, which the UI names and branches on
+        stage_id: Option<InstallStage>,
+        /// Overall installation progress (0-100)
+        overall_percent: Option<f32>,
+    },
+
+    /// ASTAP installation extracting
+    AstapInstallExtracting {
+        component: String,
+        /// Percentage of extraction (0-100)
+        progress: f32,
+        /// Current installation stage, which the UI names and branches on
+        stage_id: Option<InstallStage>,
+        /// Overall installation progress (0-100)
+        overall_percent: Option<f32>,
+    },
+
+    /// ASTAP installation completed successfully
+    AstapInstallCompleted {
+        component: String,
+        /// Current installation stage, which the UI names and branches on
+        stage_id: Option<InstallStage>,
+        /// Overall installation progress (0-100)
+        overall_percent: Option<f32>,
+    },
+
+    /// ASTAP installation failed
+    AstapInstallFailed { component: String, error: String },
+
+    // ========================================================================
+    // Catalog Installation Events
+    // ========================================================================
+    /// Catalog installation starting
+    CatalogInstallStarting,
+
+    /// Catalog download progress
+    CatalogInstallProgress {
+        file_name: String,
+        bytes_downloaded: u64,
+        total_bytes: Option<u64>,
+        percent: Option<f32>,
+    },
+
+    /// Catalog file downloaded
+    CatalogFileCompleted { file_name: String },
+
+    /// Catalog installation completed
+    CatalogInstallCompleted { object_count: usize },
+
+    /// Catalog installation failed
+    CatalogInstallFailed { error: String },
+
+    /// Where the ASTAP install stands: sent as one begins and ends, and restated by a sync
+    /// so a page that missed the end stops waiting on it.
+    AstapInstallStatus {
+        #[serde(flatten)]
+        status: InstallStatus,
+    },
+
+    /// Where the catalog install stands, as [`ServerEvent::AstapInstallStatus`].
+    CatalogInstallStatus {
+        #[serde(flatten)]
+        status: InstallStatus,
+    },
+}
+
+/// DTO for CaptureState serialization
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "PascalCase")]
+pub enum CaptureStateDto {
+    Idle,
+    Starting,
+    Capturing,
+    Stopping,
+    Error,
+    Recovering,
+}
+
+impl From<CaptureState> for CaptureStateDto {
+    fn from(state: CaptureState) -> Self {
+        match state {
+            CaptureState::Idle => CaptureStateDto::Idle,
+            CaptureState::Starting => CaptureStateDto::Starting,
+            CaptureState::Capturing => CaptureStateDto::Capturing,
+            CaptureState::Stopping => CaptureStateDto::Stopping,
+            CaptureState::Error => CaptureStateDto::Error,
+            CaptureState::Recovering => CaptureStateDto::Recovering,
+        }
+    }
+}
+
+/// One camera in [`ServerEvent::CameraPhases`].
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct CameraPhaseEntry {
+    pub name: String,
+    pub role: CameraRole,
+    pub phase: CameraPhaseDto,
+    /// Seconds until a warm-up in progress is cut short, at the latest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warmup_remaining_s: Option<u64>,
+}
+
+/// DTO for CameraPhase serialization (snake_case to match JS event handling).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CameraPhaseDto {
+    Disconnected,
+    Idle,
+    Precooling,
+    Capturing,
+    Guiding,
+    WarmingUp,
+    Recovering,
+}
+
+impl From<CameraPhase> for CameraPhaseDto {
+    fn from(phase: CameraPhase) -> Self {
+        match phase {
+            CameraPhase::Disconnected => CameraPhaseDto::Disconnected,
+            CameraPhase::Idle => CameraPhaseDto::Idle,
+            CameraPhase::Precooling => CameraPhaseDto::Precooling,
+            CameraPhase::Capturing => CameraPhaseDto::Capturing,
+            CameraPhase::Guiding => CameraPhaseDto::Guiding,
+            CameraPhase::WarmingUp => CameraPhaseDto::WarmingUp,
+            CameraPhase::Recovering => CameraPhaseDto::Recovering,
+        }
+    }
+}
+
+impl ServerEvent {
+    pub fn state_changed(state: CaptureState) -> Self {
+        ServerEvent::StateChanged {
+            state: state.into(),
+        }
+    }
+
+    pub fn frame_captured(
+        frame_number: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        rejection_reason: Option<&str>,
+    ) -> Self {
+        ServerEvent::FrameCaptured {
+            frame_number,
+            stacked_count,
+            rejected_count,
+            rejection_reason: rejection_reason.map(str::to_owned),
+        }
+    }
+
+    pub fn frame_rejected(
+        frame_number: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        reason: impl Into<String>,
+    ) -> Self {
+        ServerEvent::FrameRejected {
+            frame_number,
+            stacked_count,
+            rejected_count,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn camera_connected(name: impl Into<String>) -> Self {
+        ServerEvent::CameraConnected { name: name.into() }
+    }
+
+    pub fn camera_disconnected(name: impl Into<String>) -> Self {
+        ServerEvent::CameraDisconnected { name: name.into() }
+    }
+
+    pub fn camera_discovered(camera: CameraListEntry) -> Self {
+        ServerEvent::CameraDiscovered { camera }
+    }
+
+    pub fn camera_status_updated(
+        name: impl Into<String>,
+        temperature_c: f64,
+        cooler_power: Option<f64>,
+        cooler_on: bool,
+        dew_heater_on: bool,
+        target_temp_c: Option<f64>,
+    ) -> Self {
+        ServerEvent::CameraStatusUpdated {
+            name: name.into(),
+            temperature_c,
+            cooler_power,
+            cooler_on,
+            dew_heater_on,
+            target_temp_c,
+        }
+    }
+
+    pub fn camera_phase_changed(
+        name: impl Into<String>,
+        role: CameraRole,
+        phase: CameraPhase,
+        warmup_remaining: Option<std::time::Duration>,
+    ) -> Self {
+        ServerEvent::CameraPhaseChanged {
+            name: name.into(),
+            role,
+            phase: phase.into(),
+            warmup_remaining_s: warmup_remaining.map(|left| left.as_secs()),
+        }
+    }
+
+    pub fn camera_persistently_unresponsive(
+        name: impl Into<String>,
+        consecutive_timeouts: u32,
+    ) -> Self {
+        ServerEvent::CameraPersistentlyUnresponsive {
+            name: name.into(),
+            consecutive_timeouts,
+        }
+    }
+
+    pub fn camera_reconnecting(
+        name: impl Into<String>,
+        role: CameraRole,
+        attempt: u32,
+        of: u32,
+        next_attempt_in_s: u64,
+    ) -> Self {
+        ServerEvent::CameraReconnecting {
+            name: name.into(),
+            role,
+            attempt,
+            of,
+            next_attempt_in_s,
+        }
+    }
+
+    pub fn camera_reconnect_failed(
+        name: impl Into<String>,
+        role: CameraRole,
+        attempts: u32,
+        reason: impl Into<String>,
+    ) -> Self {
+        ServerEvent::CameraReconnectFailed {
+            name: name.into(),
+            role,
+            attempts,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn capture_resumed(name: impl Into<String>, stacked_count: u64) -> Self {
+        ServerEvent::CaptureResumed {
+            name: name.into(),
+            stacked_count,
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        ServerEvent::Error {
+            message: message.into(),
+        }
+    }
+
+    pub fn disk_writer_warning(queue_depth: usize) -> Self {
+        ServerEvent::DiskWriterWarning { queue_depth }
+    }
+
+    pub fn storage_sync(role: CameraRole, status: &StorageSyncStatus) -> Self {
+        ServerEvent::StorageSync {
+            role,
+            state: status.state,
+            files: status.files,
+            failed: status.failed,
+            error: status.error.clone(),
+        }
+    }
+
+    pub fn warning(message: impl Into<String>) -> Self {
+        ServerEvent::Warning {
+            message: message.into(),
+        }
+    }
+
+    pub fn frame_dropped(dropped_count: u64, delivered_count: u64) -> Self {
+        ServerEvent::FrameDropped {
+            dropped_count,
+            delivered_count,
+        }
+    }
+
+    pub fn capture_counts(counts: FrameCounts, last_rejection_reason: Option<String>) -> Self {
+        ServerEvent::CaptureCounts {
+            frame_count: counts.frames,
+            stacked_count: counts.stacked,
+            rejected_count: counts.rejected,
+            dropped_count: counts.dropped,
+            delivered_count: counts.delivered,
+            last_rejection_reason,
+        }
+    }
+
+    pub fn position_solved(
+        ra_degrees: f64,
+        dec_degrees: f64,
+        ra_string: impl Into<String>,
+        dec_string: impl Into<String>,
+        stars_detected: Option<usize>,
+        confidence: f64,
+        rotation_deg: f64,
+    ) -> Self {
+        ServerEvent::PositionSolved {
+            ra_degrees,
+            dec_degrees,
+            ra_string: ra_string.into(),
+            dec_string: dec_string.into(),
+            stars_detected,
+            confidence,
+            rotation_deg,
+        }
+    }
+
+    pub fn position_solve_failed(reason: impl Into<String>) -> Self {
+        ServerEvent::PositionSolveFailed {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn plate_solving_cancelled() -> Self {
+        ServerEvent::PlateSolvingCancelled
+    }
+
+    pub fn plate_solving_restarted(reason: impl Into<String>) -> Self {
+        ServerEvent::PlateSolvingRestarted {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn push_to_blocked(reason: Option<String>) -> Self {
+        ServerEvent::PushToBlocked { reason }
+    }
+
+    pub fn push_direction_updated(direction: PushToDirectionResponse, fov_deg: Option<f64>) -> Self {
+        ServerEvent::PushDirectionUpdated(PushDirection::new(direction, fov_deg))
+    }
+
+    /// Serialize to JSON string
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self)
+            .unwrap_or_else(|_| r#"{"type":"error","message":"Serialization failed"}"#.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use night_amplifier_core::push_to::DirectionHint;
+
+    #[test]
+    fn a_push_direction_names_the_camera_that_oriented_it() {
+        let direction = PushToDirectionResponse {
+            angle_deg: 37.0,
+            distance_deg: 26.1,
+            is_close: false,
+            direction_hint: DirectionHint::NorthEast,
+            current_position: None,
+            target: None,
+            solved_camera: Some("Neptune-C II".into()),
+        };
+        let event = ServerEvent::push_direction_updated(direction, Some(1.45));
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "push_direction_updated");
+        assert_eq!(json["angle_deg"], 37.0);
+        assert_eq!(json["direction_hint"], "NE");
+        assert_eq!(json["fov_deg"], 1.45);
+        assert_eq!(json["solved_camera"], "Neptune-C II");
+    }
+
+    #[test]
+    fn test_state_changed_serialization() {
+        let event = ServerEvent::state_changed(CaptureState::Capturing);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "state_changed");
+        assert_eq!(json["state"], "Capturing");
+    }
+
+    #[test]
+    fn test_frame_captured_serialization() {
+        let event = ServerEvent::frame_captured(42, 10, 2, None);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "frame_captured");
+        assert_eq!(json["frame_number"], 42);
+        assert_eq!(json["stacked_count"], 10);
+        assert_eq!(json["rejected_count"], 2);
+    }
+
+    #[test]
+    fn test_frame_rejected_serialization() {
+        let event = ServerEvent::frame_rejected(5, 3, 2, "Bad alignment");
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "frame_rejected");
+        assert_eq!(json["frame_number"], 5);
+        assert_eq!(json["stacked_count"], 3);
+        assert_eq!(json["rejected_count"], 2);
+        assert_eq!(json["reason"], "Bad alignment");
+    }
+
+    #[test]
+    fn test_settings_updated_serialization() {
+        let event = ServerEvent::SettingsUpdated;
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "settings_updated");
+    }
+
+    #[test]
+    fn test_camera_connected_serialization() {
+        let event = ServerEvent::camera_connected("Test Camera");
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_connected");
+        assert_eq!(json["name"], "Test Camera");
+    }
+
+    #[test]
+    fn test_camera_disconnected_serialization() {
+        let event = ServerEvent::camera_disconnected("Test Camera");
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_disconnected");
+        assert_eq!(json["name"], "Test Camera");
+    }
+
+    #[test]
+    fn test_error_serialization() {
+        let event = ServerEvent::error("Something went wrong");
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["message"], "Something went wrong");
+    }
+
+    #[test]
+    fn test_disk_writer_warning_serialization() {
+        let event = ServerEvent::disk_writer_warning(7);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "disk_writer_warning");
+        assert_eq!(json["queue_depth"], 7);
+    }
+
+    #[test]
+    fn test_disk_writer_warning_cleared_serialization() {
+        let event = ServerEvent::DiskWriterWarningCleared;
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "disk_writer_warning_cleared");
+    }
+
+    #[test]
+    fn test_warning_serialization() {
+        let event = ServerEvent::warning("Disk nearly full");
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "warning");
+        assert_eq!(json["message"], "Disk nearly full");
+    }
+
+    #[test]
+    fn test_camera_status_updated_serialization() {
+        let event = ServerEvent::camera_status_updated(
+            "Test Cam",
+            -8.5,
+            Some(42.0),
+            true,
+            true,
+            Some(-10.0),
+        );
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_status_updated");
+        assert_eq!(json["name"], "Test Cam");
+        assert_eq!(json["temperature_c"], -8.5);
+        assert_eq!(json["cooler_power"], 42.0);
+        assert_eq!(json["cooler_on"], true);
+        assert_eq!(json["dew_heater_on"], true);
+        assert_eq!(json["target_temp_c"], -10.0);
+    }
+
+    #[test]
+    fn test_camera_status_updated_omits_none_fields() {
+        let event = ServerEvent::camera_status_updated("Test Cam", 20.0, None, false, false, None);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_status_updated");
+        assert!(json.get("cooler_power").is_none());
+        assert!(json.get("target_temp_c").is_none());
+    }
+
+    #[test]
+    fn test_camera_phase_changed_serialization() {
+        let event = ServerEvent::camera_phase_changed(
+            "Test Cam",
+            CameraRole::Guide,
+            CameraPhase::Precooling,
+            None,
+        );
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_phase_changed");
+        assert_eq!(json["name"], "Test Cam");
+        assert_eq!(json["role"], "guide");
+        assert_eq!(json["phase"], "precooling");
+        assert!(json.get("warmup_remaining_s").is_none());
+    }
+
+    #[test]
+    fn test_camera_phase_warming_up_serialization() {
+        let event = ServerEvent::camera_phase_changed(
+            "Test Cam",
+            CameraRole::Main,
+            CameraPhase::WarmingUp,
+            Some(std::time::Duration::from_secs(329)),
+        );
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["phase"], "warming_up");
+        assert_eq!(json["warmup_remaining_s"], 329);
+    }
+}

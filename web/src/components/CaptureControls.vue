@@ -1,33 +1,44 @@
-<script setup>
-import {ref, inject, computed, watch, onMounted} from 'vue'
-import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
-import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
+<script setup lang="ts">
+import {ref, computed, watch, onMounted} from 'vue'
+import {startCapture, stopCapture, getStackingTypes} from '../composables/api'
+import type {HardwarePatch} from '../composables/api'
+import type {StackingType, StackingTypeInfo, UpdateSettingsRequest} from '../composables/api.types'
+import {useError} from '../composables/useError'
 import {
-  EXPOSURE_PRESETS,
+  findCamera,
+  useApplySettings,
+  useCameraPhase,
+  useCameras,
+  useCapabilities,
+  useMainCamera,
+  useSelectedCameraId,
+  useSelectedCameraRole,
+  useSettings,
+} from '../composables/appContext'
+import {hardwareBlock} from '../composables/useCameraHardwareSettings'
+import type {HardwareEdit} from '../composables/useCameraHardwareSettings'
+import {useCaptureTarget} from '../composables/useCaptureTarget'
+import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
+import ExposureControl from './ExposureControl.vue'
+import {
+  CAMERA_PHASES,
+  CAPTURE_MODE_OPTIONS,
   GAIN_LIMITS,
-  CAPTURE_STATES,
-  isCaptureRunning,
+  GUIDE_CAPTURE_MODE_OPTIONS,
   DEFAULT_SETTINGS,
+  STACKING_TYPES,
   STRETCH_AGGRESSIVENESS_OPTIONS,
   HELP_TEXTS
 } from '../constants'
 
-const settings = inject('settings')
-const selectedCamera = inject('selectedCamera')
-const eventStream = inject('eventStream')
-const refreshSettings = inject('refreshSettings')
-const cameras = inject('cameras', {value: []})
-const cameraPhase = inject('cameraPhase', {value: {}})
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false},
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-  comet: {pro_stacking: false},
-})
+const settings = useSettings()
+const selectedCamera = useSelectedCameraId()
+const applySettings = useApplySettings()
+const cameras = useCameras()
+const cameraPhase = useCameraPhase()
+const {cometPro} = useCapabilities()
 
-const {error, loading, clearError, withErrorHandling} = useError()
+const {error, loading, clearError, setError, withErrorHandling} = useError()
 
 /**
  * Which camera this panel addresses.
@@ -36,31 +47,37 @@ const {error, loading, clearError, withErrorHandling} = useError()
  * gain, so the same two controls address a different set of values depending on the
  * selection. Start/Stop follows the same selection — see `isCapturing` below.
  */
-const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
-const mainCamera = inject('mainCamera', computed(() => null))
-const guideCamera = inject('guideCamera', computed(() => null))
+const settingsRole = useSelectedCameraRole()
+const mainCamera = useMainCamera()
 
-const isEditingGuide = computed(() => settingsRole.value === 'guide')
+const {
+  isGuide: isEditingGuide,
+  mainCapturing,
+  isCapturing,
+  isStopping,
+  canStart,
+  startLabel,
+  stopLabel,
+} = useCaptureTarget({role: settingsRole, busy: loading})
 
 /** The hardware block belonging to the camera currently selected. */
-const cameraSettings = computed(() => {
-  if (!settings?.value) return null
-  return isEditingGuide.value ? settings.value.guide_camera : settings.value
-})
+const cameraSettings = computed(() => hardwareBlock(settings.value, settingsRole.value))
 
-const exposure = ref(100)
-const exposureUnit = ref('ms')
+/** The exposure as typed, in microseconds; Start sends it even if never blurred. */
+const exposureUs = ref(100000)
 const gain = ref(GAIN_LIMITS.default)
 
-const stackingTypes = ref([])
-const selectedStackingType = ref('deep_sky')
+const stackingTypes = ref<StackingTypeInfo[]>([])
+const selectedStackingType = ref<StackingType>(STACKING_TYPES.DEEP_SKY)
 const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
 const wandererMode = ref(DEFAULT_SETTINGS.wanderer_mode)
 const focusMode = ref(DEFAULT_SETTINGS.focus_mode)
 
-const stackingMode = computed(() => {
+type StackingMode = 'wanderer' | 'stacking' | 'off'
+
+const stackingMode = computed((): StackingMode => {
   if (wandererMode.value) return 'wanderer'
   if (stackingEnabled.value) return 'stacking'
   return 'off'
@@ -72,152 +89,58 @@ watch(
     [settings, settingsRole],
     ([allSettings]) => {
       const newSettings = allSettings
-      const hardware = isEditingGuide.value ? allSettings?.guide_camera : allSettings
+      const hardware = hardwareBlock(allSettings, settingsRole.value)
       if (newSettings && hardware) {
-        const us = hardware.exposure_us
-        if (us >= 1000000) {
-          exposure.value = us / 1000000
-          exposureUnit.value = 's'
-        } else if (us >= 1000) {
-          exposure.value = us / 1000
-          exposureUnit.value = 'ms'
-        } else {
-          exposure.value = us
-          exposureUnit.value = 'us'
-        }
+        exposureUs.value = hardware.exposure_us
         gain.value = hardware.gain
-        if (newSettings.stacking_type) {
-          selectedStackingType.value = newSettings.stacking_type
-        }
-        if (newSettings.stacking !== undefined) {
-          stackingEnabled.value = newSettings.stacking
-        }
-        if (newSettings.auto_stretch !== undefined) {
-          autoStretch.value = newSettings.auto_stretch
-        }
-        if (newSettings.stretch_aggressiveness !== undefined) {
-          stretchAggressiveness.value = newSettings.stretch_aggressiveness
-        }
-        if (newSettings.wanderer_mode !== undefined) {
-          wandererMode.value = newSettings.wanderer_mode
-        }
-        if (newSettings.focus_mode !== undefined) {
-          focusMode.value = newSettings.focus_mode
-        }
+        selectedStackingType.value = newSettings.stacking_type
+        stackingEnabled.value = newSettings.stacking
+        autoStretch.value = newSettings.auto_stretch
+        stretchAggressiveness.value = newSettings.stretch_aggressiveness
+        wandererMode.value = newSettings.wanderer_mode
+        focusMode.value = newSettings.focus_mode
       }
     },
     {immediate: true}
 )
 
+// Without the list the Type select is empty, so say why rather than only logging it.
 onMounted(async () => {
   try {
     stackingTypes.value = await getStackingTypes()
   } catch (e) {
-    console.error('Failed to load stacking types:', e)
+    setError(`Could not load the stacking types: ${e instanceof Error ? e.message : e}`)
   }
 })
 
-const mainCapturing = computed(
-    () =>
-        isCaptureRunning(eventStream.captureState.value) ||
-        eventStream.captureState.value === CAPTURE_STATES.STARTING
-)
-
-const mainStopping = computed(() => eventStream.captureState.value === CAPTURE_STATES.STOPPING)
-
-/**
- * Whether the guide camera's loop is running.
- *
- * Read from the camera's phase rather than from `captureState`: `Guiding` is a phase of
- * its own precisely because a guide loop is not a capture session, and the backend
- * already stamps it whenever the loop takes or gives back the handle.
- */
-const isGuideRunning = computed(() => {
-  const name = guideCamera.value?.name
-  return Boolean(name) && cameraPhase.value?.[name] === 'guiding'
-})
-
-/**
- * Start/Stop addresses whichever camera the list has selected, the same way the
- * exposure and gain controls above do. Selecting the guide camera and pressing Stop
- * stops its loop — and with it the raw frames it was saving.
- */
-const isCapturing = computed(() =>
-    isEditingGuide.value ? isGuideRunning.value : mainCapturing.value
-)
-
-// The guide camera has no Stopping state to broadcast: its stop is one request that
-// returns once the loop has handed its handle back, so the in-flight request is the
-// only signal there is.
-const isStopping = computed(() =>
-    isEditingGuide.value ? loading.value && isGuideRunning.value : mainStopping.value
-)
-
-const canStart = computed(() => {
-  if (isCapturing.value || isStopping.value) return false
-  return isEditingGuide.value ? Boolean(guideCamera.value) : Boolean(selectedCamera.value)
-})
-
-/** Names the target, so it is never ambiguous which camera the button acts on. */
-const startLabel = computed(() => (isEditingGuide.value ? 'Start guide' : 'Start'))
-const stopLabel = computed(() => (isEditingGuide.value ? 'Stop guide' : 'Stop'))
-
-/**
- * Only the imaging camera has a capture mode. Nothing the guide camera produces is
- * stacked, so Wanderer and Stacking are not choices it has — and offering them here
- * would have written the *imaging* camera's mode, since the setting is global.
- */
-const captureModeOptions = computed(() =>
-    isEditingGuide.value
-        ? [{value: 'off', label: 'Live view'}]
-        : [
-          {value: 'off', label: 'Live view'},
-          {value: 'wanderer', label: 'Wanderer'},
-          {value: 'stacking', label: 'Stacking'},
-        ]
-)
+const captureModeOptions = computed(() => (isEditingGuide.value ? GUIDE_CAPTURE_MODE_OPTIONS : CAPTURE_MODE_OPTIONS))
 
 const selectedCameraName = computed(() => {
   const id = selectedCamera.value
   if (!id) return null
-  const cam = (cameras?.value || []).find((c) => c.id === id)
-  return cam?.name || null
+  return findCamera(cameras.value, id)?.name || null
 })
 
 const selectedCameraPhase = computed(() => {
   const name = selectedCameraName.value
-  return name ? cameraPhase.value?.[name] || null : null
+  return name ? cameraPhase.value[name] || null : null
 })
 
 const showPrecoolWarning = computed(
-    () => selectedCameraPhase.value === 'precooling' && !isCapturing.value
+    () => selectedCameraPhase.value === CAMERA_PHASES.PRECOOLING && !isCapturing.value
 )
 
-const exposureUs = computed(() => {
-  const val = exposure.value
-  switch (exposureUnit.value) {
-    case 's':
-      return val * 1000000
-    case 'ms':
-      return val * 1000
-    default:
-      return val
-  }
-})
-
-
-const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || EXPOSURE_PRESETS.ms)
 
 async function handleStart() {
   await withErrorHandling(async () => {
     // Flush the exposure and gain shown above before starting, so an edit the user
     // typed but never blurred is not lost. It lands on the camera being started, which
     // is the one those controls are editing.
-    await updateSettings({
+    await applySettings({
       camera_role: settingsRole.value,
       exposure_us: exposureUs.value,
       gain: gain.value,
-    })
+    } satisfies HardwarePatch)
     if (isEditingGuide.value) {
       // No id: the guide slot holds at most one camera, so the server resolves it.
       await startCapture(null, 'guide')
@@ -238,40 +161,37 @@ async function handleStop() {
   })
 }
 
-async function applySetting(settings, onError = null) {
+async function applySetting(settings: UpdateSettingsRequest, onError: (() => void) | null = null) {
   await withErrorHandling(async () => {
-    await updateSettings(settings)
-    await refreshSettings()
+    await applySettings(settings)
   }, onError ? {onError} : {})
 }
 
 /** Hardware edits carry the role, so they land on the camera the user selected. */
-const applyHardware = (patch) => applySetting({camera_role: settingsRole.value, ...patch})
+const applyHardware = (edit: HardwareEdit) => {
+  const patch: HardwarePatch = {camera_role: settingsRole.value, ...edit}
+  return applySetting(patch)
+}
 
-const applyExposure = () => applyHardware({exposure_us: exposureUs.value})
+const applyExposure = (us: number) => applyHardware({exposure_us: us})
 const applyGain = () => applyHardware({gain: gain.value})
-const setExposurePreset = (us) => applyHardware({exposure_us: us})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
 const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
 /**
  * Whether entering Focus/Finder mode would damage a stack already being integrated.
  *
- * One of the six settings it drops (row/column pattern removal) runs before demosaic, so
- * the frames the accumulator integrates lose their banding correction — and averaging is
- * exactly what cannot take that back out. The backend refuses this with a 409; the toggle
- * is disabled so nobody has to read the error to find out.
- *
- * Mirrors the backend's exemptions: live view accumulates nothing, planetary never runs
- * that correction, and a stopping capture takes no new frames (`mainCapturing` excludes
- * it). Leaving is never blocked, hence the `!focusMode` term.
+ * Row/column pattern removal (one of six dropped settings) runs before demosaic, so
+ * integrated frames lose banding correction that averaging can't undo. Backend refuses
+ * with 409; disabling the toggle spares the user that error. Mirrors backend exemptions —
+ * live view, planetary, and a stopping capture — leaving is never blocked (`!focusMode`).
  */
 const focusModeBlocked = computed(
     () =>
         !focusMode.value &&
         mainCapturing.value &&
         stackingMode.value !== 'off' &&
-        selectedStackingType.value !== 'planetary'
+        selectedStackingType.value !== STACKING_TYPES.PLANETARY
 )
 
 // A pipeline setting, not a hardware one: it goes through `applySetting` rather than
@@ -283,21 +203,21 @@ const focusModeBlocked = computed(
 // would have the two panels disagreeing about the same setting.
 const applyFocusMode = () =>
     applySetting({focus_mode: focusMode.value}, () => {
-      focusMode.value = settings?.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
+      focusMode.value = settings.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
     })
 
-function applyStackingMode(val) {
-  const modes = {
+function applyStackingMode(val: StackingMode) {
+  const modes: Record<StackingMode, UpdateSettingsRequest> = {
     wanderer: {stacking: true, wanderer_mode: true},
     stacking: {stacking: true, wanderer_mode: false},
     off: {stacking: false, wanderer_mode: false},
   }
-  applySetting(modes[val] || modes.off)
+  void applySetting(modes[val])
 }
 
 const showCometLock = computed(() => {
   if (isEditingGuide.value) return false
-  return selectedStackingType.value === 'comet' && !capabilities.comet?.pro_stacking
+  return selectedStackingType.value === STACKING_TYPES.COMET && !cometPro.value
 })
 
 const HELP = HELP_TEXTS
@@ -347,10 +267,8 @@ const HELP = HELP_TEXTS
 
       <!-- Pro lock for Comet mode -->
       <div v-if="showCometLock" class="comet-pro-lock">
-        <BaseProLock
-            title="Comet Stacking"
-            message="Comet centroid tracking and aggressive star rejection are available in Night Amplifier Pro."
-        />
+        <BaseProLock feature="Comet stacking" size="16px"/>
+        <span class="comet-pro-message">{{ HELP.comet_pro }}</span>
       </div>
 
       <template v-else>
@@ -380,45 +298,16 @@ const HELP = HELP_TEXTS
     </div>
 
     <div v-if="showPrecoolWarning" class="precool-warning">
-      Sensor is still cooling — capture will start with elevated dark current.
+      {{ HELP.precooling }}
     </div>
 
-    <!-- Exposure control -->
     <div class="control-group" :class="{ 'control-disabled': showCometLock }">
-      <div class="control-row">
-        <label class="type-label-inline">
-          Exposure
-          <BaseInfoIcon :message="HELP.exposure"/>
-        </label>
-        <div class="input-group">
-          <input
-              v-model.number="exposure"
-              type="number"
-              min="0.001"
-              step="0.1"
-              class="input"
-              :disabled="showCometLock"
-              @change="applyExposure"
-          />
-          <select v-model="exposureUnit" class="select" :disabled="showCometLock" @change="applyExposure">
-            <option value="us">us</option>
-            <option value="ms">ms</option>
-            <option value="s">s</option>
-          </select>
-        </div>
-      </div>
-      <div class="presets">
-        <button
-            v-for="preset in exposurePresets"
-            :key="preset.us"
-            class="btn btn-preset"
-            :class="{ active: cameraSettings?.exposure_us === preset.us }"
-            :disabled="showCometLock"
-            @click="setExposurePreset(preset.us)"
-        >
-          {{ preset.label }}
-        </button>
-      </div>
+      <ExposureControl
+          v-model="exposureUs"
+          :active-us="cameraSettings?.exposure_us ?? null"
+          :disabled="showCometLock"
+          @apply="applyExposure"
+      />
     </div>
 
     <div class="control-group" :class="{ 'control-disabled': showCometLock }">
@@ -504,11 +393,10 @@ const HELP = HELP_TEXTS
   gap: 0.5rem;
 }
 
-
 .type-select {
   width: 100%;
   padding: 0.375rem 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
 }
 
 .type-select:disabled {
@@ -522,9 +410,9 @@ const HELP = HELP_TEXTS
   justify-content: center;
   gap: 0.25rem;
   padding: 0.375rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   white-space: nowrap;
   flex: 1;
   min-width: 80px;
@@ -532,7 +420,7 @@ const HELP = HELP_TEXTS
 
 .btn-start {
   background: var(--success);
-  color: white;
+  color: var(--on-primary);
 }
 
 .btn-start:hover:not(:disabled) {
@@ -541,7 +429,7 @@ const HELP = HELP_TEXTS
 
 .btn-stop {
   background: var(--error);
-  color: white;
+  color: var(--on-primary);
 }
 
 .btn-stop:hover:not(:disabled) {
@@ -561,34 +449,6 @@ const HELP = HELP_TEXTS
   min-width: 0;
 }
 
-.control-row .input-group {
-  flex: 1;
-}
-
-.presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.25rem;
-}
-
-.btn-preset {
-  padding: 0.125rem 0.375rem;
-  font-size: 0.65rem;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-}
-
-.btn-preset:hover {
-  background: var(--surface-hover);
-}
-
-.btn-preset.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: white;
-}
-
 .stretch-controls {
   display: flex;
   align-items: center;
@@ -599,7 +459,7 @@ const HELP = HELP_TEXTS
 .aggressiveness-select {
   flex: 1;
   padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
 }
 
 .capture-header-row {
@@ -616,28 +476,20 @@ const HELP = HELP_TEXTS
   gap: 0.25rem;
 }
 
-.btn-toggle {
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  min-width: 70px;
-}
-
-.btn-toggle.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: white;
-}
-
-.btn-toggle:hover:not(.active) {
-  background: var(--surface-hover);
-}
-
 .comet-pro-lock {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 1rem;
   background: var(--surface-elevated);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   margin-bottom: 0.5rem;
   border: 1px solid var(--border);
+}
+
+.comet-pro-message {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 
 .control-disabled {
@@ -648,10 +500,10 @@ const HELP = HELP_TEXTS
 .precool-warning {
   margin: 0.25rem 0 0.5rem 0;
   padding: 0.35rem 0.5rem;
-  background: rgba(234, 179, 8, 0.12);
-  border-left: 3px solid #eab308;
-  color: #eab308;
-  font-size: 0.72rem;
-  border-radius: 3px;
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
+  color: var(--warning);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-xs);
 }
 </style>

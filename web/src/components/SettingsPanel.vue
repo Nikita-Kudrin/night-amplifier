@@ -1,46 +1,38 @@
-<script setup>
-import {ref, inject, watch, computed} from 'vue'
-import {updateSettings} from '../composables/api.js'
-import {useError} from '../composables/useError.js'
-import {
-  BasePanel,
-  BaseToggle,
-  BaseSlider,
-  ButtonGroup,
-  BaseAlert,
-  BaseInfoIcon,
-  BaseProLock,
-} from './ui'
+<script setup lang="ts">
+/**
+ * Settings: one section component per group, each mirroring its keys of `localSettings`
+ * and emitting `apply(key, value)`. The panel owns the one save path and error banner, and
+ * is the one writer of the `eyepiece` group (`applyEyepiece`).
+ */
+import {ref, watch, computed} from 'vue'
+import {useError} from '../composables/useError'
+import {useApplySettings, useCapabilities, useHasGuideCamera, useSettings} from '../composables/appContext'
+import {settingsMirror} from '../utils/settings'
+import type {EyepieceFields, SettingApply, SettingKey} from '../utils/settings'
+import {STACKING_TYPES} from '../constants'
+import {BasePanel, BaseAlert} from './ui'
+import AdvancedSettings from './AdvancedSettings.vue'
 import CoolerControl from './CoolerControl.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
+import EyepieceSettings from './EyepieceSettings.vue'
 import ImageQualitySettings from './ImageQualitySettings.vue'
-import {
-  SATURATION_BOOST_LIMITS,
-  AUTO_STRETCH_INTENSITY,
-  BLACK_LEVEL_LIMITS,
-    BLACK_FLOOR_LIMITS,
-  BINNING_OPTIONS,
-  DEFAULT_SETTINGS,
-  EYEPIECE_STREAM_RESOLUTION_OPTIONS,
-  defaultSettings,
-  RAW_FRAME_SAVING_MODES,
-  WEIGHTING_PRESET_OPTIONS,
-  BACKGROUND_ALGORITHM_OPTIONS,
-  REJECTION_METHOD_OPTIONS,
-  SIMULATED_PRELOAD_LIMITS,
-  HELP_TEXTS,
-} from '../constants'
+import ProcessingSettings from './ProcessingSettings.vue'
+import ReconnectSettings from './ReconnectSettings.vue'
+import StackingSettings from './StackingSettings.vue'
+import StorageSettings from './StorageSettings.vue'
+import type {Settings, UpdateSettingsRequest} from '../composables/api.types'
 
-const settings = inject('settings')
-const refreshSettings = inject('refreshSettings')
-const simulatorEnabledRef = inject('simulatorEnabled')
-const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false},
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-})
+const settings = useSettings()
+const applySettings = useApplySettings()
+const hasGuideCamera = useHasGuideCamera()
+const {
+  rbfBackground,
+  saturationBoost,
+  denoise: denoiseAvailable,
+  aiDenoise: aiDenoiseAvailable,
+  advancedRejection,
+  advancedPlanetary,
+} = useCapabilities()
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -48,116 +40,61 @@ const {error, clearError, withErrorHandling} = useError()
  * Read straight from the server settings rather than the local mirror: the mode is
  * toggled from the capture panel, and the mirror only refreshes on a save from here.
  */
-const focusMode = computed(() => settings?.value?.focus_mode ?? false)
+const focusMode = computed(() => settings.value?.focus_mode ?? false)
 
-const simulatorEnabled = computed({
-  get: () => simulatorEnabledRef?.value ?? false,
-  set: (val) => {
-    if (simulatorEnabledRef) simulatorEnabledRef.value = val
-  },
-})
+/** Chosen on the capture panel; the server omits it only before its first answer. */
+const stackingType = computed(() => settings.value?.stacking_type ?? STACKING_TYPES.DEEP_SKY)
 
-const localSettings = ref(defaultSettings())
+const localSettings = ref(settingsMirror(null))
+
+/** `eyepiece` fields posted and not yet answered (see `applyEyepiece`). */
+let eyepieceInFlight: EyepieceFields = {}
+let eyepieceWrites = 0
 
 watch(
     settings,
     (newSettings) => {
-      if (newSettings) {
-        localSettings.value = {
-          bin: newSettings.bin ?? DEFAULT_SETTINGS.bin,
-          stacking: newSettings.stacking ?? DEFAULT_SETTINGS.stacking,
-          background_subtraction:
-              newSettings.background_subtraction ?? DEFAULT_SETTINGS.background_subtraction,
-          background_extraction_algorithm:
-              newSettings.background_extraction_algorithm ??
-              DEFAULT_SETTINGS.background_extraction_algorithm,
-          auto_stretch_intensity:
-              newSettings.auto_stretch_intensity ?? DEFAULT_SETTINGS.auto_stretch_intensity,
-          raw_frame_saving: newSettings.raw_frame_saving
-              ? {...newSettings.raw_frame_saving}
-              : {...DEFAULT_SETTINGS.raw_frame_saving},
-          save_stacked_image: newSettings.save_stacked_image ?? DEFAULT_SETTINGS.save_stacked_image,
-          wanderer_mode: newSettings.wanderer_mode ?? DEFAULT_SETTINGS.wanderer_mode,
-          auto_reconnect: newSettings.auto_reconnect ?? DEFAULT_SETTINGS.auto_reconnect,
-          auto_resume_capture:
-              newSettings.auto_resume_capture ?? DEFAULT_SETTINGS.auto_resume_capture,
-          weighting_preset: newSettings.weighting_preset ?? DEFAULT_SETTINGS.weighting_preset,
-          rejection_method: newSettings.rejection_method ?? DEFAULT_SETTINGS.rejection_method,
-          rejection_sigma: newSettings.rejection_sigma ?? DEFAULT_SETTINGS.rejection_sigma,
-          planetary_auto_tracking: newSettings.planetary_auto_tracking ?? true,
-          planetary_multi_point_alignment: newSettings.planetary_multi_point_alignment ?? false,
-          saturation_boost: newSettings.saturation_boost ?? DEFAULT_SETTINGS.saturation_boost,
-          saturation_boost_strength:
-              newSettings.saturation_boost_strength ?? DEFAULT_SETTINGS.saturation_boost_strength,
-          simulated_camera: newSettings.simulated_camera ?? DEFAULT_SETTINGS.simulated_camera,
-          simulated_preload_images:
-              newSettings.simulated_preload_images ?? DEFAULT_SETTINGS.simulated_preload_images,
-          show_focus_image: newSettings.show_focus_image ?? DEFAULT_SETTINGS.show_focus_image,
-          force_focus_image_now: newSettings.force_focus_image_now ?? DEFAULT_SETTINGS.force_focus_image_now,
-          eyepiece: newSettings.eyepiece
-              ? {...DEFAULT_SETTINGS.eyepiece, ...newSettings.eyepiece}
-              : {...DEFAULT_SETTINGS.eyepiece},
-          sensor_correction: newSettings.sensor_correction
-              ? {...newSettings.sensor_correction}
-              : {...DEFAULT_SETTINGS.sensor_correction},
-          denoise: newSettings.denoise
-              ? {...newSettings.denoise}
-              : {...DEFAULT_SETTINGS.denoise},
-          preview_resolution:
-              newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
-          streaming_resolution:
-              newSettings.streaming_resolution ?? DEFAULT_SETTINGS.streaming_resolution,
-        }
-      }
+      if (!newSettings) return
+      const mirror = settingsMirror(newSettings)
+      Object.assign(mirror.eyepiece, eyepieceInFlight)
+      localSettings.value = mirror
     },
     {immediate: true}
 )
 
-/**
- * Persist a whole settings group edited by a child component, keeping the
- * panel's own copy in step.
- */
-function applyGroup(key, value) {
-  localSettings.value[key] = value
-  return applySetting(key, value)
-}
-
-/**
- * Flip one mode's raw-frame switch, sending the whole group so the server never sees a
- * partial selection.
- */
-/** The guide switch is only meaningful with a guide camera attached. */
-const rawFrameSavingModes = computed(() =>
-    RAW_FRAME_SAVING_MODES.filter((mode) => !mode.requiresGuideCamera || hasGuideCamera.value)
-)
-
-function applyRawFrameSaving(mode, enabled) {
-  return applyGroup('raw_frame_saving', {...localSettings.value.raw_frame_saving, [mode]: enabled})
-}
-
-async function applySetting(key, value) {
+async function applySetting(patch: UpdateSettingsRequest) {
   await withErrorHandling(async () => {
-    await updateSettings({[key]: value})
-    await refreshSettings()
+    await applySettings(patch)
   })
 }
 
-let debounceTimer = null
-
-function debouncedApply(key, value) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => applySetting(key, value), 300)
+/**
+ * The server replaces the `eyepiece` group whole, and two sections edit it (Eyepiece its
+ * layout and screen, Processing its tone). Each hands over only the fields it changed, sent
+ * over the panel's copy: a section's own stale copy reverted the other's field. Fields still
+ * in flight are laid over any answer adopted meanwhile, which an earlier write may predate.
+ */
+function applyEyepiece(fields: EyepieceFields) {
+  const eyepiece = {...localSettings.value.eyepiece, ...fields}
+  localSettings.value.eyepiece = eyepiece
+  Object.assign(eyepieceInFlight, fields)
+  eyepieceWrites++
+  return applySetting({eyepiece: {...eyepiece}}).finally(() => {
+    if (--eyepieceWrites === 0) eyepieceInFlight = {}
+  })
 }
 
-function formatPercent(v) {
-  return `${(v * 100).toFixed(0)}%`
+/** The panel's own copy of one setting, set to the value a section sent with its key. */
+function keepLocal<K extends SettingKey>(key: K, value: Settings[K]) {
+  localSettings.value[key] = value
 }
 
-function formatSigma(v) {
-  return `${v.toFixed(1)}\u03c3`
+/** Persist a setting a section edited, keeping the panel's own copy in step. */
+function applyGroup(...[key, value]: SettingApply) {
+  if (key === 'eyepiece') return applyEyepiece(value)
+  keepLocal(key, value)
+  return applySetting({[key]: value})
 }
-
-const HELP = HELP_TEXTS
 </script>
 
 <template>
@@ -175,545 +112,47 @@ const HELP = HELP_TEXTS
         :preview-resolution="localSettings.preview_resolution"
         :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
-        :format-percent="formatPercent"
-        :format-sigma="formatSigma"
+        :denoise-available="denoiseAvailable"
+        :ai-denoise-available="aiDenoiseAvailable"
         @apply="applyGroup"
     />
 
-    <!-- Processing settings -->
-    <div class="settings-section">
-      <h3 class="section-title">Processing</h3>
+    <ProcessingSettings
+        :settings="localSettings"
+        :focus-mode="focusMode"
+        :rbf-background-available="rbfBackground"
+        :saturation-boost-available="saturationBoost"
+        @apply="applyGroup"
+    />
 
-      <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
-        <BaseSlider
-            v-model="localSettings.auto_stretch_intensity"
-            label="Color Intensity"
-            large-gap
-            :min="AUTO_STRETCH_INTENSITY.min"
-            :max="AUTO_STRETCH_INTENSITY.max"
-            :step="AUTO_STRETCH_INTENSITY.step"
-            :format-value="formatPercent"
-            :help="HELP.auto_stretch_intensity"
-            @change="applySetting('auto_stretch_intensity', localSettings.auto_stretch_intensity)"
-        />
-      </div>
+    <StorageSettings :settings="localSettings" :has-guide-camera="hasGuideCamera" @apply="applyGroup"/>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
-        <BaseSlider
-            v-model="localSettings.eyepiece.intensity"
-            label="Black level"
-            large-gap
-            :min="BLACK_LEVEL_LIMITS.min"
-            :max="BLACK_LEVEL_LIMITS.max"
-            :step="BLACK_LEVEL_LIMITS.step"
-            :format-value="formatPercent"
-            :help="HELP.eyepiece_intensity"
-            @change="applySetting('eyepiece', localSettings.eyepiece)"
-        />
-      </div>
+    <ReconnectSettings :settings="localSettings" @apply="applyGroup"/>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
-        <BaseSlider
-            v-model="localSettings.eyepiece.black_floor"
-            label="Black floor"
-            large-gap
-            :min="BLACK_FLOOR_LIMITS.min"
-            :max="BLACK_FLOOR_LIMITS.max"
-            :step="BLACK_FLOOR_LIMITS.step"
-            :format-value="formatPercent"
-            :help="HELP.eyepiece_black_floor"
-            @change="applySetting('eyepiece', localSettings.eyepiece)"
-        />
-      </div>
+    <EyepieceSettings :eyepiece="localSettings.eyepiece" @apply="applyGroup"/>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
-        <BaseToggle
-            v-model="localSettings.eyepiece.darker_sky"
-            label="Darker sky"
-            :disabled="localSettings.eyepiece.black_floor >= 0"
-            :help="HELP.eyepiece_darker_sky"
-            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-        />
-      </div>
+    <StackingSettings
+        v-if="localSettings.stacking"
+        :weighting-preset="localSettings.weighting_preset"
+        :rejection-method="localSettings.rejection_method"
+        :rejection-sigma="localSettings.rejection_sigma"
+        :planetary-auto-tracking="localSettings.planetary_auto_tracking"
+        :planetary-multi-point-alignment="localSettings.planetary_multi_point_alignment"
+        :planetary="stackingType === STACKING_TYPES.PLANETARY"
+        :auto-crop="localSettings.auto_crop"
+        :deep-sky="stackingType === STACKING_TYPES.DEEP_SKY"
+        :advanced-rejection-available="advancedRejection"
+        :advanced-planetary-available="advancedPlanetary"
+        @apply="applyGroup"
+    />
 
-      <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
-
-      <div class="control-group" style="margin-bottom: 1.5rem">
-        <BaseToggle
-            v-model="localSettings.eyepiece.dither"
-            label="Dithering"
-            :help="HELP.eyepiece_dither"
-            :disabled="focusMode"
-            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-        />
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.background_subtraction"
-            label="Background Subtraction"
-            :help="HELP.background_subtraction"
-            :disabled="focusMode"
-            @update:model-value="applySetting('background_subtraction', $event)"
-        />
-      </div>
-
-      <div v-if="localSettings.background_subtraction" class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Algorithm
-            <BaseProLock v-if="!capabilities.deep_sky.rbf_background" feature="RBF Background"/>
-            <BaseInfoIcon :message="HELP.background_extraction_algorithm"/>
-          </label>
-          <select
-              id="bg-algorithm-select"
-              v-model="localSettings.background_extraction_algorithm"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('background_extraction_algorithm', $event.target.value)"
-          >
-            <option
-                v-for="opt in BACKGROUND_ALGORITHM_OPTIONS"
-                :key="opt.value"
-                :value="opt.value"
-                :disabled="opt.pro && !capabilities.deep_sky.rbf_background"
-            >
-              {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.rbf_background ? '🔒' : '' }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.saturation_boost"
-            label="Shadow Saturation Boost"
-            :help="HELP.saturation_boost"
-            :disabled="!capabilities.deep_sky.saturation_boost || focusMode"
-            @update:model-value="applySetting('saturation_boost', $event)"
-        >
-          <template #label-extra>
-            <BaseProLock
-                v-if="!capabilities.deep_sky.saturation_boost"
-                feature="Saturation Boost"
-            />
-          </template>
-        </BaseToggle>
-      </div>
-
-
-      <BaseSlider
-          v-if="localSettings.saturation_boost"
-          v-model="localSettings.saturation_boost_strength"
-          label="Saturation Strength"
-          large-gap
-          :min="SATURATION_BOOST_LIMITS.min"
-          :max="SATURATION_BOOST_LIMITS.max"
-          :step="SATURATION_BOOST_LIMITS.step"
-          :format-value="formatPercent"
-          :disabled="!capabilities.deep_sky.saturation_boost"
-          :help="HELP.saturation_boost_strength"
-          @change="
-          debouncedApply('saturation_boost_strength', localSettings.saturation_boost_strength)
-        "
-      >
-        <template #label-extra>
-          <BaseProLock v-if="!capabilities.deep_sky.saturation_boost" feature="Saturation Boost"/>
-        </template>
-      </BaseSlider>
-    </div>
-
-    <!-- Storage settings: raw frames are per capture mode, the stack only exists in Stacking -->
-    <div class="settings-section">
-      <h3 class="section-title">Storage</h3>
-
-      <div class="control-group">
-        <span class="storage-group-label">
-          Save Raw Frames
-          <BaseInfoIcon :message="HELP.raw_frame_saving"/>
-        </span>
-
-        <BaseToggle
-            v-for="mode in rawFrameSavingModes"
-            :key="mode.key"
-            v-model="localSettings.raw_frame_saving[mode.key]"
-            :label="mode.label"
-            class="storage-mode-toggle"
-            @update:model-value="applyRawFrameSaving(mode.key, $event)"
-        />
-      </div>
-
-      <div v-if="localSettings.stacking && !localSettings.wanderer_mode" class="control-group">
-        <BaseToggle
-            v-model="localSettings.save_stacked_image"
-            label="Save Stacked Image"
-            :help="HELP.save_stacked_image"
-            @update:model-value="applySetting('save_stacked_image', $event)"
-        />
-      </div>
-    </div>
-
-    <!-- Camera dropout recovery -->
-    <div class="settings-section">
-      <h3 class="section-title">If the camera drops out</h3>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.auto_reconnect"
-            label="Reconnect automatically"
-            :help="HELP.auto_reconnect"
-            @update:model-value="applySetting('auto_reconnect', $event)"
-        />
-      </div>
-
-      <div v-if="localSettings.auto_reconnect" class="control-group">
-        <BaseToggle
-            v-model="localSettings.auto_resume_capture"
-            label="Resume the capture"
-            :help="HELP.auto_resume_capture"
-            @update:model-value="applySetting('auto_resume_capture', $event)"
-        />
-      </div>
-    </div>
-
-    <!-- Eyepiece settings -->
-    <div class="settings-section">
-      <h3 class="section-title">Eyepiece</h3>
-
-      <div class="control-group">
-        <div class="control-row">
-          <BaseToggle
-              v-model="localSettings.eyepiece.binoview"
-              label="Binoview"
-              size="small"
-              :help="HELP.eyepiece_binoview"
-              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-          />
-          <BaseToggle
-              v-model="localSettings.eyepiece.circular_view"
-              label="Circular view"
-              size="small"
-              :help="HELP.eyepiece_circular_view"
-              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-          />
-        </div>
-      </div>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Eyepiece Streaming Resolution
-            <BaseInfoIcon :message="HELP.eyepiece_stream_resolution"/>
-          </label>
-          <select
-              id="eyepiece-stream-resolution-select"
-              v-model="localSettings.eyepiece.stream_resolution"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('eyepiece', localSettings.eyepiece)"
-          >
-            <option
-                v-for="opt in EYEPIECE_STREAM_RESOLUTION_OPTIONS"
-                :key="opt.value"
-                :value="opt.value"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div
-          v-if="localSettings.eyepiece.binoview"
-          class="control-group"
-          style="flex-direction: column; align-items: stretch; margin-top: 0.5rem"
-      >
-        <label class="control-label" style="margin-bottom: 0.5rem">
-          Screen settings
-          <BaseInfoIcon :message="HELP.eyepiece_screen_settings"/>
-        </label>
-
-        <div class="control-row" style="justify-content: flex-start; margin-bottom: 0.5rem">
-          <input
-              v-model.number="localSettings.eyepiece.screen_width"
-              type="number"
-              min="1"
-              step="0.1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Width"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <span style="margin: 0 4px">x</span>
-          <input
-              v-model.number="localSettings.eyepiece.screen_height"
-              type="number"
-              min="1"
-              step="0.1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Height"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <select
-              v-model="localSettings.eyepiece.screen_measurement"
-              style="
-              margin-left: 8px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              @change="applySetting('eyepiece', localSettings.eyepiece)"
-          >
-            <option value="mm">mm</option>
-            <option value="inches">inches</option>
-          </select>
-        </div>
-
-        <div class="control-row" style="justify-content: flex-start">
-          <label style="margin-right: 8px; font-size: 0.9em; color: var(--text-secondary)"
-          >Resolution</label
-          >
-          <input
-              v-model.number="localSettings.eyepiece.screen_resolution_x"
-              type="number"
-              min="1"
-              step="1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Resolution X"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <span style="margin: 0 4px">x</span>
-          <input
-              v-model.number="localSettings.eyepiece.screen_resolution_y"
-              type="number"
-              min="1"
-              step="1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Resolution Y"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- Stacking settings -->
-    <div v-if="localSettings.stacking" class="settings-section">
-      <h3 class="section-title">Stacking</h3>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Frame Weighting
-            <BaseInfoIcon :message="HELP.weighting_preset"/>
-          </label>
-          <select
-              id="weighting-preset-select"
-              v-model="localSettings.weighting_preset"
-              class="select"
-              style="width: 120px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('weighting_preset', $event.target.value)"
-          >
-            <option v-for="opt in WEIGHTING_PRESET_OPTIONS" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Rejection Method
-            <BaseProLock
-                v-if="!capabilities.deep_sky.advanced_rejection"
-                feature="Advanced Rejection"
-            />
-            <BaseInfoIcon :message="HELP.rejection_method"/>
-          </label>
-          <select
-              id="rejection-method-select"
-              v-model="localSettings.rejection_method"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('rejection_method', $event.target.value)"
-          >
-            <option
-                v-for="opt in REJECTION_METHOD_OPTIONS"
-                :key="opt.value"
-                :value="opt.value"
-                :disabled="opt.pro && !capabilities.deep_sky.advanced_rejection"
-            >
-              {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.advanced_rejection ? '🔒' : '' }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <BaseSlider
-          v-if="localSettings.rejection_method !== 'None'"
-          v-model="localSettings.rejection_sigma"
-          label="Rejection Sigma"
-          :min="0.5"
-          :max="10.0"
-          :step="0.1"
-          :disabled="!capabilities.deep_sky.advanced_rejection"
-          :help="HELP.rejection_sigma"
-          @change="debouncedApply('rejection_sigma', localSettings.rejection_sigma)"
-      >
-        <template #label-extra>
-          <BaseProLock
-              v-if="!capabilities.deep_sky.advanced_rejection"
-              feature="Advanced Rejection"
-          />
-        </template>
-      </BaseSlider>
-    </div>
-
-    <!-- Planetary-specific settings -->
-    <div v-if="localSettings.stacking && settings?.stacking_type === 'planetary'" class="settings-section">
-      <h3 class="section-title">Planetary</h3>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.planetary_auto_tracking"
-            label="Auto Tracking"
-            help="Automatically track the planet's centroid in the ROI to prevent drift."
-            @update:model-value="applySetting('planetary_auto_tracking', $event)"
-        />
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.planetary_multi_point_alignment"
-            label="Multi-Point Alignment"
-            help="Use Inverse Distance Weighting on multiple surface points to combat seeing distortion."
-            :disabled="!capabilities.planetary.advanced_stacking"
-            @update:model-value="applySetting('planetary_multi_point_alignment', $event)"
-        >
-          <template #label-extra>
-            <BaseProLock
-                v-if="!capabilities.planetary.advanced_stacking"
-                feature="Multi-Point Alignment"
-            />
-          </template>
-        </BaseToggle>
-      </div>
-    </div>
-
-    <!-- Advanced settings -->
-    <div class="settings-section">
-      <h3 class="section-title">Advanced</h3>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="type-label-inline">
-            Binning
-            <BaseInfoIcon :message="HELP.bin"/>
-          </label>
-          <ButtonGroup
-              v-model="localSettings.bin"
-              :options="BINNING_OPTIONS"
-              @update:model-value="applySetting('bin', $event)"
-          />
-        </div>
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="simulatorEnabled"
-            label="Simulated Camera"
-            data-test="simulator-toggle"
-            :help="HELP.simulated_camera"
-            @update:model-value="applySetting('use_simulated_camera', $event)"
-        />
-      </div>
-      <div v-if="simulatorEnabled" class="control-group" style="margin-top: 0.5rem">
-        <BaseSlider
-            v-model="localSettings.simulated_preload_images"
-            label="Preload Count"
-            :min="SIMULATED_PRELOAD_LIMITS.min"
-            :max="SIMULATED_PRELOAD_LIMITS.max"
-            :step="SIMULATED_PRELOAD_LIMITS.step"
-            :help="HELP.simulated_preload_count"
-            @change="
-            debouncedApply('simulated_preload_images', localSettings.simulated_preload_images)
-          "
-        />
-      </div>
-
-      <div class="control-group">
-        <div class="control-row">
-          <BaseToggle
-              v-model="localSettings.show_focus_image"
-              label="Show focus image"
-              size="small"
-              :help="HELP.show_focus_image"
-              @update:model-value="applySetting('show_focus_image', $event)"
-          />
-          <BaseToggle
-              v-if="localSettings.show_focus_image"
-              v-model="localSettings.force_focus_image_now"
-              label="Now"
-              size="small"
-              :help="HELP.force_focus_image_now"
-              @update:model-value="applySetting('force_focus_image_now', $event)"
-          />
-        </div>
-      </div>
-    </div>
+    <AdvancedSettings
+        :settings="localSettings"
+        :focus-mode="focusMode"
+        :ai-denoise-available="aiDenoiseAvailable"
+        :save="applyGroup"
+        :guard="withErrorHandling"
+        @apply="applyGroup"
+    />
   </BasePanel>
 </template>
-
-<style scoped>
-/* Uses global .section-title, .control-group, .control-label, .hint from main.css */
-
-.settings-section {
-  margin-bottom: 0.625rem;
-}
-
-/* Heading for a set of related switches, matching .control-label's type without its
-   space-between, which would strand the info icon at the far edge. */
-.storage-group-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.825rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 0.375rem;
-}
-
-.storage-mode-toggle {
-  margin-left: 0.75rem;
-  margin-top: 0.25rem;
-}
-</style>

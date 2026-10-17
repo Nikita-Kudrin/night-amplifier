@@ -1,11 +1,12 @@
 fn to_ready_frame(
     frame: &night_amplifier::frame::Frame,
-) -> night_amplifier::server::state::RenderReadyFrame {
+) -> night_amplifier::render::display::RenderReadyFrame {
     let mut config = night_amplifier::render::RenderPipelineConfig::default();
     config.contrast = false;
     config.auto_stretch = false;
     config.saturation_boost = false;
-    night_amplifier::server::state::RenderReadyFrame {
+    night_amplifier::render::display::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: None,
@@ -19,8 +20,8 @@ use image::{
     ColorType, ImageEncoder,
 };
 use night_amplifier::frame::Frame;
-use night_amplifier::server::encoding::frame_to_rgb8_downsampled;
-use night_amplifier::server::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
+use night_amplifier::render::display::frame_to_rgb8_downsampled;
+use night_amplifier::session::encoding::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use std::fs;
 use std::hint::black_box;
 use std::io::Cursor;
@@ -162,7 +163,7 @@ fn bench_encoding(c: &mut Criterion) {
     // 4.3 ms plain; 10.3 ms staging the image; 9.3 streamed with a sorted sky estimate;
     // 6.0 ms streamed with selection, 8k sky samples and vectorising row loops.
     let mut shadowed_imx533_rgb = ready_imx533_rgb.clone();
-    shadowed_imx533_rgb.stretch_result = Some(night_amplifier::server::state::StretchResult {
+    shadowed_imx533_rgb.stretch_result = Some(night_amplifier::render::display::StretchResult {
         black_point: 0.0,
         scale_lut: std::sync::Arc::new(vec![]),
         color_intensity: 1.0,

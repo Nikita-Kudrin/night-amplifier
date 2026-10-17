@@ -1,17 +1,31 @@
-<script setup>
-import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
-import {useImageStream} from '../composables/useWebSocket.js'
-import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
-import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
-import {usePanZoom} from '../composables/usePanZoom.js'
-import {useAutoFit} from '../composables/useAutoFit.js'
-import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
-import {useCometRoi} from '../composables/useCometRoi.js'
-import {CAPTURE_STATES, isCaptureRunning} from '../constants'
+<script setup lang="ts">
+import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
+import {useImageStream} from '../composables/useImageStream'
+import {useFrameRenderer} from '../composables/useFrameRenderer'
+import {useEventListener} from '../composables/useEventListener'
+import {usePanZoom} from '../composables/usePanZoom'
+import {useAutoFit} from '../composables/useAutoFit'
+import {useOverlayVisibility} from '../composables/useOverlayVisibility'
+import {useCometRoi} from '../composables/useCometRoi'
+import {useTimeouts} from '../composables/useTimeouts'
+import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming'
+import {CAPTURE_STATES, isCaptureRunning, liveStreamEndpoint} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
-import {getAppState} from '../composables/useAppState.js'
+import {useAppState} from '../composables/useAppState'
+import {
+  useApplySettings,
+  useCapabilities,
+  useEventStreamContext,
+  useGuideCamera,
+  useHasGuideCamera,
+  useMainCamera,
+  useSettings,
+} from '../composables/appContext'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {setViewedCamera} from '../composables/api'
+import type {ScreenRect} from '../composables/useCometRoi'
 
 /**
  * How long to wait before fitting after a frame changes the image's size. Viewport
@@ -19,26 +33,38 @@ import {getAppState} from '../composables/useAppState.js'
  */
 const FIT_AFTER_LAYOUT_MS = 10
 
-const eventStream = inject('eventStream')
-const settings = inject('settings')
-const appState = getAppState()
-const capabilities = appState.capabilities
-const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
-const guideCamera = inject('guideCamera', computed(() => null))
-const mainCamera = inject('mainCamera', computed(() => null))
+const eventStream = useEventStreamContext()
+const settings = useSettings()
+const {setGlobalError} = useAppState()
+const {later} = useTimeouts()
+const {debugLogging} = useCapabilities()
+const hasGuideCamera = useHasGuideCamera()
+const guideCamera = useGuideCamera()
+const mainCamera = useMainCamera()
 
-/** Off by default: the imaging camera is what an observer is here to look at. */
-const showGuide = ref(false)
+/**
+ * The operator's Guide toggle, held by the server rather than this tab: the eyepiece
+ * pages show the same camera, and a reloaded page finds it where it was left. The server
+ * falls back to the imaging camera when the guide camera goes away.
+ */
+const showGuide = computed(() => hasGuideCamera.value && eventStream?.viewedCamera.value === 'guide')
 
-// Falls back the moment the guide camera goes away, so the view is never left showing a
-// stream nothing is producing.
-watch(hasGuideCamera, (present) => {
-  if (!present) showGuide.value = false
-})
+async function setShowGuide(show: boolean) {
+  const revision = eventStream?.viewedCameraRevision.value
+  try {
+    const answer = await setViewedCamera(show ? 'guide' : 'main')
+    // The event follows, but this tab need not wait for it to move its own view — unless
+    // one already arrived: it may be another operator's later toggle, which this older
+    // answer must not undo while every eyepiece shows the other camera.
+    if (eventStream && eventStream.viewedCameraRevision.value === revision) {
+      eventStream.viewedCamera.value = answer.camera
+    }
+  } catch (e) {
+    setGlobalError(e instanceof Error ? e.message : String(e))
+  }
+}
 
-const streamEndpoint = computed(() =>
-    showGuide.value ? '/ws/stream?source=guide' : '/ws/stream'
-)
+const streamEndpoint = computed(() => liveStreamEndpoint(showGuide.value ? 'guide' : 'main'))
 
 const {connected, frameData, isJpeg, dimensions, fps, clearFrameData} = useImageStream({
   endpoint: streamEndpoint,
@@ -49,41 +75,17 @@ const displayedCamera = computed(() =>
     showGuide.value ? guideCamera.value : mainCamera.value
 )
 
-/**
- * Field of view of the camera being *displayed*, in degrees of image height.
- *
- * The solve reports the field it was planned against, which with a guide camera
- * connected is the guide scope's — a different focal length from the imaging scope. The
- * chevron uses this only to place an off-target arrow against the frame edge, so it has
- * to describe the picture the arrow is drawn over, not the one that solved.
- */
-const displayedFovDeg = computed(() => {
-  const profiles = settings?.value?.camera_telescope_profiles
-  const name = displayedCamera.value?.name
-  const optics = (name && profiles?.[name]) || settings?.value?.telescope
-  const fl = optics?.focal_length_mm
-  const py = optics?.pixel_size_y_um
-  const h = optics?.sensor_height_px
-  if (!fl || !py || !h) return pushDirection.value?.fovDeg || 0
-
-  const effectiveFl = fl * (optics.barlow_coeff || 1)
-  const sensorHeightMm = (h * py) / 1000
-  return (2 * Math.atan(sensorHeightMm / (2 * effectiveFl)) * 180) / Math.PI
-})
-
-const pushDirection = computed(() => eventStream.pushDirection.value)
-const currentTarget = computed(() => eventStream.currentTarget.value)
+const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
+const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
+const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
-const containerRef = ref(null)
-const canvasRef = ref(null)
+const containerRef = useTemplateRef<HTMLDivElement>('container')
+const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 
 const containerSize = ref({width: 400, height: 300})
-const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
-
-// Renderers
-const webglRenderer = useWebGLRenderer()
-const canvas2dRenderer = useCanvas2DRenderer()
+const canvasBounds = ref<ScreenRect>({left: 0, top: 0, width: 400, height: 300})
 
 const {
   requestFit,
@@ -94,6 +96,7 @@ const {
 // Pan/zoom controls. Both fullscreen edges fit the image to the new viewport.
 const {
   scale,
+  position,
   isDragging,
   isFullscreen,
   canvasStyle,
@@ -131,61 +134,19 @@ const {
   handleMouseDown: handleRoiMouseDown,
   handleMouseMove: handleRoiMouseMove,
   handleMouseUp: handleRoiMouseUp,
-} = useCometRoi(settings, dimensions, canvasRef, containerRef)
+} = useCometRoi(settings, dimensions, canvasBounds, containerRef, {save: useApplySettings()})
 
-// Active renderer backend
-const renderBackend = computed(() => {
-  if (isJpeg.value) return 'jpeg'
-  if (webglRenderer.isInitialized()) {
-    return webglRenderer.backend.value
-  }
-  if (canvas2dRenderer.isInitialized()) {
-    return canvas2dRenderer.backend.value
-  }
-  return 'none'
-})
-
-const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
+const isCapturing = computed(() => isCaptureRunning(eventStream?.captureState.value ?? CAPTURE_STATES.IDLE))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
-function initRenderer() {
-  const canvas = canvasRef.value
-  if (!canvas) return false
-  if (webglRenderer.init(canvas)) return true
-  if (canvas2dRenderer.init(canvas)) return true
-  return false
-}
-
-function renderFrame() {
-  if (!frameData.value) return
-  const canvas = canvasRef.value
-  if (!canvas) return
-  const {width, height} = dimensions.value
-
-  if (isJpeg.value) {
-    // Decode JPEG blob into ImageBitmap and draw onto canvas (avoids blob URL
-    // allocation churn and keeps pan/zoom working via the canvas path).
-    window.createImageBitmap(frameData.value).then((bitmap) => {
-      if (webglRenderer.isInitialized()) {
-        webglRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
-      } else if (canvas2dRenderer.isInitialized()) {
-        canvas2dRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
-      }
-      bitmap.close()
-    }).catch(() => { /* frame was replaced before decode finished */ })
-    return
-  }
-  if (webglRenderer.isInitialized()) {
-    webglRenderer.render(canvas, frameData.value, width, height)
-  } else if (canvas2dRenderer.isInitialized()) {
-    canvas2dRenderer.render(canvas, frameData.value, width, height)
-  }
-}
-
-function cleanupRenderer() {
-  webglRenderer.cleanup()
-  canvas2dRenderer.cleanup()
-}
+// A new frame size resizes the canvas, which the arrow and the comet ROI follow.
+const {label: backendLabel} = useFrameRenderer({
+  frameData,
+  dimensions,
+  isJpeg,
+  canvases: () => [canvasRef.value],
+  onSizeChange: () => updateContainerSize(),
+})
 
 function fitToView() {
   if (!containerRef.value) return
@@ -205,34 +166,34 @@ function toggleFullscreen() {
 
 // Gestures keep the overlay up for as long as they last: a pan or a pinch is the
 // user working with the image, and the controls must not vanish mid-drag.
-function handleWheel(e) {
+function handleWheel(e: WheelEvent) {
   showOverlay()
   handleWheelBase(e)
 }
 
-function handleTouchStart(e) {
+function handleTouchStart(e: TouchEvent) {
   handlePressStart(e)
   handleTouchStartBase(e)
 }
 
-function handleTouchMove(e) {
+function handleTouchMove(e: TouchEvent) {
   showOverlay()
   handleTouchMoveBase(e)
 }
 
-function handleTouchEnd(e) {
+function handleTouchEnd(e: TouchEvent) {
   handlePressEnd(e)
-  handleTouchEndBase(e)
+  handleTouchEndBase()
 }
 
 // The system taking the gesture away — a notification swipe, palm rejection — is
 // not the observer asking for anything, so it must not read as a tap.
-function handleTouchCancel(e) {
+function handleTouchCancel(e: TouchEvent) {
   cancelPress(e)
-  handleTouchEndBase(e)
+  handleTouchEndBase()
 }
 
-function handleMouseDown(e) {
+function handleMouseDown(e: MouseEvent) {
   handlePressStart(e)
   if (isSelectingCometRoi.value) {
     handleRoiMouseDown(e)
@@ -241,7 +202,7 @@ function handleMouseDown(e) {
   handlePanMouseDown(e)
 }
 
-function handleMouseMove(e) {
+function handleMouseMove(e: MouseEvent) {
   if (isSelectingCometRoi.value) {
     showOverlay()
     handleRoiMouseMove(e)
@@ -251,50 +212,65 @@ function handleMouseMove(e) {
   handlePanMouseMove(e)
 }
 
-function handleMouseUp(e) {
+function handleMouseUp(e: MouseEvent) {
   handlePressEnd(e)
   if (isSelectingCometRoi.value) {
-    handleRoiMouseUp()
+    void handleRoiMouseUp()
     return
   }
   handlePanMouseUp()
 }
 
-// Watch for new frame data and render
-watch(frameData, () => {
-  if (frameData.value) {
-    renderFrame()
-  }
-})
-
 // Fit the view on the very first frame
 watch(hasFrame, (newHasFrame, oldHasFrame) => {
   if (newHasFrame && !oldHasFrame) {
-    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
+    later(fitToView, FIT_AFTER_LAYOUT_MS)
   }
 })
 
-// Watch for dimension changes to fit the view
-watch(dimensions, (newDims, oldDims) => {
-  if (newDims.width !== oldDims?.width || newDims.height !== oldDims?.height) {
-    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
+// The server's auto crop moved: held until the frame cut the new way arrives. Only the
+// imaging stream is ever cropped, so a change pending across a switch of camera is dropped.
+const cropFraming = useCropFraming()
+if (eventStream) {
+  watch(() => eventStream.stackCrop.value, (to, from) => {
+    if (!showGuide.value) cropFraming.note(to.crop, from.crop, to.frame)
+  })
+}
+watch(showGuide, () => cropFraming.clear())
+
+// Fit the view when a frame changes the image's size — unless the frame is a new crop of
+// a view the observer zoomed or panned, which keeps its framing (see `useCropFraming`).
+watch([dimensions, frameData], ([newDims], [oldDims]) => {
+  const resized = newDims.width !== oldDims.width || newDims.height !== oldDims.height
+  const crop = frameData.value ? cropFraming.take(newDims) : null
+  if (crop && oldDims.width) {
+    const view = {scale: scale.value, position: position.value}
+    const container = containerRef.value?.getBoundingClientRect()
+    const reframed = !isFitted(view, container, oldDims) &&
+        reframeForCrop({...crop, oldDims, newDims, view})
+    if (reframed) {
+      scale.value = reframed.scale
+      position.value = reframed.position
+      return
+    }
   }
+  if (resized) later(fitToView, FIT_AFTER_LAYOUT_MS)
 })
 
 // Clear frame data when a new capture session starts. A capture resuming after a camera
 // reconnect is the same session: blanking it would show the dropout the server hid.
-watch(() => eventStream.captureState.value, (newState, oldState) => {
+watch(() => eventStream?.captureState.value, (newState, oldState) => {
   if (newState === CAPTURE_STATES.STARTING && oldState !== CAPTURE_STATES.RECOVERING) {
     clearFrameData()
   }
 })
 
-// Update canvas bounds when scale changes or frame data changes
-watch([scale, frameData, hasFrame], () => {
-  setTimeout(updateContainerSize, 10)
-})
+// The arrow and the comet ROI follow the canvas: re-measure once the view has moved it.
+// A new frame size re-measures from the renderer's `onSizeChange` — not every frame,
+// which forced two layouts per frame.
+watch([scale, position, hasFrame], () => updateContainerSize(), {flush: 'post'})
 
-let resizeObserver = null
+let resizeObserver: ResizeObserver | null = null
 
 function handleWindowResize() {
   // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
@@ -336,12 +312,12 @@ function updateContainerSize() {
   }
 }
 
+useEventListener(document, 'fullscreenchange', handleFullscreenChange)
+useEventListener(window, 'resize', handleWindowResize)
+useEventListener(window, 'orientationchange', handleOrientationChange)
+useEventListener(window.screen.orientation, 'change', handleOrientationChange)
+
 onMounted(() => {
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  window.addEventListener('resize', handleWindowResize)
-  window.addEventListener('orientationchange', handleOrientationChange)
-  window.screen.orientation?.addEventListener('change', handleOrientationChange)
-  initRenderer()
   updateContainerSize()
   resizeObserver = new ResizeObserver(updateContainerSize)
   if (containerRef.value) {
@@ -350,41 +326,17 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  window.removeEventListener('resize', handleWindowResize)
-  window.removeEventListener('orientationchange', handleOrientationChange)
-  window.screen.orientation?.removeEventListener('change', handleOrientationChange)
   disposeAutoFit()
-  cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
   }
 })
-
-// Map backend names to user-friendly labels
-const backendLabel = computed(() => {
-  const res = dimensions.value.width > 0 
-    ? ` (${dimensions.value.width}x${dimensions.value.height})`
-    : ''
-
-  const labels = {
-    jpeg: `Dynamic JPEG${res}`,
-    'webgl2-16bit': `WebGL2 16-bit${res}`,
-    'webgl2-8bit': `WebGL2 8-bit${res}`,
-    webgl1: `WebGL1${res}`,
-    canvas2d: `Canvas 2D${res}`,
-    none: 'No renderer',
-    unknown: '...',
-  }
-  return labels[renderBackend.value] || renderBackend.value
-})
-
 </script>
 
 <template>
   <div
-      ref="containerRef"
+      ref="container"
       class="live-view"
       :class="{ capturing: isCapturing, fullscreen: isFullscreen, 'selecting-roi': isSelectingCometRoi }"
       @wheel="handleWheel"
@@ -421,20 +373,15 @@ const backendLabel = computed(() => {
     </div>
 
     <!-- Canvas for rendering (used for both LZ4 and JPEG paths) -->
-    <canvas v-show="hasFrame" ref="canvasRef" :style="canvasStyle" class="live-canvas"/>
+    <canvas v-show="hasFrame" ref="canvas" :style="canvasStyle" class="live-canvas"/>
 
     <!-- Guide arrow -->
     <GuideArrow
-        v-if="showGuideArrow"
-        :angle-deg="pushDirection.angleDeg"
-        :distance-deg="pushDirection.distanceDeg"
-        :is-close="pushDirection.isClose"
-        :direction-hint="pushDirection.directionHint"
-        :image-left="canvasBounds.left"
-        :image-top="canvasBounds.top"
-        :image-width="canvasBounds.width"
-        :image-height="canvasBounds.height"
+        v-if="showGuideArrow && pushDirection"
+        :direction="pushDirection"
+        :bounds="canvasBounds"
         :fov-deg="displayedFovDeg"
+        :other-camera="arrowCamera"
     />
 
     <!-- Comet ROI Overlay -->
@@ -457,14 +404,14 @@ const backendLabel = computed(() => {
         :scale="scale"
         :fps="fps"
         :backend-label="backendLabel"
-        :debug-logging="capabilities?.debug_logging"
+        :debug-logging="debugLogging"
         :is-fullscreen="isFullscreen"
         :has-frame="hasFrame"
         :is-comet-mode="isCometMode"
         :is-selecting-comet-roi="isSelectingCometRoi"
         :has-guide-camera="hasGuideCamera"
         :show-guide="showGuide"
-        @update:show-guide="showGuide = $event"
+        @update:show-guide="setShowGuide"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
         @fit-to-view="fitToView"
@@ -477,7 +424,7 @@ const backendLabel = computed(() => {
     <!-- Connection status -->
     <div
         v-if="!connected"
-        class="connection-status disconnected overlay-fade"
+        class="hud-chip connection-status disconnected overlay-fade"
         :class="{ 'overlay-hidden': !overlayVisible }"
     >
       <span class="status-dot"></span>
@@ -518,7 +465,7 @@ const backendLabel = computed(() => {
 
 .placeholder p {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
 }
 
 .live-canvas {
@@ -536,11 +483,8 @@ const backendLabel = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   padding: 0.375rem 0.75rem;
-  border-radius: 4px;
-  background: var(--surface-elevated);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .status-dot {
@@ -549,16 +493,4 @@ const backendLabel = computed(() => {
   background: var(--error);
   animation: pulse 2s infinite;
 }
-
-/* Applied to `LiveViewControls`' own root as well: a child component's root node
-   carries the parent's scope id, so it matches without reaching into the child. */
-.overlay-fade {
-  transition: opacity 0.35s ease;
-}
-
-.overlay-hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
 </style>
