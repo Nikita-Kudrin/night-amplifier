@@ -1,28 +1,31 @@
 //! Background extraction and light pollution subtraction
 //!
-//! This module estimates and removes the sky background gradient caused by
-//! light pollution. The algorithm:
-//! 1. Overlays a boundary-hugging grid of sample nodes on the image
-//! 2. Extracts a star-free background estimate per node via iterative sigma clipping
-//! 3. Prunes nodes that landed on nebulosity (global + local neighbor rejection)
-//! 4. Inpaints rejected nodes via iterative 4-connected averaging
-//! 5. Interpolates a smooth 2D background surface using bilinear delta-stepping
-//! 6. Subtracts the background from the image
+//! This module estimates and removes the sky background gradient (light pollution, moon,
+//! horizon glow, vignetting):
+//! 1. Lays sample nodes over the frame, both edges and an inset line included
+//! 2. Takes a star-rejected median per node via iterative sigma clipping
+//! 3. Classifies nodes as sky or target ([`classify`]): robust polynomial ladder, glow
+//!    readmitted by where it peaks, catalog objects ([`FieldProtection`]) kept out
+//! 4. Interpolates the completed grid (bilinear here, thin-plate spline in Pro)
+//! 5. Subtracts it from the image
 
+pub mod classify;
 mod config;
 mod extractor;
 pub mod grid;
 mod model;
-pub mod target_disc;
+mod poly;
+pub mod protection;
 
+pub use classify::{classify, Classified, NodeLayout};
 pub use config::{BackgroundConfig, BackgroundExtractionAlgorithm};
 pub use extractor::BackgroundExtractor;
 pub use grid::{
-    compute_box_size, extract_node_sample, extract_node_value, mad, mad_with_scratch, median,
-    prune_nebulosity, GridNode, NodeSample, PruneConfig,
+    compute_box_size, extract_node_value, layout_nodes, mad, mad_with_scratch, median, node_axis,
+    sample_nodes, GridNode,
 };
 pub use model::BackgroundModel;
-pub use target_disc::TargetDisc;
+pub use protection::{FieldProtection, ProtectedRegion};
 
 use crate::error::Result;
 use crate::frame::Frame;

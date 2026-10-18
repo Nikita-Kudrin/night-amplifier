@@ -52,10 +52,19 @@ impl Scene {
                 }
             }
         }
-        // A 6x6 lattice of patches, off the background model's nodes.
-        for gy in 0..6 {
-            for gx in 0..6 {
-                let (x0, y0) = (22 + gx * 38, 22 + gy * 38);
+        // A lattice of patches midway between the background model's node lines, so no
+        // node's box touches one: this is a test of the cache, and a patch straddling a
+        // node puts it on the classifier's 3 sigma edge, where it flips with depth.
+        let config = night_amplifier_core::background::BackgroundConfig::default();
+        let lines = night_amplifier_core::background::node_axis(SIZE, config.grid_width, config.edge_inset);
+        let mids: Vec<usize> = lines
+            .windows(2)
+            .filter(|w| w[1] - w[0] > 2 * PATCH_SIDE)
+            .map(|w| (w[0] + w[1]) / 2 - PATCH_SIDE / 2)
+            .step_by(2)
+            .collect();
+        for &y0 in &mids {
+            for &x0 in &mids {
                 for y in y0..y0 + PATCH_SIDE {
                     for x in x0..x0 + PATCH_SIDE {
                         in_patch[y * SIZE + x] = true;

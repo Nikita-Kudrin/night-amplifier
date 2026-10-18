@@ -1994,6 +1994,7 @@ dependencies = [
 name = "night_amplifier_session"
 version = "0.0.0-dev"
 dependencies = [
+ "async-trait",
  "bytes",
  "chrono",
  "futures-util",

@@ -1,9 +1,9 @@
 /** Help for image processing and noise reduction settings. */
 export const IMAGE_QUALITY_HELP = {
     background_subtraction:
-        'Removes gradients caused by light pollution or moonlight, resulting in a more even background across the image.',
+        'Removes gradients from light pollution, the moon, the horizon and vignetting, including a glow creeping in from an edge or a corner. Galaxies, nebulae and clusters are kept out of the background model; with Pro and plate solving installed, the stack is also plate-solved once per session and every catalog object in the field is protected.',
     background_extraction_algorithm:
-        'Choose the background removal algorithm:\n• Grid (Fast): Grid-based interpolation. Fast and stable for general EAA.\n• RBF (High Quality): Radial Basis Function. Intelligently routes around nebulae to protect faint signals.',
+        'Both find the sky the same way and keep the target out; they differ in how they join the sky samples:\n• Grid (Fast): straight lines between samples. Follows a steep fall-off at the frame edge most closely.\n• RBF (Quality): a smooth thin-plate spline through them, with no seams between samples.',
     saturation_boost:
         "Intensifies colors in the darkest parts of the image, helping faint nebulae and galaxy arms 'pop' without over-saturating stars.",
     saturation_boost_strength:

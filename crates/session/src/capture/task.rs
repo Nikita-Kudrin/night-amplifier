@@ -403,6 +403,8 @@ pub async fn run_capture_loop(
     // by minutes. Left alone it keeps the solve latch raised, so the *next* capture
     // session cannot solve either.
     super::solving::abandon_solve_on_shutdown(&state).await;
+    // The stack's plate solve too: its ASTAP would otherwise outlive the session.
+    super::field_solve::cancel(&state);
 
     info!(camera_id = %camera_id, "Capture pipeline ended");
 

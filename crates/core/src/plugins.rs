@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::background::BackgroundAlgorithmPlugin;
 use crate::planetary::PlanetaryStackerPlugin;
-use crate::push_to::{PushToCatalogPlugin, PushToInstallerPlugin, PushToSolverPlugin};
+use crate::push_to::{FieldObjectsPlugin, PushToCatalogPlugin, PushToInstallerPlugin, PushToSolverPlugin};
 use crate::render::denoise::ai::AiDenoisePlugin;
 use crate::render::denoise::DenoisePlugin;
 use crate::render::stretch::SaturationPlugin;
@@ -32,6 +32,7 @@ struct Slots {
     push_to_solver: Option<Arc<dyn PushToSolverPlugin>>,
     push_to_catalog: Option<Arc<dyn PushToCatalogPlugin>>,
     push_to_installer: Option<Arc<dyn PushToInstallerPlugin>>,
+    field_objects: Option<Arc<dyn FieldObjectsPlugin>>,
     /// Answer regardless of the process licence — for tests, which own their plugins.
     always_licensed: bool,
 }
@@ -91,6 +92,7 @@ slots! {
     push_to_solver: with_push_to_solver, dyn PushToSolverPlugin;
     push_to_catalog: with_push_to_catalog, dyn PushToCatalogPlugin;
     push_to_installer: with_push_to_installer, dyn PushToInstallerPlugin;
+    field_objects: with_field_objects, dyn FieldObjectsPlugin;
 }
 
 impl Plugins {
@@ -149,6 +151,7 @@ impl Plugins {
             ("saturation", s.saturation.is_some()),
             ("denoise", s.denoise.is_some()),
             ("ai_denoise", s.ai_denoise.is_some()),
+            ("field_objects", s.field_objects.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, filled)| filled.then_some(name))

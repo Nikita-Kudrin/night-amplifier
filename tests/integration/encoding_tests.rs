@@ -556,13 +556,13 @@ fn probe_render_task_stage_breakdown() {
 
     println!("\n=== Render Task Stage Breakdown (live view, per frame) ===\n");
 
-    // Live-view UI settings: Auto Stretch High, background subtraction off.
+    // Live-view UI settings: Auto Stretch Deep Sky, background subtraction off.
     let live_config = || {
         RenderPipelineConfig::new()
             .with_background_subtraction(false)
             .with_stretch_config(AutoStretchConfig::from_profile(
                 false,
-                StretchAggressiveness::High,
+                StretchAggressiveness::Medium,
             ))
             .with_auto_stretch(true)
             .with_contrast(true)
@@ -694,7 +694,7 @@ fn probe_fused_render_clamp_difference() {
             continue;
         };
 
-        let stretch_config = AutoStretchConfig::from_profile(false, StretchAggressiveness::High);
+        let stretch_config = AutoStretchConfig::from_profile(false, StretchAggressiveness::Medium);
         let contrast_config = ContrastConfig::default();
 
         // Reference: the three separate passes, i.e. stretch with no contrast fused in,

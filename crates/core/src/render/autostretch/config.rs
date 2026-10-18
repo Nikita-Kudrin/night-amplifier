@@ -5,11 +5,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+/// The stretch modes: Star Fields (`Low`) and Deep Sky (`Medium`). Nebulae (`high`) was
+/// dropped once the background model stopped leaving glow behind: it lifted the sky ~6
+/// output levels for 1-4 on the target, and Deep Sky's target-to-grain matched or beat
+/// it on nine of ten real stacks (M33 6.1 vs 4.3). Old settings files are migrated.
 pub enum StretchAggressiveness {
     Low,
     #[default]
     Medium,
-    High,
 }
 
 /// A frame that is not a stack, which is what every non-live caller renders.
@@ -200,14 +203,6 @@ impl AutoStretchConfig {
                     black_point_sigma: 1.5,
                     tone_mapping: ToneMappingAlgorithm::Mtf,
                     min_stretch: 0.01,
-                    max_stretch: 0.5,
-                    ..Default::default()
-                },
-                StretchAggressiveness::High => Self {
-                    target_background: 0.11,
-                    black_point_sigma: 2.2,
-                    tone_mapping: ToneMappingAlgorithm::Mtf,
-                    min_stretch: 0.001,
                     max_stretch: 0.5,
                     ..Default::default()
                 },

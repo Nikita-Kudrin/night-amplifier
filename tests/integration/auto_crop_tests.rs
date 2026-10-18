@@ -201,7 +201,10 @@ fn the_border_skews_the_statistics_the_crop_removes() {
     println!("whole-frame sky MAD {whole_sigma:.6} vs the crop's {crop_sigma:.6}: {:+.1} %", 100.0 * inflation);
     assert!(inflation > 0.08, "the border inflated the sky MAD by only {:+.1} %", 100.0 * inflation);
 
-    let settings = CaptureSettings::default();
+    // Background subtraction off: the claim is about the stretch, and on this frame-filling
+    // galaxy the background models of the crop and the whole frame differ by their own
+    // amount (the gap was 72 vs 64 without them, 61 vs 59 with them, 2026-10-18).
+    let settings = CaptureSettings { background_subtraction: false, ..CaptureSettings::default() };
     let depth = session.depth as u32;
     let unbounded = (u32::MAX, u32::MAX);
     let (first, w, h) = render(cropped, &settings, false, unbounded, depth);

@@ -114,6 +114,9 @@ pub struct AppState {
     /// What clients were told about Push-To, and the plugin's event port. Present without
     /// the plugin too, so a Community sync still says "no target".
     pub push_to_announcer: Arc<PushToAnnouncer>,
+    /// The stack's one plate solve for background protection (Pro); see
+    /// `capture::field_solve`.
+    pub field_solve: crate::capture::field_solve::FieldSolve,
     /// Push-To's solve and watch consumer threads, started by the first frame offered.
     pub(crate) push_to_tasks: std::sync::OnceLock<crate::capture::push_to_tasks::PushToTasks>,
     /// The guide camera's free-running loop: whether one is registered, whether it is
@@ -228,6 +231,7 @@ impl AppState {
             recovery_status: CameraRecoveryStatus::new(events_tx.clone()),
             stream_crop: StreamCropView::new(events_tx.clone()),
             push_to_announcer: Arc::new(PushToAnnouncer::new(events_tx.clone())),
+            field_solve: Default::default(),
             installs: Arc::new(Installs::new(events_tx.clone())),
             events: events_tx,
             disk_writer: disk_writer_handle,

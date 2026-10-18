@@ -145,7 +145,6 @@ fn measure_render_brightness_on_real_sessions() {
     use night_amplifier::render::autostretch::StretchAggressiveness;
 
     let profiles = [
-        ("nebulae", StretchAggressiveness::High),
         ("deep-sky", StretchAggressiveness::Medium),
         ("star-fields", StretchAggressiveness::Low),
     ];

@@ -93,10 +93,10 @@ pub fn correct_and_demosaic(
     cfa.debayer(algorithm)
 }
 
-/// Helper to get background configuration from capture settings
+/// Background configuration from capture settings. Independent of the stretch mode: the
+/// extractor masks the target itself, so every mode subtracts the whole gradient.
 pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
-    BackgroundConfig::from_stretch_profile(settings.stretch_aggressiveness)
-        .with_algorithm(settings.background_extraction_algorithm)
+    BackgroundConfig::default().with_algorithm(settings.background_extraction_algorithm)
 }
 
 /// The sky level the black floor's percentage is quoted against.

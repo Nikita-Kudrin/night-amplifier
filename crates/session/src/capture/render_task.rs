@@ -126,6 +126,18 @@ pub fn run_render_task(
             }
         };
         analysis.note_crop(crop);
+        // The stack's catalog footprints, carried onto the frame as cut and binned. Only
+        // a stack is registered to the frame they were solved on, and only one its size.
+        analysis.set_protection(
+            showing_stack
+                .then(|| state.field_solve.protection())
+                .flatten()
+                .and_then(|p| {
+                    let source = (source_width, source_height);
+                    p.mapped(source, crop.as_ref(), display_frame.width(), display_frame.height())
+                })
+                .map(Arc::new),
+        );
         // The map describes the frame, so it follows every geometry change the frame makes,
         // and only where the frame really was binned.
         if binned {
@@ -486,10 +498,15 @@ mod tests {
             "binning no longer moves the tone curve ({worst:.4}) — if the solve has been \
              made resolution-independent, tighten this bound rather than deleting it"
         );
+        // 1.06 when SessionBinFactor was introduced; 9.85 since background removal takes
+        // the whole gradient (2026-10-17): the 30 % it used to leave dominated this
+        // fixture's MAD identically at both sizes, masking the noise the 2x2 box halves.
+        // Real stacks moved both ways (worst point, 0.7 -> 1.0: M101 89 -> 120, fireworks
+        // 108 -> 7, Cat's Eye 11 -> 11), and the session holds its bin, so nothing flips.
         assert!(
-            worst < 1.5,
-            "binning moved the tone curve by {worst:.4}, up from the 1.0640 measured when \
-             SessionBinFactor was introduced"
+            worst < 12.0,
+            "binning moved the tone curve by {worst:.4}, up from the 9.85 measured once \
+             background removal took the whole gradient"
         );
     }
 

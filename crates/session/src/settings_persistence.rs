@@ -61,7 +61,13 @@ impl SettingsFile {
 /// only ever saved raw frames in Stacking — the gate was `stacking && !wanderer_mode` — so
 /// that is the one switch a legacy `true` may turn on. Without this an upgrade reads the
 /// old key as an unknown field and drops it, and the first save writes the loss back.
+///
+/// `stretch_aggressiveness: "high"` (Nebulae) was removed; it reads as Deep Sky, the mode
+/// that replaced it, rather than failing the whole file and resetting every setting.
 fn migrate(file: &mut Map<String, Value>) {
+    if file.get("stretch_aggressiveness").and_then(Value::as_str) == Some("high") {
+        file.insert("stretch_aggressiveness".to_string(), Value::from("medium"));
+    }
     let legacy_raw_saving = file.remove("save_raw_frames").and_then(|v| v.as_bool());
     if file.get("raw_frame_saving").is_none_or(Value::is_null) {
         let saving = RawFrameSaving {

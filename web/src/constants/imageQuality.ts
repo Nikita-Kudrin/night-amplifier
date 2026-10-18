@@ -11,7 +11,6 @@ import type {Option} from './tables'
 export const AUTO_STRETCH_INTENSITY = serverLimits('auto_stretch_intensity', {step: 0.05})
 
 export const STRETCH_AGGRESSIVENESS_OPTIONS = [
-    {value: 'high', label: 'Nebulae'},
     {value: 'medium', label: 'Deep Sky'},
     {value: 'low', label: 'Star Fields'},
 ] satisfies readonly Option<StretchAggressiveness>[]
