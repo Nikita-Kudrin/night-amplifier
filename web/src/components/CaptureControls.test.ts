@@ -602,10 +602,10 @@ describe('CaptureControls', () => {
                 settings: {auto_stretch: true, stretch_aggressiveness: 'medium'},
             })
             const select = wrapper.find('.aggressiveness-select')
-            await select.setValue('high')
+            await select.setValue('low')
             await select.trigger('change')
             await flushPromises()
-            expect(updateSettings).toHaveBeenCalledWith({stretch_aggressiveness: 'high'})
+            expect(updateSettings).toHaveBeenCalledWith({stretch_aggressiveness: 'low'})
         })
     })
 

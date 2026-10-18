@@ -10,6 +10,7 @@
 
 pub mod analysis;
 pub(crate) mod capture_thread;
+pub mod field_solve;
 pub mod channel;
 mod context;
 mod drop_log;

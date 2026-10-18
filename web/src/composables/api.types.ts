@@ -817,7 +817,13 @@ export type SolveVerdict = (typeof SOLVE_VERDICT_VALUES)[number]
 export const STACKING_TYPE_VALUES = ['deep_sky', 'planetary', 'comet'] as const
 export type StackingType = (typeof STACKING_TYPE_VALUES)[number]
 
-export const STRETCH_AGGRESSIVENESS_VALUES = ['low', 'medium', 'high'] as const
+/**
+ * The stretch modes: Star Fields (`Low`) and Deep Sky (`Medium`). Nebulae (`high`) was
+ * dropped once the background model stopped leaving glow behind: it lifted the sky ~6
+ * output levels for 1-4 on the target, and Deep Sky's target-to-grain matched or beat
+ * it on nine of ten real stacks (M33 6.1 vs 4.3). Old settings files are migrated.
+ */
+export const STRETCH_AGGRESSIVENESS_VALUES = ['low', 'medium'] as const
 export type StretchAggressiveness = (typeof STRETCH_AGGRESSIVENESS_VALUES)[number]
 
 /**

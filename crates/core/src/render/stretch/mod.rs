@@ -460,8 +460,8 @@ mod tests {
     /// Two curves an observer can tell apart must not share a cached table.
     ///
     /// The regression this guards: the key quantised `strength` to an absolute `1e-4`,
-    /// and an MTF midtone on a deep-sky stack is ~`1e-3`. The Nebulae and Deep Sky
-    /// profiles solved to 0.001053 and 0.001085 on a 106-sub IMX533 stack — 3 % apart,
+    /// and an MTF midtone on a deep-sky stack is ~`1e-3`. The Nebulae (since removed) and
+    /// Deep Sky profiles solved to 0.001053 and 0.001085 on a 106-sub IMX533 stack — 3 % apart,
     /// the same key — so the second render of a frame used the first profile's tone
     /// curve, and which one you got depended on render order alone.
     #[test]

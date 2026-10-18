@@ -376,11 +376,11 @@ mod tests {
         }
     }
 
-    /// Every `black_point_sigma` and `target_background` a solve starts from: the three
+    /// Every `black_point_sigma` and `target_background` a solve starts from: the two
     /// deep-sky profiles, planetary, and the default the exports use.
     fn gate_configs() -> Vec<AutoStretchConfig> {
-        use crate::render::autostretch::StretchAggressiveness::{High, Low, Medium};
-        let mut configs: Vec<_> = [Low, Medium, High]
+        use crate::render::autostretch::StretchAggressiveness::{Low, Medium};
+        let mut configs: Vec<_> = [Low, Medium]
             .into_iter()
             .map(|a| AutoStretchConfig::from_profile(false, a))
             .collect();

@@ -54,8 +54,8 @@ When designing new features or refactoring, adhere to the following architectura
 - Asynchronous Communication: favor event-driven (Pub/Sub, queues) for long-running or cross-service work.
 - Design for Failure (Resilience).
 - Plugin system: performance-critical / Pro-only logic lives behind traits, collected in one `plugins::Plugins`
-  value (rejection, background, planetary, saturation, denoise, AI denoise, comet, and Push-To's solver, catalog and
-  installer) so Community works standalone. The binary `install`s its set via `app::run`; `AppState::plugins` carries
+  value (rejection, background, planetary, saturation, denoise, AI denoise, comet, Push-To's solver, catalog and
+  installer, and the field-objects port background protection solves stacks through) so Community works standalone. The binary `install`s its set via `app::run`; `AppState::plugins` carries
   it to stacking, rendering and Push-To, so a test hands in its own set (`always_licensed` for fakes) instead of
   filling process-wide slots. Accessors are licence-gated per call: a lapsed licence degrades the next frame.
 - Layers are crates, so Cargo enforces them: `night_amplifier` (root: `server`, `app.rs`, binary; re-exports the
@@ -140,7 +140,7 @@ have answered mid-test.
 | `detection/`       | Star detection, CoM centroiding, FWHM/SNR                                      |
 | `registration/`    | Triangle matching + RANSAC → `AffineTransform`                                 |
 | `stacking/`        | `MasterStack` accumulator, rejection, warping                                  |
-| `background/`      | Grid-based gradient extraction                                                 |
+| `background/`      | Gradient model: node layout, sky/target classifier, catalog protection         |
 | `render/`          | Stretch, autostretch solver, white balance, S-curve; `display/` the f32 → RGB8 kernels and PNG |
 | `camera/`          | Traits + vendor SDKs + simulator                                               |
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
@@ -480,10 +480,20 @@ the two travel on different sockets, and reframing an old frame still in flight 
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
-**Crowded targets stay out of both models** (bilinear and Pro's RBF): brightness pruning seeds a disc around a
-frame-filling halo (capped, refilled from the outer surface) so the target can't become its own reference. The
-surface is a **plane unless a quadratic halves the outer nodes' residual RMS** — vignetting is a dome a plane
-reads as excess.
+**One node classifier for both models** (`background::classify`; bilinear here, Pro's TPS through the same completed
+grid): a robust polynomial ladder (degree <= 4) rejects nodes 3 sigma above it, **a rejected node whose climb up the
+excess ends at the frame edge is glow** and readmitted, targets grow through their wing (1 sigma, 3x3 mean, <= 2
+lines) and by their own radius (1-3 lines); holes refill from the fit, never above the node's own value, stepping
+down a degree where it would (a frame-filling M27 rendered black) and flat where the sky is one corner. Nodes hug
+both edges plus an inset line at 3.5 % (edge falloff), and the model subtracts the **whole** gradient: the 0.7 the
+stretch profiles set, a brightness prune and a crowding disc that landed off-target on every real stack once left
+M57's moon band at 22 output levels and a 35 mm corner glow at 70 (now 4 each). **Pro plate-solves each stack once**
+(`capture::field_solve`, depth >= 6, 90 s, never blind) and catalog footprints (`FieldProtection`, a generation in
+the analysis key) stay out of the sky. It solves on the **stack's** rig (the imaging camera's, not a guide holding
+Push-To, whose FOV refused every stack) and leaves Push-To's state alone: sharing it left a Push-To spinner up and
+sent Push-To's next bad frame blind. Push-To comes first — a Push-To solve cancels it — and a cancel (or Stop)
+retries on the next sub, never gives the stack up. Real-data guard: Pro's `background_gradient_regression` on
+`background-gradient-stacks`; `background_gradient_diagnostics` cuts it.
 
 ### Phase 7-8: Statistics & Auto-Color
 

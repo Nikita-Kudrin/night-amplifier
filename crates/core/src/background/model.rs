@@ -23,7 +23,7 @@ pub struct BackgroundModel {
     gradient_only: bool,
     /// Percentile to use as reference level (0.0 to 1.0)
     reference_percentile: f32,
-    /// Aggressiveness of subtraction (0.0 to 1.0, or -1.0 for auto)
+    /// Share of the gradient subtracted (0.0 to 1.0)
     aggressiveness: f32,
     /// Pixel X coordinates of grid columns (enables fast delta-stepping subtraction)
     nodes_x: Option<Vec<usize>>,
@@ -198,13 +198,7 @@ impl BackgroundModel {
             (3.0 * sigma).max(0.001)
         };
 
-        // Determine actual aggressiveness (auto-detect if -1.0)
-        let aggressiveness = if self.aggressiveness < 0.0 {
-            let _span = tracing::info_span!("compute_auto_aggressiveness").entered();
-            self.compute_auto_aggressiveness()
-        } else {
-            self.aggressiveness
-        };
+        let aggressiveness = self.aggressiveness.clamp(0.0, 1.0);
 
         // In gradient-only mode, find the reference level per channel using percentile
         // and subtract only the difference from that reference, scaled by aggressiveness
@@ -417,45 +411,6 @@ impl BackgroundModel {
         // Compute the percentile index
         let idx = ((sorted.len() as f32 - 1.0) * self.reference_percentile) as usize;
         sorted[idx.min(sorted.len() - 1)]
-    }
-
-    /// Automatically compute aggressiveness based on background uniformity.
-    /// High variation suggests extended objects; use lower aggressiveness.
-    /// Low variation suggests pure gradients; use higher aggressiveness.
-    fn compute_auto_aggressiveness(&self) -> f32 {
-        // Use the green channel (or first channel) for analysis
-        let channel = if self.channels > 1 { 1 } else { 0 };
-        let grid = &self.grid_values[channel];
-
-        if grid.is_empty() {
-            return 0.5;
-        }
-
-        // Compute coefficient of variation (CV = std_dev / mean)
-        let mean: f32 = grid.iter().sum::<f32>() / grid.len() as f32;
-        if mean < 1e-9 {
-            return 0.5;
-        }
-
-        let variance: f32 =
-            grid.iter().map(|&v| (v - mean).powi(2)).sum::<f32>() / grid.len() as f32;
-        let std_dev = variance.sqrt();
-        let cv = std_dev / mean;
-
-        // Map CV to aggressiveness (conservative approach to preserve nebulae):
-        // CV < 0.03: Very uniform -> aggressiveness = 0.7 (mostly gradient, subtract most)
-        // CV > 0.15: Highly non-uniform (likely nebulae) -> aggressiveness = 0.15
-        // Linear interpolation in between
-        // This is more conservative than before to better preserve extended objects
-
-        if cv < 0.03 {
-            0.7
-        } else if cv > 0.15 {
-            0.15
-        } else {
-            // Linear interpolation: 0.7 at cv=0.03, 0.15 at cv=0.15
-            0.7 - (cv - 0.03) / (0.15 - 0.03) * 0.55
-        }
     }
 
     /// Generate the background as a new Frame (useful for visualization)

@@ -30,7 +30,7 @@ const MIN_WATCH_INTERVAL: Duration = Duration::from_millis(1500);
 /// Shared rather than rebuilt per frame: it is stateless configuration, and the
 /// settings must not drift between the movement comparison and the solve that
 /// follows it.
-fn solve_detector() -> &'static StarDetector {
+pub(crate) fn solve_detector() -> &'static StarDetector {
     static DETECTOR: OnceLock<StarDetector> = OnceLock::new();
     DETECTOR.get_or_init(|| StarDetector::new(DetectionConfig::sensitive().with_max_stars(200)))
 }

@@ -10,6 +10,7 @@ use crate::state::{AppState, CameraRole, StackingType};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
+use super::field_solve;
 use super::context::{LiveStacker, StackingCarryover};
 use super::stack_crop::{self, StackCrop};
 use super::wanderer::Wanderer;
@@ -173,6 +174,11 @@ pub fn run_stacking_task(
             // change under the pipeline mid-frame.
             let want_display = render_depth.pending() == 0;
 
+            // A stack about to be built from nothing is a new field as far as the
+            // background's catalog protection knows.
+            if stacker.is_none() {
+                state.field_solve.reset();
+            }
             let outcome = pipeline::stack_frame(
                 &frame,
                 &settings,
@@ -208,6 +214,7 @@ pub fn run_stacking_task(
         // counters describe no longer exists.
         if stack_reset {
             state.reset_counters();
+            state.field_solve.reset();
         }
 
         // Note there is deliberately no raw-frame fallback for a frame that
@@ -242,6 +249,17 @@ pub fn run_stacking_task(
         // frame count instead would report every frame after the first as
         // stacked, leaving the UI's rejection counter pinned at zero.
         let was_stacked = stacking_enabled && registration_succeeded;
+
+        // Background protection's one plate solve of this stack (Pro). Deep-sky stacks
+        // only: a planetary or comet stack is not registered on the stars.
+        if let (true, Some(stack)) = (
+            showing_stack
+                && settings.background_subtraction
+                && settings.stacking_type == StackingType::DeepSky,
+            display_frame.as_ref(),
+        ) {
+            field_solve::offer(&state, &rt, stack, stack_depth as usize);
+        }
 
         // Trigger plate solving asynchronously. Gated up front: without the Push-To
         // plugin the solve is a no-op, and spawning it would keep a second handle on

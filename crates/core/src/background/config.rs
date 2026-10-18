@@ -1,4 +1,6 @@
-use crate::render::StretchAggressiveness;
+use std::sync::Arc;
+
+use super::protection::FieldProtection;
 use serde::{Deserialize, Serialize};
 
 /// Algorithm used for background extraction
@@ -23,122 +25,46 @@ impl std::fmt::Display for BackgroundExtractionAlgorithm {
     }
 }
 
-/// Configuration for background extraction
+/// Configuration for background extraction.
+///
+/// One config for every stretch mode: the extractor's own target masking protects the
+/// target, so the strength is a full 1.0. The 0.7 the stretch profiles used to set left
+/// 30 % of every gradient on screen (M57: 4.7 sigma of sky range against 0.9 at 1.0).
 #[derive(Debug, Clone)]
 pub struct BackgroundConfig {
     /// Algorithm to use for background extraction
     pub algorithm: BackgroundExtractionAlgorithm,
-    /// Number of grid blocks horizontally
+    /// Node lines across, both edges included (see `grid::node_axis`)
     pub grid_width: usize,
-    /// Number of grid blocks vertically
+    /// Node lines down, both edges included
     pub grid_height: usize,
+    /// Extra node line this far in from each edge, as a frame fraction (0: none)
+    pub edge_inset: f32,
     /// Sigma threshold for star rejection (pixels above median + sigma*MAD are rejected)
     pub star_rejection_sigma: f32,
     /// If true, subtract only the gradient (variation from reference level), preserving the base signal.
     /// If false, subtract the full background (traditional behavior).
-    /// Default: true (gradient-only mode preserves signal in low-signal astronomical images).
     pub gradient_only: bool,
-    /// Percentile to use as reference level in gradient-only mode (0.0 to 1.0).
-    /// Lower values preserve more signal but may leave residual gradients.
-    /// Higher values remove more gradient but may also remove extended object signal.
-    /// Default: 0.1 (10th percentile) - balances gradient removal with signal preservation.
+    /// Percentile of the model taken as the reference level in gradient-only mode (0.0 to 1.0).
     pub reference_percentile: f32,
-    /// Aggressiveness of background subtraction (0.0 to 1.0).
-    /// Controls how much of the estimated background gradient to actually subtract.
-    /// 0.0 = no subtraction, 1.0 = full subtraction, 0.5 = subtract 50% of estimated gradient.
-    /// Default: 1.0 (full subtraction of the gradient).
-    /// Use lower values (0.3-0.7) for images with extended objects like nebulae.
+    /// Share of the estimated gradient to subtract (0.0 to 1.0).
     pub aggressiveness: f32,
+    /// Catalog objects in this frame, from the session's plate solve, never fitted as sky.
+    pub protection: Option<Arc<FieldProtection>>,
 }
 
 impl Default for BackgroundConfig {
     fn default() -> Self {
         Self {
             algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 16,
-            grid_height: 16,
+            grid_width: 12,
+            grid_height: 12,
+            edge_inset: 0.035,
             star_rejection_sigma: 2.5,
             gradient_only: true,
             reference_percentile: 0.1,
             aggressiveness: 1.0,
-        }
-    }
-}
-
-impl BackgroundConfig {
-    /// Preset for images with extended objects like nebulae.
-    /// Uses conservative settings to preserve nebula signal.
-    pub fn for_nebulae() -> Self {
-        Self {
-            algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 12,
-            grid_height: 12,
-            star_rejection_sigma: 2.5,
-            gradient_only: true,
-            reference_percentile: 0.1,
-            aggressiveness: 0.7,
-        }
-    }
-
-    /// Preset for images with galaxies (medium stretch).
-    pub fn for_galaxies() -> Self {
-        Self {
-            algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 12,
-            grid_height: 12,
-            star_rejection_sigma: 2.5,
-            gradient_only: true,
-            reference_percentile: 0.1,
-            aggressiveness: 0.7,
-        }
-    }
-
-    /// Preset for star fields (low stretch, aggressive gradient removal).
-    pub fn for_star_field() -> Self {
-        Self {
-            algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 16,
-            grid_height: 16,
-            star_rejection_sigma: 2.5,
-            gradient_only: true,
-            reference_percentile: 0.1,
-            aggressiveness: 0.8,
-        }
-    }
-
-    /// Automatically select the best background extraction profile based on the selected autostretch profile.
-    pub fn from_stretch_profile(aggressiveness: StretchAggressiveness) -> Self {
-        match aggressiveness {
-            StretchAggressiveness::High => Self::for_nebulae(),
-            StretchAggressiveness::Medium => Self::for_galaxies(),
-            StretchAggressiveness::Low => Self::for_star_field(),
-        }
-    }
-
-    /// Preset for images with strong light pollution gradients but no extended objects.
-    pub fn for_light_pollution() -> Self {
-        Self {
-            algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 16,
-            grid_height: 16,
-            star_rejection_sigma: 2.5,
-            gradient_only: true,
-            reference_percentile: 0.1,
-            aggressiveness: 1.0,
-        }
-    }
-
-    /// Preset that automatically adapts based on background uniformity.
-    /// Analyzes the background model and adjusts aggressiveness accordingly.
-    pub fn adaptive() -> Self {
-        Self {
-            algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 12,
-            grid_height: 12,
-            star_rejection_sigma: 2.0,
-            gradient_only: true,
-            reference_percentile: 0.1,
-            aggressiveness: -1.0,
+            protection: None,
         }
     }
 }
@@ -154,6 +80,12 @@ impl BackgroundConfig {
     pub fn with_grid_size(mut self, width: usize, height: usize) -> Self {
         self.grid_width = width;
         self.grid_height = height;
+        self
+    }
+
+    /// Set the edge inset line (frame fraction; 0 for none)
+    pub fn with_edge_inset(mut self, inset: f32) -> Self {
+        self.edge_inset = inset.clamp(0.0, 0.25);
         self
     }
 
@@ -173,22 +105,20 @@ impl BackgroundConfig {
     }
 
     /// Set the reference percentile for gradient-only mode (0.0 to 1.0).
-    /// Lower values preserve more signal (e.g., 0.05 for nebulae).
-    /// Higher values remove more gradient (e.g., 0.2 for light pollution only).
     pub fn with_reference_percentile(mut self, percentile: f32) -> Self {
         self.reference_percentile = percentile.clamp(0.0, 1.0);
         self
     }
 
-    /// Set the aggressiveness of background subtraction (0.0 to 1.0).
-    /// Use lower values (0.3-0.7) for images with extended objects.
-    /// Use -1.0 for automatic adaptation based on background uniformity.
+    /// Set the share of the gradient to subtract (0.0 to 1.0).
     pub fn with_aggressiveness(mut self, aggressiveness: f32) -> Self {
-        self.aggressiveness = if aggressiveness < 0.0 {
-            -1.0 // Auto mode
-        } else {
-            aggressiveness.clamp(0.0, 1.0)
-        };
+        self.aggressiveness = aggressiveness.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Catalog objects to keep out of the model.
+    pub fn with_protection(mut self, protection: Option<Arc<FieldProtection>>) -> Self {
+        self.protection = protection;
         self
     }
 }

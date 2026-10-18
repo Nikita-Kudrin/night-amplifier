@@ -7,7 +7,9 @@
 //! subs halves noise, 140->141 nothing) — bounded by [`DEPTH_GROWTH`]/[`MAX_AGE_FRAMES`].
 //! A reused MAD is carried to frame depth ([`NoiseTrend`]) rather than measured fresh, which once pulsed the tone curve each refresh (M27 depth 24-30, grain 2.54→2.32→2.45).
 
-use night_amplifier_core::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel};
+use std::sync::Arc;
+
+use night_amplifier_core::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel, FieldProtection};
 use night_amplifier_core::error::Result;
 use night_amplifier_core::statistics::ImageStats;
 use night_amplifier_core::stacking::CropRect;
@@ -71,6 +73,10 @@ struct AnalysisKey {
     gradient_only: bool,
     reference_percentile: u32,
     aggressiveness: u32,
+    edge_inset: u32,
+    /// The catalog protection's generation: a plate solve landing mid-session must
+    /// rebuild the model once, not wait for the stack to grow.
+    protection: Option<u64>,
     scnr: bool,
     scnr_amount: u32,
     auto_stretch: bool,
@@ -94,6 +100,8 @@ impl AnalysisKey {
             gradient_only: background.gradient_only,
             reference_percentile: background.reference_percentile.to_bits(),
             aggressiveness: background.aggressiveness.to_bits(),
+            edge_inset: background.edge_inset.to_bits(),
+            protection: background.protection.as_ref().map(|p| p.generation),
             scnr,
             scnr_amount: scnr_amount.to_bits(),
             auto_stretch,
@@ -181,6 +189,9 @@ pub struct PreviewAnalysis {
     crop: Option<CropRect>,
     /// `crop` moved since the last frame.
     crop_changed: bool,
+    /// The stack's catalog footprints on the frame being analysed — see
+    /// [`Self::set_protection`].
+    protection: Option<Arc<FieldProtection>>,
 }
 
 impl PreviewAnalysis {
@@ -198,6 +209,18 @@ impl PreviewAnalysis {
     pub fn note_crop(&mut self, crop: Option<CropRect>) {
         self.crop_changed = self.crop != crop;
         self.crop = crop;
+    }
+
+    /// The stack's catalog footprints, mapped onto the next frame, before
+    /// [`Self::begin_frame`]. A plate solve landing mid-stack is treated like a crop
+    /// change: the estimates are measured again, the noise trend carries on.
+    pub fn set_protection(&mut self, protection: Option<Arc<FieldProtection>>) {
+        self.protection = protection;
+    }
+
+    /// What [`Self::set_protection`] last set, for the background config.
+    pub fn protection(&self) -> Option<Arc<FieldProtection>> {
+        self.protection.clone()
     }
 
     /// Decide once, for this frame, whether the stored estimates still describe it.
@@ -228,13 +251,15 @@ impl PreviewAnalysis {
         );
 
         let crop_changed = std::mem::take(&mut self.crop_changed);
-        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx, crop_changed);
+        let protection_changed = self.cached.as_ref().is_some_and(|c| c.key.protection != key.protection);
+        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx, crop_changed, protection_changed);
+        let remeasure = crop_changed || protection_changed;
         if !same_stack {
             self.trend = NoiseTrend::default();
-        } else if crop_changed {
+        } else if remeasure {
             self.trend.rebase();
         }
-        self.reuse = same_stack && !crop_changed && self.is_current(ctx);
+        self.reuse = same_stack && !remeasure && self.is_current(ctx);
         self.depth = ctx.stack_depth;
 
         if self.reuse {
@@ -256,16 +281,18 @@ impl PreviewAnalysis {
     }
 
     /// The stored estimates were taken from an earlier frame of this same stack.
-    /// `crop_changed` lets the dimensions differ, since a new crop is what changed them.
-    fn continues_stack(&self, key: &AnalysisKey, ctx: AnalysisContext, crop_changed: bool) -> bool {
+    /// `crop_changed` lets the dimensions differ, since a new crop is what changed them;
+    /// `protection_changed` the protection, since a solve landing is what changed it.
+    fn continues_stack(&self, key: &AnalysisKey, ctx: AnalysisContext, crop_changed: bool, protection_changed: bool) -> bool {
         // A stack that has not been measured yet, or that restarted, has nothing to
         // compare against — `stack_depth` going *down* is a reset.
         self.cached.as_ref().is_some_and(|cached| {
-            let same_key = if crop_changed {
-                AnalysisKey { dimensions: key.dimensions, ..cached.key } == *key
-            } else {
-                cached.key == *key
+            let comparable = AnalysisKey {
+                dimensions: if crop_changed { key.dimensions } else { cached.key.dimensions },
+                protection: if protection_changed { key.protection } else { cached.key.protection },
+                ..cached.key
             };
+            let same_key = comparable == *key;
             same_key && cached.depth != 0 && ctx.stack_depth >= cached.depth
         })
     }
@@ -635,6 +662,32 @@ mod tests {
             let expected = measured(sigma_25 * 0.85) * (26.0 / depth as f32).powf(0.3);
             assert!((served / expected - 1.0).abs() < 1e-4, "depth {depth}: served {served}, the trend says {expected}");
         }
+    }
+
+    /// A stack plate solve landing mid-stack hands the background its catalog footprints:
+    /// the model is built again with them, once, but it is the same stack — a dropped
+    /// trend would jolt the stretch the moment the solve lands.
+    #[test]
+    fn a_landed_plate_solve_measures_again_but_keeps_the_trend() {
+        use night_amplifier_core::background::{FieldProtection, ProtectedRegion};
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        let sigma_25 = 0.004 * (16.0f32 / 25.0).powf(0.3);
+        measure(&mut a, 25, sigma_25);
+
+        let footprint = ProtectedRegion { cx: 50.0, cy: 50.0, semi_major: 10.0, semi_minor: 10.0, angle: 0.0 };
+        let solved = |generation| Some(Arc::new(FieldProtection { generation, width: 100, height: 100, regions: vec![footprint] }));
+        let with = |protection: Option<Arc<FieldProtection>>| BackgroundConfig { protection, ..config() };
+
+        assert!(!begin(&mut a, stacked(26), &with(solved(1))), "the model ignored the footprints");
+        a.stats(|| Ok(sky_stats(0.05, sigma_25))).unwrap();
+        for depth in [27u32, 30] {
+            assert!(begin(&mut a, stacked(depth), &with(solved(1))), "depth {depth} must reuse");
+            let served = a.stats(|| panic!("a reusing frame must not measure")).unwrap().mean_sigma();
+            let expected = measured(sigma_25) * (26.0 / depth as f32).powf(0.3);
+            assert!((served / expected - 1.0).abs() < 1e-4, "depth {depth}: served {served}, the trend says {expected}");
+        }
+        assert!(!begin(&mut a, stacked(31), &with(solved(2))), "a new solve must rebuild the model");
     }
 
     /// Only a crop excuses a size change: a resolution change under the same crop is a new

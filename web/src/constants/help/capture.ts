@@ -13,7 +13,7 @@ export const CAPTURE_HELP = {
     auto_stretch:
         'Automatically transforms the image to make faint details and colors visible - stretching',
     stretch_aggressiveness:
-        'How hard the dark end of the image is boosted, and with it how bright the background sits.\n• Star Fields: the gentlest. Darkest background of the three and the cleanest, at the cost of some faint outer structure.\n• Deep Sky: the default, and the brightest on most targets.\n• Nebulae: lifts the background furthest, which brings out the faintest nebulosity and brings up its grain with it.\nAll three render stars the same way — the difference is what happens below them.',
+        'How hard the dark end of the image is boosted, and with it how bright the background sits.\n• Star Fields: the gentlest. Darker, cleaner background, at the cost of some faint outer structure.\n• Deep Sky: the default, for nebulae, galaxies and clusters alike.\nBoth render stars the same way — the difference is what happens below them.',
     stacking:
         'Determines how the camera feed is processed:\n• Live view: Raw feed, no stacking. Best for focusing.\n• Wanderer: Auto-stacks when stationary, resets on movement.\n• Stacking: Continuous real-time image accumulation.',
     stacking_type:

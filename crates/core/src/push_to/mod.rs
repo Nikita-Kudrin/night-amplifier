@@ -286,6 +286,35 @@ pub trait PushToSolverPlugin: Send + Sync {
     }
 }
 
+/// Plate solves a stack once and lists the catalog objects inside it, so the background
+/// model keeps them out (`background::FieldProtection`). Pro: ASTAP and OpenNGC.
+///
+/// Its own port, not a `PushToSolverPlugin` method: background protection is a consumer
+/// of the solver, and a fake for one need not fake the other. It must leave Push-To's
+/// state alone (its progress, last fix, scale and blind-rung records): a field solve
+/// once showed in the UI as a Push-To solve that never ended, and its failures sent
+/// Push-To's next bad frame to the blind rung.
+#[async_trait]
+pub trait FieldObjectsPlugin: Send + Sync {
+    /// Footprints, in `frame`'s pixels, of the catalog objects inside it. `camera` and
+    /// `telescope` are the rig the stack came through — the imaging camera's, which is
+    /// not the solver's while a guide camera holds Push-To. Gives up after `budget`.
+    /// Push-To takes precedence: a Push-To solve starting cancels this one
+    /// ([`PushToError::Cancelled`], worth retrying), as does [`Self::cancel`]. A
+    /// frame-quality error ([`PushToError::is_frame_quality`]) is worth retrying deeper.
+    async fn objects_in_field(
+        &self,
+        frame: &Frame,
+        camera: Option<&str>,
+        telescope: &TelescopeSettings,
+        detector: &StarDetector,
+        budget: std::time::Duration,
+    ) -> PushToResult<Vec<crate::background::ProtectedRegion>>;
+
+    /// Abandon the solve in flight, if any (the capture stopped). `true` if one was.
+    fn cancel(&self) -> bool;
+}
+
 /// Catalog search, target selection, and database operations.
 #[async_trait]
 pub trait PushToCatalogPlugin: Send + Sync {

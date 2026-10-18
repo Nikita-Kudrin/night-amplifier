@@ -1,8 +1,8 @@
 //! What a target filling the frame may do to the sky estimate: nothing.
 //!
 //! `estimate_background_mode` picks a histogram bin and refines it against a MAD over every
-//! sample, which works only while contamination is a minority. A frame-filling halo (why
-//! `background::target_disc` exists) is not: the window sizes around the target and the
+//! sample, which works only while contamination is a minority. A frame-filling halo (a
+//! globular crop, which the background model keeps out of its sky) is not: the window sizes around the target and the
 //! median lands inside it — +7.3 ADU on a synthetic halo over 69% of the frame, +349 on a
 //! 75% ramp, vs. a raw peak 1.4 ADU off sky. A real globular crop has no ground truth (its
 //! sky is 8 ADU brighter mid-frame), so it joins a stack whose sky is already measured.

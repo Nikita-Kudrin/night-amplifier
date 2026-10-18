@@ -57,7 +57,7 @@ mod tests {
             save_stacked_image: true,
             stacking_type: StackingType::Planetary,
             weighting_preset: WeightingPreset::Galaxies,
-            stretch_aggressiveness: StretchAggressiveness::High,
+            stretch_aggressiveness: StretchAggressiveness::Low,
             auto_stretch_intensity: 0.3,
             saturation_boost: true,
             saturation_boost_strength: 0.7,
@@ -412,7 +412,7 @@ mod tests {
             save_stacked_image: true,
             stacking_type: StackingType::DeepSky,
             weighting_preset: WeightingPreset::Nebulae,
-            stretch_aggressiveness: StretchAggressiveness::High,
+            stretch_aggressiveness: StretchAggressiveness::Low,
             auto_stretch_intensity: 0.3,
             saturation_boost: true,
             saturation_boost_strength: 0.6,
@@ -577,6 +577,18 @@ mod tests {
             "the legacy switch only ever saved in Stacking: migrating it into another \
              mode starts writing frames the user never asked for"
         );
+    }
+
+    /// Nebulae was removed: a file that chose it must still load (an unknown variant would
+    /// fail the whole file and reset every setting), as Deep Sky.
+    #[test]
+    fn the_removed_nebulae_stretch_loads_as_deep_sky() {
+        let mut json = serde_json::to_value(CaptureSettings::default()).unwrap();
+        json["stretch_aggressiveness"] = serde_json::json!("high");
+        json["gain"] = serde_json::json!(321);
+        let settings = read(json);
+        assert_eq!(settings.stretch_aggressiveness, StretchAggressiveness::Medium);
+        assert_eq!(settings.gain, 321, "the rest of the file must survive");
     }
 
     /// The legacy key must not resurface once migrated, or the next load would keep

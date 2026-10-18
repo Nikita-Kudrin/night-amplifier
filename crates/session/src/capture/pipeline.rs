@@ -247,6 +247,7 @@ pub fn process_preview_frame_with_analysis(
     // rather than in `get_render_pipeline_config`, which only sees settings.
     pipeline_config.stretch_config.stack_depth = ctx.stack_depth.max(1);
 
+    pipeline_config.background_config.protection = analysis.protection();
     let reused = analysis.begin_frame(
         ctx,
         (frame.width(), frame.height(), frame.channels()),

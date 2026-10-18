@@ -1,11 +1,6 @@
-//! Grid-node sampling shared by the bilinear and RBF background extractors: lay a grid
-//! over the frame, take a star-rejected median in a box around each node, then prune
-//! nodes that landed on nebulosity. Extracted after Community and Pro each carried a
-//! byte-identical `GridNode` copy, both reaching pixels via `frame.data()` plus a
-//! hand-computed `channel * area` offset — the pattern `AGENTS.md` asks reviewers to flag.
-//!
-//! Grid *placement* stays unshared: Community hugs the frame boundary for branchless
-//! delta-stepping; Pro centres nodes in each cell for its TPS solve's interior samples.
+//! Grid-node sampling shared by the bilinear and RBF background extractors: lay nodes
+//! over the frame ([`node_axis`]) and take a star-rejected median in a box around each.
+//! Which nodes are sky is [`super::classify`]'s job.
 
 use crate::frame::Frame;
 use crate::statistics::MAD_TO_SIGMA;
@@ -166,189 +161,43 @@ pub fn extract_node_value(
     Some(median(&mut pixels))
 }
 
-/// A node's star-rejected level plus how rough the sky inside its box is.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NodeSample {
-    /// Same value [`extract_node_value`] returns.
-    pub value: f32,
-    /// Robust sigma of the clip survivors about a plane fitted to them. The plane takes
-    /// out a gradient across the box, so what is left is noise plus unresolved
-    /// structure — a crowded star field reads rougher than sky at the same level.
-    pub scatter: f32,
-    /// Clip survivors the two figures were measured on.
-    pub samples: usize,
+/// Node positions along one axis of `len` pixels: `nodes` evenly spaced lines hugging
+/// both edges (so corners are sampled, not extrapolated), plus one line `inset` (frame
+/// fraction) in from each edge. Optical falloff and edge glow live in the outer 3-8 %
+/// of real stacks, which a 9 %-spaced grid cannot follow.
+pub fn node_axis(len: usize, nodes: usize, inset: f32) -> Vec<usize> {
+    let nodes = nodes.max(2);
+    let mut axis: Vec<usize> = (0..nodes).map(|i| i * (len - 1) / (nodes - 1)).collect();
+    let d = (inset * len as f32) as usize;
+    if d > 0 && d < axis[1] && len - 1 - d > axis[nodes - 2] {
+        axis.insert(1, d);
+        axis.insert(nodes, len - 1 - d);
+    }
+    axis.dedup();
+    axis
 }
 
-/// [`extract_node_value`] plus [`NodeSample::scatter`], for the one channel pruning
-/// reads. Kept separate so the per-channel value extraction pays for no plane fit.
-pub fn extract_node_sample(
-    frame: &Frame,
-    node: &GridNode,
-    box_size: usize,
-    channel: usize,
-) -> Option<NodeSample> {
-    let (width, height) = (frame.width(), frame.height());
-    let half = box_size / 2;
-    let (x_start, y_start) = (node.x.saturating_sub(half), node.y.saturating_sub(half));
-    let (x_end, y_end) = ((node.x + half + 1).min(width), (node.y + half + 1).min(height));
-    if x_start >= x_end || y_start >= y_end {
-        return None;
-    }
-
-    let plane = frame.channel_data(channel);
-    let mut pixels: Vec<[f32; 3]> = (y_start..y_end)
-        .flat_map(|y| (x_start..x_end).map(move |x| (x, y)))
-        .map(|(x, y)| [(x - x_start) as f32, (y - y_start) as f32, plane[y * width + x]])
-        .collect();
-
-    let mut values = Vec::with_capacity(pixels.len());
-    let mut mad_buf = Vec::with_capacity(pixels.len());
-    let mut early = None;
-    for _ in 0..SIGMA_CLIP_ITERATIONS {
-        values.clear();
-        values.extend(pixels.iter().map(|p| p[2]));
-        let med = median(&mut values);
-        let dispersion = mad_with_scratch(&values, med, &mut mad_buf);
-        if dispersion < 1e-9 {
-            break;
-        }
-        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * MAD_TO_SIGMA;
-        let before = pixels.len();
-        pixels.retain(|p| p[2] <= threshold);
-        if pixels.is_empty() {
-            early = Some(med);
-            break;
-        }
-        if pixels.len() == before {
-            break;
-        }
-    }
-    if let Some(value) = early {
-        return Some(NodeSample {
-            value,
-            scatter: 0.0,
-            samples: 0,
-        });
-    }
-
-    values.clear();
-    values.extend(pixels.iter().map(|p| p[2]));
-    let value = median(&mut values);
-    let residuals = plane_residuals(&pixels);
-    let centre = median(&mut residuals.clone());
-    let scatter = mad(&residuals, centre) * MAD_TO_SIGMA;
-    Some(NodeSample {
-        value,
-        scatter,
-        samples: pixels.len(),
-    })
-}
-
-/// Residuals of `[x, y, v]` points about their least-squares plane; about their mean
-/// when the fit is degenerate.
-fn plane_residuals(points: &[[f32; 3]]) -> Vec<f32> {
-    let n = points.len() as f64;
-    let mean = |i: usize| points.iter().map(|p| p[i] as f64).sum::<f64>() / n.max(1.0);
-    let (mx, my, mv) = (mean(0), mean(1), mean(2));
-    let (mut sxx, mut syy, mut sxy, mut sxv, mut syv) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    for p in points {
-        let (dx, dy, dv) = (p[0] as f64 - mx, p[1] as f64 - my, p[2] as f64 - mv);
-        sxx += dx * dx;
-        syy += dy * dy;
-        sxy += dx * dy;
-        sxv += dx * dv;
-        syv += dy * dv;
-    }
-    let det = sxx * syy - sxy * sxy;
-    let (a, b) = if det.abs() > 1e-12 {
-        ((sxv * syy - syv * sxy) / det, (syv * sxx - sxv * sxy) / det)
-    } else {
-        (0.0, 0.0)
-    };
-    points
-        .iter()
-        .map(|p| (p[2] as f64 - mv - a * (p[0] as f64 - mx) - b * (p[1] as f64 - my)) as f32)
+/// Every channel's star-rejected value at every node: `[channel][node]`.
+pub fn sample_nodes(frame: &Frame, nodes: &[GridNode], box_size: usize) -> Vec<Vec<Option<f32>>> {
+    use rayon::prelude::*;
+    let _span = tracing::info_span!("background_node_sampling", nodes = nodes.len(), box_size).entered();
+    (0..frame.channels())
+        .into_par_iter()
+        .map(|channel| {
+            nodes
+                .par_iter()
+                .map(|node| extract_node_value(frame, node, box_size, channel))
+                .collect()
+        })
         .collect()
 }
 
-/// Thresholds for [`prune_nebulosity`].
-///
-/// Parameterised because the two extractors deliberately disagree: the bilinear grid
-/// prunes at 2.5 sigma and a 5 % neighbour excess, RBF at 1.0 sigma and 2 %. RBF is
-/// stricter because a thin-plate spline will happily bend through a nebulosity node,
-/// where bilinear interpolation only smears it into the two cells that touch it.
-#[derive(Debug, Clone, Copy)]
-pub struct PruneConfig {
-    /// Sigma above the global median at which a node is rejected outright.
-    pub global_sigma: f32,
-    /// Multiple of the local 8-neighbour median above which a node is rejected.
-    pub neighbour_threshold: f32,
-}
-
-/// Prune nodes that landed on nebulosity using a two-stage approach: (1) **global**
-/// rejection, nodes above `global_median + global_sigma * MAD * MAD_TO_SIGMA`; (2) **neighbor**
-/// rejection, nodes exceeding the local 8-neighbor median by `neighbour_threshold`.
-///
-/// Stage 2 reads a snapshot taken before it starts, so a node's fate does not depend on
-/// whether its neighbours have already been visited.
-pub fn prune_nebulosity(
-    nodes: &mut [GridNode],
-    grid_cols: usize,
-    grid_rows: usize,
-    config: PruneConfig,
-) {
-    // Stage 1: Global sigma-based rejection
-    let mut all_values: Vec<f32> = nodes.iter().filter_map(|n| n.value).collect();
-    if all_values.len() < 4 {
-        return;
-    }
-
-    let global_median = median(&mut all_values);
-    let global_mad = mad(&all_values, global_median);
-    let global_threshold = global_median + config.global_sigma * global_mad * MAD_TO_SIGMA;
-
-    for node in nodes.iter_mut() {
-        if let Some(v) = node.value {
-            if v > global_threshold {
-                node.value = None;
-            }
-        }
-    }
-
-    // Stage 2: Neighbor-based rejection on survivors
-    let snapshot: Vec<Option<f32>> = nodes.iter().map(|n| n.value).collect();
-
-    for node in nodes.iter_mut() {
-        let Some(val) = node.value else {
-            continue;
-        };
-
-        let mut neighbor_values = Vec::with_capacity(8);
-        for dr in -1i32..=1 {
-            for dc in -1i32..=1 {
-                if dr == 0 && dc == 0 {
-                    continue;
-                }
-                let nr = node.row as i32 + dr;
-                let nc = node.col as i32 + dc;
-                if nr >= 0 && nr < grid_rows as i32 && nc >= 0 && nc < grid_cols as i32 {
-                    let idx = nr as usize * grid_cols + nc as usize;
-                    if let Some(nv) = snapshot[idx] {
-                        neighbor_values.push(nv);
-                    }
-                }
-            }
-        }
-
-        if neighbor_values.is_empty() {
-            continue;
-        }
-
-        let local_median = median(&mut neighbor_values);
-        if val > local_median * config.neighbour_threshold {
-            node.value = None;
-        }
-    }
+/// Every `(x, y)` of `xs × ys`, row-major, as unsampled nodes.
+pub fn layout_nodes(xs: &[usize], ys: &[usize]) -> Vec<GridNode> {
+    ys.iter()
+        .enumerate()
+        .flat_map(|(row, &y)| xs.iter().enumerate().map(move |(col, &x)| GridNode::new(x, y, col, row)))
+        .collect()
 }
 
 #[cfg(test)]

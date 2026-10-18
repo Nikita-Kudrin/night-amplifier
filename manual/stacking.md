@@ -83,6 +83,27 @@ measure noisier than it is, and the stretch came out flatter. As the field keeps
 shrinks, in occasional steps rather than on every frame. If you have zoomed in, the live view keeps
 the same patch of sky in view across a step. With the setting off nothing is ever cut.
 
+## Background removal
+
+**Settings → Processing → Background Subtraction** (on by default) removes the glow light pollution, the
+moon, the horizon and uncorrected vignetting lay over the sky, including a glow creeping in from
+one edge or a corner. The galaxy, nebula or cluster you are looking at is kept out of the
+background model: anything that brightens *inside* the frame is treated as a target, anything
+that brightens *towards an edge* as glow. The whole gradient is removed in every stretch mode.
+
+With Pro and plate solving installed, the stack is also plate solved once, in the background,
+after its first few frames: every catalogued object in the field is then protected by its
+catalogued size, even a faint nebula that a glow from the same edge would otherwise hide. The
+picture never waits for it, and Push-To always comes first: a Push-To solve pauses it until a
+later frame. With a guide camera, the stack is still solved through the imaging camera's own
+optics. A field the solver cannot recognise within 90 seconds (very zoomed in, few stars)
+simply carries on without it; a new stack, after a slew or a Wanderer restart, is solved again.
+
+Limits: a glow that peaks in the middle of the frame (a passing cloud) is kept as if it were a
+target, and a nebula touching the frame's edge without a catalogue entry can be partly removed
+with the glow beside it. Noise Reduction does not remove gradients, but by smoothing the grain it
+makes any that remain easier to see.
+
 ## Outlier Rejection (Pro)
 
 Satellite trails, aircraft and cosmic-ray hits are removed pixel by pixel: each new sample is

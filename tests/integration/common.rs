@@ -421,6 +421,29 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "m33-drifting-imx533-1024",
         "https://drive.usercontent.google.com/download?id=1EHrsxIVrU7A5-Qsj2K-IoakXdeq5Gb2A&export=download&confirm=t",
     ),
+    // M57 (two sessions) and NGC 6946 sessions (IMX533) whose stacks carry a strong one-sided
+    // gradient (moon/light pollution) over a quarter to half of the frame
+    // (`background_gradient_tests`).
+    (
+        "ring-nebula-imx533",
+        "https://drive.usercontent.google.com/download?id=1h8-up54TbYq3QwQR2j3PNnJvNqzYTtlC&export=download&confirm=t",
+    ),
+    (
+        "ring-2-nebula-fixture-imx533",
+        "https://drive.usercontent.google.com/download?id=191XhtUIbbIitqaUZJAXdpTrYjOl-BQuS&export=download&confirm=t",
+    ),
+    (
+        "fireworks-galaxy-imx533",
+        "https://drive.usercontent.google.com/download?id=17Nm3Jooy2_X30dLdo_BS1odYpsNG6mzT&export=download&confirm=t",
+    ),
+    // Display-size (bin 2) stacks of the ten sessions the background model is judged on,
+    // with `depths.txt`: what the render task hands the background stage at 1440p. Cut
+    // by Pro's `background_gradient_diagnostics::cut_stack_fixture`, so the regression
+    // (`background_gradient_regression`) needs ~300 MB instead of every session's subs.
+    (
+        "background-gradient-stacks",
+        "https://drive.usercontent.google.com/download?id=1bM7sDcimSbVvQtK4hL9-iYNFbYsn9Nlg&export=download&confirm=t",
+    ),
 ];
 
 /// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.

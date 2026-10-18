@@ -28,82 +28,6 @@ fn mad_and_mad_with_scratch_agree() {
     assert_eq!(mad(&[], 0.0), 0.0);
 }
 
-/// Deterministic N(0, 1).
-fn gaussian(seed: &mut u32) -> f32 {
-    let mut uniform = || {
-        *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        (*seed >> 8) as f32 / (1u32 << 24) as f32 + 1e-7
-    };
-    let (u1, u2) = (uniform(), uniform());
-    (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
-}
-
-/// Both extractors take the pruning channel's node values from the sample, so it has to
-/// be exactly what the per-channel extraction returns — for every node, frame edges, a
-/// flat (zero-dispersion) patch, star clusters and nodes off the frame included.
-#[test]
-fn node_sample_value_matches_node_value() {
-    let mut seed = 7;
-    let mut frame = Frame::zeros(96, 96, 1).unwrap();
-    for y in 0..96 {
-        for x in 0..96 {
-            let flat = x >= 64 && y >= 64;
-            frame.set_pixel(x, y, 0, if flat { 0.2 } else { 0.1 + 0.01 * gaussian(&mut seed) });
-        }
-    }
-    for (x, y) in [(40, 40), (41, 40), (40, 41), (10, 80), (90, 5)] {
-        frame.set_pixel(x, y, 0, 0.9);
-    }
-    let nodes = (0..=12)
-        .flat_map(|row| (0..=12).map(move |col| GridNode::new(col * 8, row * 8, col, row)))
-        .chain([GridNode::new(200, 200, 0, 0)]);
-    for node in nodes {
-        let sample = extract_node_sample(&frame, &node, 21, 0);
-        assert_eq!(sample.map(|s| s.value), extract_node_value(&frame, &node, 21, 0), "node at {}, {}", node.x, node.y);
-    }
-}
-
-/// A gradient across the box is not roughness; unresolved structure is.
-#[test]
-fn scatter_ignores_a_gradient_but_sees_crowding() {
-    let (size, sigma) = (64usize, 0.01f32);
-    let build = |extra: &dyn Fn(usize, usize) -> f32| {
-        let mut seed = 11;
-        let mut frame = Frame::zeros(size, size, 1).unwrap();
-        for y in 0..size {
-            for x in 0..size {
-                frame.set_pixel(x, y, 0, 0.1 + sigma * gaussian(&mut seed) + extra(x, y));
-            }
-        }
-        extract_node_sample(&frame, &GridNode::new(32, 32, 0, 0), 41, 0).unwrap()
-    };
-    let flat = build(&|_, _| 0.0);
-    let sloped = build(&|x, _| 0.05 * sigma * x as f32);
-    // Faint unresolved stars at random, 5 % of pixels, ~0.6 sigma of glow: the real
-    // halo read 11-39 % rougher than open sky.
-    let mut star_seed = 23u32;
-    let stars: Vec<(f32, f32)> = (0..size * size / 20)
-        .map(|_| {
-            let mut next = || {
-                star_seed = star_seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                (star_seed >> 8) as f32 / (1u32 << 24) as f32 * size as f32
-            };
-            (next(), next())
-        })
-        .collect();
-    let crowded = build(&|x, y| {
-        stars
-            .iter()
-            .map(|&(cx, cy)| {
-                let r2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
-                sigma * (-r2 / 4.0).exp()
-            })
-            .sum()
-    });
-    assert!((sloped.scatter / flat.scatter - 1.0).abs() < 0.05, "{sloped:?} vs {flat:?}");
-    assert!(crowded.scatter > flat.scatter * 1.08, "{crowded:?} vs {flat:?}");
-}
-
 /// A star inside the box must be clipped away, leaving the sky level.
 #[test]
 fn node_extraction_rejects_a_star_in_the_box() {
@@ -148,79 +72,26 @@ fn a_node_outside_the_frame_yields_nothing() {
     assert!(extract_node_value(&frame, &node, 9, 0).is_none());
 }
 
+/// Both edges and the inset lines are nodes; the inner lines keep their even spacing.
 #[test]
-fn pruning_rejects_a_bright_node_and_keeps_the_sky() {
-    let cols = 4;
-    let rows = 4;
-    let mut nodes: Vec<GridNode> = (0..rows)
-        .flat_map(|row| (0..cols).map(move |col| GridNode::new(col, row, col, row)))
-        .collect();
-    for node in nodes.iter_mut() {
-        node.value = Some(0.1);
-    }
-    nodes[5].value = Some(0.9);
-
-    prune_nebulosity(
-        &mut nodes,
-        cols,
-        rows,
-        PruneConfig {
-            global_sigma: 2.5,
-            neighbour_threshold: 1.05,
-        },
-    );
-
-    assert!(nodes[5].value.is_none(), "the bright node should be pruned");
-    assert_eq!(
-        nodes.iter().filter(|n| n.value.is_some()).count(),
-        cols * rows - 1,
-        "only the bright node should be pruned"
-    );
+fn node_axis_hugs_both_edges_and_adds_the_inset_lines() {
+    assert_eq!(node_axis(1000, 12, 0.0), (0..12).map(|i| i * 999 / 11).collect::<Vec<_>>());
+    let axis = node_axis(1000, 12, 0.035);
+    assert_eq!(axis.len(), 14);
+    assert_eq!((axis[0], axis[1], axis[12], axis[13]), (0, 35, 964, 999));
+    assert!(axis.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {axis:?}");
 }
 
-/// A stricter config prunes strictly more. Pins that the thresholds are actually
-/// wired through rather than shadowed by a constant.
+/// An inset past the first inner line would cross it, so it is left out.
 #[test]
-fn a_stricter_config_prunes_at_least_as_much() {
-    let cols = 6;
-    let rows = 6;
-    let build = || {
-        let mut nodes: Vec<GridNode> = (0..rows)
-            .flat_map(|row| (0..cols).map(move |col| GridNode::new(col, row, col, row)))
-            .collect();
-        for (i, node) in nodes.iter_mut().enumerate() {
-            node.value = Some(0.1 + (i % 5) as f32 * 0.01);
-        }
-        nodes
-    };
+fn an_inset_wider_than_the_spacing_is_dropped() {
+    assert_eq!(node_axis(100, 12, 0.2), node_axis(100, 12, 0.0));
+}
 
-    let mut lenient = build();
-    prune_nebulosity(
-        &mut lenient,
-        cols,
-        rows,
-        PruneConfig {
-            global_sigma: 2.5,
-            neighbour_threshold: 1.05,
-        },
-    );
-
-    let mut strict = build();
-    prune_nebulosity(
-        &mut strict,
-        cols,
-        rows,
-        PruneConfig {
-            global_sigma: 1.0,
-            neighbour_threshold: 1.02,
-        },
-    );
-
-    let survivors = |n: &[GridNode]| n.iter().filter(|g| g.value.is_some()).count();
-    assert!(
-        survivors(&strict) < survivors(&lenient),
-        "strict {} vs lenient {} — the thresholds are not reaching the algorithm",
-        survivors(&strict),
-        survivors(&lenient)
-    );
+#[test]
+fn layout_nodes_is_row_major_with_grid_indices() {
+    let nodes = layout_nodes(&[0, 5, 9], &[0, 7]);
+    assert_eq!(nodes.len(), 6);
+    let n = nodes[4];
+    assert_eq!((n.x, n.y, n.col, n.row), (5, 7, 1, 1));
 }

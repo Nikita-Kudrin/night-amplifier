@@ -246,12 +246,8 @@ fn test_background_subtraction_preserves_nebula_signal() {
             BackgroundConfig::default(), // gradient_only: true, aggressiveness: 1.0
         ),
         (
-            "for_nebulae",
-            BackgroundConfig::for_nebulae(), // Conservative preset for nebulae
-        ),
-        (
-            "adaptive",
-            BackgroundConfig::adaptive(), // Auto-detect aggressiveness
+            "no_edge_inset",
+            BackgroundConfig::default().with_edge_inset(0.0),
         ),
         (
             "gradient_only_coarse",
@@ -277,14 +273,7 @@ fn test_background_subtraction_preserves_nebula_signal() {
             "  Reference percentile: {:.0}%",
             config.reference_percentile * 100.0
         );
-        println!(
-            "  Aggressiveness: {}",
-            if config.aggressiveness < 0.0 {
-                "auto".to_string()
-            } else {
-                format!("{:.0}%", config.aggressiveness * 100.0)
-            }
-        );
+        println!("  Aggressiveness: {:.0}%", config.aggressiveness * 100.0);
 
         let mut test_frame = stacked.clone();
         let extractor = BackgroundExtractor::new(config.clone());
