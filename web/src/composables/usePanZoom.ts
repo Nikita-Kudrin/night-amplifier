@@ -2,7 +2,8 @@ import {ref, computed} from 'vue'
 import {FIT_MARGIN, ZOOM_LIMITS} from '../constants'
 import {useFullscreen} from './useFullscreen'
 import type {FullscreenOptions} from './useFullscreen'
-import {clamp, fitScale, touchDistance} from '../utils/viewGeometry'
+import {clamp, fitScale, touchCenter, touchDistance} from '../utils/viewGeometry'
+import type {Point} from '../utils/viewGeometry'
 
 /** What a gesture reads of an event's touches: `TouchList`, or a test's stand-in. */
 export type GestureTouches = Parameters<typeof touchDistance>[0]
@@ -18,41 +19,81 @@ export interface View {
     position: {x: number; y: number}
 }
 
+export interface PanZoomOptions extends FullscreenOptions {
+    /** The scale the whole image fits at, `null` before a frame; zoom is bounded relative to it. */
+    fitScale?: () => number | null
+    /**
+     * Where, in client coordinates, the untranslated canvas centre sits. With it, a pinch zooms
+     * about the point between the fingers and the wheel about the pointer; without, about the
+     * canvas centre.
+     */
+    viewCentre?: () => Point | null
+}
+
 /**
  * Pan and zoom interaction composable for canvas-based views.
  *
- * `options` are forwarded to [`useFullscreen`], which owns the fullscreen half —
- * the eyepiece view needs that half without any of the pan/zoom state.
+ * The fullscreen half of `options` is forwarded to [`useFullscreen`], which owns it — the
+ * eyepiece view needs that half without any of the pan/zoom state.
  */
-export function usePanZoom(options: FullscreenOptions = {}) {
+export function usePanZoom(options: PanZoomOptions = {}) {
     const scale = ref(1)
     const position = ref<View['position']>({x: 0, y: 0})
     const isDragging = ref(false)
     const dragStart = ref({x: 0, y: 0})
     const {isFullscreen, toggleFullscreen, handleFullscreenChange} = useFullscreen(options)
 
-    // Touch pinch zoom state
-    let initialPinchDistance = 0
-    let initialScale = 1
+    // The pinch in progress: where it started, and the view it started from.
+    let pinch: {distance: number; centre: Point; view: View} | null = null
 
     const canvasStyle = computed(() => ({
         transform: `translate(${position.value.x}px, ${position.value.y}px) scale(${scale.value})`,
         cursor: isDragging.value ? 'grabbing' : 'grab',
     }))
 
-    function handleWheel(e: Pick<WheelEvent, 'deltaY' | 'preventDefault'>) {
+    function currentView(): View {
+        return {scale: scale.value, position: position.value}
+    }
+
+    /**
+     * Bounds a zoom from `from`. The bounds widen to take in `from` itself, so a view left
+     * outside them (the container grew, a crop reframed it) moves on smoothly instead of
+     * jumping to them on the next gesture.
+     */
+    function clampScale(value: number, from = scale.value) {
+        const fit = options.fitScale?.() ?? 1
+        const min = Math.min(fit * ZOOM_LIMITS.minOfFit, from)
+        const max = Math.max(ZOOM_LIMITS.max, fit, from)
+        return clamp(value, min, max)
+    }
+
+    /** Zooms `base` to `next`, moving the image point that was under `from` to `to`. */
+    function zoomAbout(next: number, from: Point, to: Point, base: View) {
+        const centre = options.viewCentre?.()
+        scale.value = next
+        if (!centre) return
+        const k = next / base.scale
+        position.value = {
+            x: to.x - centre.x - (from.x - centre.x - base.position.x) * k,
+            y: to.y - centre.y - (from.y - centre.y - base.position.y) * k,
+        }
+    }
+
+    function handleWheel(e: Pick<WheelEvent, 'deltaY' | 'clientX' | 'clientY' | 'preventDefault'>) {
         e.preventDefault()
         const delta = e.deltaY > 0 ? ZOOM_LIMITS.wheelZoomOut : ZOOM_LIMITS.wheelZoomIn
-        scale.value = clampScale(scale.value * delta)
+        const pointer = {x: e.clientX, y: e.clientY}
+        zoomAbout(clampScale(scale.value * delta), pointer, pointer, currentView())
+    }
+
+    function startDrag(x: number, y: number) {
+        isDragging.value = true
+        dragStart.value = {x: x - position.value.x, y: y - position.value.y}
     }
 
     function handleMouseDown(e: Pick<MouseEvent, 'button' | 'clientX' | 'clientY'>) {
         if (e.button !== 0) return
-        isDragging.value = true
-        dragStart.value = {
-            x: e.clientX - position.value.x,
-            y: e.clientY - position.value.y,
-        }
+        startDrag(e.clientX, e.clientY)
     }
 
     function handleMouseMove(e: Pick<MouseEvent, 'clientX' | 'clientY'>) {
@@ -67,22 +108,23 @@ export function usePanZoom(options: FullscreenOptions = {}) {
         isDragging.value = false
     }
 
+    function startPinch(touches: GestureTouches) {
+        isDragging.value = false
+        pinch = {distance: touchDistance(touches), centre: touchCenter(touches), view: currentView()}
+    }
+
     function handleTouchStart(e: TouchGesture) {
         if (e.touches.length === 2) {
-            initialPinchDistance = touchDistance(e.touches)
-            initialScale = scale.value
+            startPinch(e.touches)
         } else if (e.touches.length === 1) {
-            isDragging.value = true
-            dragStart.value = {
-                x: e.touches[0].clientX - position.value.x,
-                y: e.touches[0].clientY - position.value.y,
-            }
+            startDrag(e.touches[0].clientX, e.touches[0].clientY)
         }
     }
 
     function handleTouchMove(e: TouchGesture) {
-        if (e.touches.length === 2) {
-            scale.value = clampScale(initialScale * (touchDistance(e.touches) / initialPinchDistance))
+        if (e.touches.length === 2 && pinch) {
+            const next = clampScale(pinch.view.scale * (touchDistance(e.touches) / pinch.distance), pinch.view.scale)
+            zoomAbout(next, pinch.centre, touchCenter(e.touches), pinch.view)
         } else if (e.touches.length === 1 && isDragging.value) {
             position.value = {
                 x: e.touches[0].clientX - dragStart.value.x,
@@ -91,12 +133,20 @@ export function usePanZoom(options: FullscreenOptions = {}) {
         }
     }
 
-    function handleTouchEnd() {
+    /** `e.touches` are the fingers still down: a pinch losing one carries on as a pan from here. */
+    function handleTouchEnd(e: TouchGesture) {
+        pinch = null
         isDragging.value = false
+        if (e.touches.length === 2) {
+            startPinch(e.touches)
+        } else if (e.touches.length === 1) {
+            startDrag(e.touches[0].clientX, e.touches[0].clientY)
+        }
     }
 
-    function clampScale(value: number) {
-        return clamp(value, ZOOM_LIMITS.min, ZOOM_LIMITS.max)
+    function handleTouchCancel() {
+        pinch = null
+        isDragging.value = false
     }
 
     function zoomIn() {
@@ -136,6 +186,7 @@ export function usePanZoom(options: FullscreenOptions = {}) {
         handleTouchStart,
         handleTouchMove,
         handleTouchEnd,
+        handleTouchCancel,
         zoomIn,
         zoomOut,
         resetView,

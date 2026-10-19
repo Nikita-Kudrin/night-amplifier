@@ -9,7 +9,8 @@ import {useOverlayVisibility} from '../composables/useOverlayVisibility'
 import {useCometRoi} from '../composables/useCometRoi'
 import {useTimeouts} from '../composables/useTimeouts'
 import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming'
-import {CAPTURE_STATES, isCaptureRunning, liveStreamEndpoint} from '../constants'
+import {CAPTURE_STATES, FIT_MARGIN, isCaptureRunning, liveStreamEndpoint} from '../constants'
+import {fitScale} from '../utils/viewGeometry'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
@@ -107,13 +108,25 @@ const {
   handleTouchStart: handleTouchStartBase,
   handleTouchMove: handleTouchMoveBase,
   handleTouchEnd: handleTouchEndBase,
+  handleTouchCancel: handleTouchCancelBase,
   zoomIn,
   zoomOut,
   resetView,
   fitToView: fitToViewBase,
   toggleFullscreen: toggleFullscreenBase,
   handleFullscreenChange,
-} = usePanZoom({onChange: requestFit})
+} = usePanZoom({
+  onChange: requestFit,
+  fitScale: () => {
+    const {width, height} = dimensions.value
+    return width && height ? fitScale(containerSize.value, width, height, FIT_MARGIN) : null
+  },
+  // The canvas is centred in the container, so an untranslated canvas's centre is the container's.
+  viewCentre: () => {
+    const rect = containerRef.value?.getBoundingClientRect()
+    return rect ? {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2} : null
+  },
+})
 
 const {
   visible: overlayVisible,
@@ -183,14 +196,14 @@ function handleTouchMove(e: TouchEvent) {
 
 function handleTouchEnd(e: TouchEvent) {
   handlePressEnd(e)
-  handleTouchEndBase()
+  handleTouchEndBase(e)
 }
 
 // The system taking the gesture away — a notification swipe, palm rejection — is
 // not the observer asking for anything, so it must not read as a tap.
 function handleTouchCancel(e: TouchEvent) {
   cancelPress(e)
-  handleTouchEndBase()
+  handleTouchCancelBase()
 }
 
 function handleMouseDown(e: MouseEvent) {

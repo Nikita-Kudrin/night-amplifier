@@ -125,6 +125,9 @@ export function createMockPanZoom() {
         handleTouchEnd: vi.fn(() => {
             isDragging.value = false
         }),
+        handleTouchCancel: vi.fn(() => {
+            isDragging.value = false
+        }),
         zoomIn: vi.fn(),
         zoomOut: vi.fn(),
         resetView: vi.fn(() => {
@@ -147,6 +150,23 @@ export type MockPanZoom = ReturnType<typeof createMockPanZoom>
  */
 export function withRealFullscreen(mockPanZoom: MockPanZoom) {
     vi.mocked(usePanZoom).mockImplementation((options) => ({...mockPanZoom, ...useFullscreen(options)}))
+}
+
+/**
+ * Puts the real `usePanZoom` behind the mock, for a test of the view's actual zoom; the
+ * returned getter reads the instance LiveView last mounted with.
+ */
+export async function withRealPanZoom() {
+    const actual = await vi.importActual<{usePanZoom: typeof usePanZoom}>('../../../composables/usePanZoom')
+    let view: PanZoom | null = null
+    vi.mocked(usePanZoom).mockImplementation((options) => {
+        view = actual.usePanZoom(options)
+        return view
+    })
+    return () => {
+        if (!view) throw new Error('LiveView has not mounted')
+        return view
+    }
 }
 
 export function setFullscreenElement(element: Element | null) {

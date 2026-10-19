@@ -15,8 +15,14 @@ export const WS_RECONNECT = {
 /** The share of the container a fitted image fills. */
 export const FIT_MARGIN = 0.95
 
+/**
+ * The live view's zoom range. The floor is a share of the fitted scale, not a scale: the canvas
+ * is the stream's native size, so a phone fits a 3008 px frame at ~0.12, and an absolute 0.5
+ * floor made a pinch from there a 4x zoom no pinch could undo. `max` is screen pixels per
+ * stream pixel.
+ */
 export const ZOOM_LIMITS = {
-    min: 0.5,
+    minOfFit: 0.5,
     max: 5,
     zoomInFactor: 1.2,
     zoomOutFactor: 0.8,
