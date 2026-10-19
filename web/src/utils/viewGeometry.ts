@@ -5,7 +5,7 @@ interface Size {
     height: number
 }
 
-interface Point {
+export interface Point {
     x: number
     y: number
 }
