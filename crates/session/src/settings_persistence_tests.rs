@@ -765,10 +765,10 @@ mod tests {
     }
 
     /// Files written before the streaming resolution settings existed carry neither key.
-    /// They must load with both at 1440p and every other value intact — falling back to
+    /// They must load with both at Native and every other value intact — falling back to
     /// defaults would silently wipe the observer's configuration.
     #[test]
-    fn a_file_without_streaming_resolutions_loads_them_at_1440p() {
+    fn a_file_without_streaming_resolutions_loads_them_at_native() {
         let temp_file = NamedTempFile::new().unwrap();
         let persistence = SettingsPersistence::new(temp_file.path());
         let mut settings = CaptureSettings::default();
@@ -783,8 +783,8 @@ mod tests {
         std::fs::write(temp_file.path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
 
         let loaded = persistence.load().expect("an older file must still load");
-        assert_eq!(loaded.streaming_resolution, Resolution::Qhd1440);
-        assert_eq!(loaded.eyepiece.stream_resolution, EyepieceStreamResolution::Qhd1440);
+        assert_eq!(loaded.streaming_resolution, Resolution::Native);
+        assert_eq!(loaded.eyepiece.stream_resolution, EyepieceStreamResolution::Native);
         assert_eq!(loaded.preview_resolution, Resolution::Hd1080);
         assert!((loaded.eyepiece.intensity - 0.7).abs() < f32::EPSILON);
     }
@@ -805,13 +805,13 @@ mod tests {
         assert!(read(written(&on)).auto_crop);
     }
 
-    /// The defaults the UI promises: processing native, both streams at 1440p.
+    /// The defaults the UI promises: processing and both streams at Native.
     #[test]
     fn resolution_defaults() {
         let settings = CaptureSettings::default();
         assert_eq!(settings.preview_resolution, Resolution::Native);
-        assert_eq!(settings.streaming_resolution, Resolution::Qhd1440);
-        assert_eq!(settings.eyepiece.stream_resolution, EyepieceStreamResolution::Qhd1440);
+        assert_eq!(settings.streaming_resolution, Resolution::Native);
+        assert_eq!(settings.eyepiece.stream_resolution, EyepieceStreamResolution::Native);
     }
 
     /// Hot-pixel rejection lost its switch, and Focus/Finder mode stopped managing it. Every

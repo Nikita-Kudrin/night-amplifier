@@ -40,7 +40,7 @@ async fn a_streaming_resolution_change_reaches_every_jpeg_client_on_the_next_fra
 }
 
 /// Changing Eyepiece Streaming Resolution resizes only `/eyepiece_quality`, including to
-/// Native.
+/// Native — neither `/` nor `/eyepiece`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[parallel(image_stream_log)]
 async fn an_eyepiece_resolution_change_reaches_only_the_lossless_clients() {
@@ -49,7 +49,10 @@ async fn an_eyepiece_resolution_change_reaches_only_the_lossless_clients() {
         server.connect_registered(LOSSLESS).await,
         server.connect_registered(LOSSLESS).await,
     ];
-    let mut live = server.connect_registered(LIVE_VIEW).await;
+    let mut jpeg = vec![
+        server.connect_registered(LIVE_VIEW).await,
+        server.connect_registered(EYEPIECE).await,
+    ];
 
     let mut eyepiece_settings = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
     eyepiece_settings["stream_resolution"] = json!("native");
@@ -60,7 +63,9 @@ async fn an_eyepiece_resolution_change_reaches_only_the_lossless_clients() {
     for client in &mut eyepieces {
         assert_lossless(&next_frame(client).await, (3008, 3008), "Native eyepiece");
     }
-    assert_jpeg(&next_frame(&mut live).await, (1440, 1440), "live view untouched");
+    for client in &mut jpeg {
+        assert_jpeg(&next_frame(client).await, (1440, 1440), "JPEG clients untouched");
+    }
 }
 
 /// A client joining between a change and the next frame is shown the frame everybody

@@ -363,7 +363,7 @@ payload-less version, so open sockets get `no_frame` too; Main is cleared on a f
 on a quiet suspend), or the last session's frame passed for live for three minutes of a frameless capture.
 
 **Streaming resolution is a setting, not negotiated**: every client of a family gets the **same payload**
-(`streaming_resolution` / `eyepiece.stream_resolution`, both default 1440p) — per-viewport tiers were tried and
+(`streaming_resolution` / `eyepiece.stream_resolution`, both default Native, each read only by its family) — per-viewport tiers were tried and
 reverted (one denoised conversion per distinct size plus unbounded concurrent first-frame encodes).
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`

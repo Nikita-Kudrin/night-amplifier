@@ -27,15 +27,15 @@ async fn test_get_settings_default() {
 
 /// The wire names the settings panel relies on, and the defaults it promises.
 #[tokio::test]
-async fn test_streaming_resolutions_default_to_1440p() {
+async fn test_streaming_resolutions_default_to_native() {
     let app = create_test_router(create_test_state());
 
     let (status, json) = get_json(&app, "/api/settings").await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["preview_resolution"], "native");
-    assert_eq!(json["data"]["streaming_resolution"], "qhd1440");
-    assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+    assert_eq!(json["data"]["streaming_resolution"], "native");
+    assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "native");
 }
 
 /// Streaming Resolution accepts every option; a partial update leaves the eyepiece
@@ -50,7 +50,7 @@ async fn test_update_streaming_resolution_leaves_the_other_resolutions_alone() {
             post_json(&app, "/api/settings", json!({"streaming_resolution": value})).await;
         assert_eq!(status, StatusCode::OK, "{value}: {json}");
         assert_eq!(json["data"]["streaming_resolution"], value);
-        assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+        assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "native");
         assert_eq!(json["data"]["preview_resolution"], "native");
     }
 

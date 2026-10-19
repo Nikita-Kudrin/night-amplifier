@@ -73,7 +73,7 @@ patches across the background — the blotches you may remember on a globular
 cluster. If you ever see those again, that threshold is the first place to look.
 
 A second, much wider smoothing — about two degrees across at the eyepiece, at the
-default 1440p streaming resolution — then evens out the larger colour patches the
+1440p streaming resolution — then evens out the larger colour patches the
 first one is too small to reach, but only across plain background: anywhere the first filter found a star or the edge of
 the target, the wide one stays out. How much it finds to do depends on the
 camera. On some the larger patches are simply the background's own tint showing
@@ -292,8 +292,9 @@ the same view receives exactly the same picture:
 | **Streaming Resolution** | Settings → Preview | the live view `/` and `/eyepiece` | 1080p, 1440p, 4K, Native |
 | **Eyepiece Streaming Resolution** | Settings → Eyepiece | `/eyepiece_quality` | 1440p, 4K, Native |
 
-Both start at **1440p**, and the image is fitted inside the chosen size with its
-shape kept — a square sensor at 1440p arrives as 1440×1440. Neither ever goes
+Both start at **Native** and are independent: changing one never resizes the
+other's views. The image is fitted inside the chosen size with its shape kept — a
+square sensor at 1440p arrives as 1440×1440. Neither ever goes
 above the Processing Resolution, and a camera smaller than the choice is sent at
 its own size.
 
@@ -310,8 +311,8 @@ its own size.
   of an exposure that was already running when you changed it.
 
 ::: warning After upgrading
-Older versions picked the size from each screen. A 4K tablet on the live view now
-receives 1440p until you raise **Streaming Resolution**.
+Older versions picked the size from each screen. A settings file saved by a
+version that defaulted to 1440p keeps 1440p for both: lower or raise them here.
 :::
 
 ## Not applied to planetary targets

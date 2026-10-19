@@ -303,23 +303,23 @@ describe('SettingsPanel', () => {
         const optionValues = (select: DOMWrapper<HTMLSelectElement>) =>
             select.findAll<HTMLOptionElement>('option').map((o) => o.element.value)
 
-        it('offers every streaming resolution, defaulting to 1440p', async () => {
+        it('offers every streaming resolution, defaulting to Native', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
             const select = wrapper.find<HTMLSelectElement>('#streaming-resolution-select')
             expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440', 'hd1080'])
-            expect(select.element.value).toBe('qhd1440')
+            expect(select.element.value).toBe('native')
         })
 
         it('sends the chosen streaming resolution as a bare value', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
-            await wrapper.find('#streaming-resolution-select').setValue('native')
+            await wrapper.find('#streaming-resolution-select').setValue('uhd2160')
             await flushPromises()
 
-            expect(updateSettings).toHaveBeenCalledWith({streaming_resolution: 'native'})
+            expect(updateSettings).toHaveBeenCalledWith({streaming_resolution: 'uhd2160'})
         })
 
         it('shows the streaming resolution the server reports', async () => {
@@ -339,6 +339,11 @@ describe('SettingsPanel', () => {
             expect(updateSettings).not.toHaveBeenCalledWith(
                 expect.objectContaining({preview_resolution: expect.anything()})
             )
+            // `/eyepiece_quality` has its own setting, inside the eyepiece group.
+            expect(updateSettings).not.toHaveBeenCalledWith(
+                expect.objectContaining({eyepiece: expect.anything()})
+            )
+            expect(wrapper.find<HTMLSelectElement>('#eyepiece-stream-resolution-select').element.value).toBe('native')
         })
     })
 
@@ -346,13 +351,13 @@ describe('SettingsPanel', () => {
         const optionValues = (select: DOMWrapper<HTMLSelectElement>) =>
             select.findAll<HTMLOptionElement>('option').map((o) => o.element.value)
 
-        it('starts at 1440p and offers no 1080p', async () => {
+        it('starts at Native and offers no 1080p', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
             const select = wrapper.find<HTMLSelectElement>('#eyepiece-stream-resolution-select')
             expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440'])
-            expect(select.element.value).toBe('qhd1440')
+            expect(select.element.value).toBe('native')
         })
 
         it('sends the whole eyepiece object with the chosen resolution', async () => {
@@ -385,11 +390,11 @@ describe('SettingsPanel', () => {
 
         // A server predating the setting sends an eyepiece object without it. The select
         // must still show the default, and an edit must not post `undefined`.
-        it('falls back to 1440p when the server omits the field', async () => {
+        it('falls back to Native when the server omits the field', async () => {
             const wrapper = mountSettingsPanel({settings: {eyepiece: {binoview: true}}})
             await flushPromises()
 
-            expect(wrapper.find<HTMLSelectElement>('#eyepiece-stream-resolution-select').element.value).toBe('qhd1440')
+            expect(wrapper.find<HTMLSelectElement>('#eyepiece-stream-resolution-select').element.value).toBe('native')
         })
     })
 
