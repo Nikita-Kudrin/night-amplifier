@@ -323,6 +323,7 @@ pub fn run_stacking_task(
             stack_depth,
             noise,
             crop,
+            star_fwhm: stacker.as_deref().and_then(|stacker| stacker.star_fwhm()),
         };
         // Publish the count *before* the message, undone on arms that didn't send.
         // `try_send` makes the frame visible instantly, so counting after leaves a

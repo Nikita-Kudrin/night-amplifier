@@ -53,6 +53,29 @@ pub fn compute_median_fwhm(stars: &[Star]) -> Option<f32> {
     }
 }
 
+/// A Gaussian's FWHM per unit sigma, `2·√(2·ln 2)`.
+pub const FWHM_PER_SIGMA: f32 = 2.354_82;
+
+/// The widest FWHM the detector's window measures: a star whose half-maximum contour
+/// reaches the window's edge gets no FWHM at all (`StarDetector::compute_fwhm`).
+pub fn widest_measurable_fwhm() -> f32 {
+    2.0 * DetectionConfig::default().centroid_radius as f32
+}
+
+/// The median star FWHM with every star left unmeasured counted at
+/// [`widest_measurable_fwhm`], so a lower bound once most stars are that wide.
+/// [`compute_median_fwhm`] drops those stars, and reads a field of wide stars as its few
+/// narrow ones, or as nothing: right for weighting subs, wrong for sizing a star.
+pub fn typical_fwhm(stars: &[Star]) -> Option<f32> {
+    if stars.is_empty() {
+        return None;
+    }
+    let widest = widest_measurable_fwhm();
+    let mut fwhms: Vec<f32> = stars.iter().map(|s| s.fwhm.map_or(widest, |f| f.min(widest))).collect();
+    fwhms.sort_by(f32::total_cmp);
+    Some(fwhms[fwhms.len() / 2])
+}
+
 /// Computes the median SNR from a list of detected stars.
 ///
 /// Returns None if there are no stars.

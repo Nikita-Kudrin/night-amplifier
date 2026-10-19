@@ -129,9 +129,10 @@ fn a_resolution_above_the_frame_sends_the_frame_as_is() {
     }
 }
 
-/// Native means native for the lossless family too — no hidden 4K cap.
+/// Native lossless is bounded only by the stream edge (3840 a side), never by the 4K
+/// option's 3840x2160 box, which would make it 2880x2160.
 #[test]
-fn native_lossless_is_not_capped() {
+fn native_lossless_is_capped_only_at_the_stream_edge() {
     let stream = Arc::new(FrameStream::default());
     let _lossless = watch(&stream, StreamKind::Lossless);
     let frame = ready_frame(4000, 3000, 3);
@@ -146,7 +147,36 @@ fn native_lossless_is_not_capped() {
     )
     .unwrap();
 
-    assert_eq!(dimensions(&stream.payload(StreamKind::Lossless, 1).unwrap()), (4000, 3000));
+    assert_eq!(dimensions(&stream.payload(StreamKind::Lossless, 1).unwrap()), (3840, 2880));
+}
+
+/// The denoise scratch follows what the frames used: a stream made smaller gives the rest
+/// back from the frame after, and a frame nobody watched frees it.
+#[test]
+fn the_denoise_scratch_follows_the_frames_that_used_it() {
+    let mut frame = ready_frame(2000, 2000, 3);
+    frame.pipeline_config.denoise.chroma = night_amplifier_core::render::ChromaDenoiseConfig {
+        enabled: true,
+        radius: 8,
+        strength: 1.0,
+        ..night_amplifier_core::render::ChromaDenoiseConfig::OFF
+    };
+    let stream = Arc::new(FrameStream::default());
+    let _lossless = watch(&stream, StreamKind::Lossless);
+    let mut conversions = ConversionCache::default();
+    let render = |conversions: &mut ConversionCache, resolution: Option<Resolution>| {
+        conversions.begin_frame();
+        if let Some(resolution) = resolution {
+            encode_lossless(&stream, &frame, 1, conversions, resolution, 1).unwrap();
+        }
+        conversions.scratch_samples()
+    };
+
+    assert_eq!(render(&mut conversions, Some(Resolution::Native)), 2000 * 2000 * 3);
+    assert_eq!(render(&mut conversions, Some(Resolution::Hd1080)), 2000 * 2000 * 3, "held through the change");
+    assert_eq!(render(&mut conversions, Some(Resolution::Hd1080)), 1080 * 1080 * 3, "given back after it");
+    assert_eq!(render(&mut conversions, None), 1080 * 1080 * 3);
+    assert_eq!(render(&mut conversions, None), 0, "nobody watched the frame before");
 }
 
 /// A failed conversion is reported with the family and resolution, and stores nothing.

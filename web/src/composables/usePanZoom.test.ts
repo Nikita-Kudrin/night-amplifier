@@ -8,6 +8,7 @@ vi.mock('../constants', () => ({
     ZOOM_LIMITS: {
         minOfFit: 0.5,
         max: 10,
+        minPinchSpreadPx: 10,
         wheelZoomIn: 1.1,
         wheelZoomOut: 0.9,
         zoomInFactor: 1.25,
@@ -463,6 +464,103 @@ describe('usePanZoom', () => {
 
             expect(panZoom.scale.value).toBeCloseTo(2)
             expect(panZoom.position.value).toEqual({x: 30, y: -20})
+        })
+    })
+
+    describe('gestures that ask for no zoom', () => {
+        /** Two fingers at `a` and `b`. */
+        function touches(a: [number, number], b: [number, number]) {
+            return {touches: [a, b].map(([clientX, clientY]) => ({clientX, clientY}))}
+        }
+
+        it('fingers landing together do not zoom until they spread, then from where they are', () => {
+            const view = usePanZoom({fitScale: () => 0.12})
+            view.scale.value = 0.12
+
+            view.handleTouchStart(touches([100, 100], [100, 100]))
+            view.handleTouchMove(touches([100, 100], [104, 100]))
+            expect(view.scale.value).toBe(0.12)
+
+            // Anchored once 10 px apart: twice that spread is twice the scale, not 4x or the max.
+            view.handleTouchMove(touches([95, 100], [105, 100]))
+            view.handleTouchMove(touches([90, 100], [110, 100]))
+            expect(view.scale.value).toBeCloseTo(0.24)
+        })
+
+        it('fingers that never part leave a finite view a button can still zoom', () => {
+            const view = usePanZoom({fitScale: () => 0.12})
+            view.scale.value = 0.12
+            view.handleTouchStart(touches([100, 100], [100, 100]))
+            view.handleTouchMove(touches([100, 100], [100, 100]))
+            view.zoomIn()
+
+            expect(Number.isFinite(view.scale.value)).toBe(true)
+            expect(Number.isFinite(view.position.value.x)).toBe(true)
+        })
+
+        it('a sideways trackpad swipe neither zooms nor pans', () => {
+            const view = usePanZoom({fitScale: () => 1, viewCentre: () => ({x: 200, y: 150})})
+            const event = wheel(0, 10, 10)
+            view.handleWheel(event)
+
+            expect(view.scale.value).toBe(1)
+            expect(view.position.value).toEqual({x: 0, y: 0})
+            expect(event.preventDefault).toHaveBeenCalled()
+        })
+    })
+
+    describe('the zoom buttons', () => {
+        const centre = {x: 200, y: 150}
+
+        it('keep what is in the middle of the view there, panned or not', () => {
+            const view = usePanZoom({fitScale: () => 1, viewCentre: () => centre})
+            view.position.value = {x: 120, y: -60}
+            const before = imagePointAt({scale: 1, position: view.position.value}, centre, centre)
+
+            view.zoomIn()
+            const zoomed = imagePointAt({scale: view.scale.value, position: view.position.value}, centre, centre)
+            view.zoomOut()
+            const back = imagePointAt({scale: view.scale.value, position: view.position.value}, centre, centre)
+
+            expect(view.scale.value).toBeCloseTo(1)
+            for (const after of [zoomed, back]) {
+                expect(after.x).toBeCloseTo(before.x)
+                expect(after.y).toBeCloseTo(before.y)
+            }
+        })
+
+        it('zoom about the canvas centre without a view centre', () => {
+            const view = usePanZoom({fitScale: () => 1})
+            view.position.value = {x: 120, y: -60}
+            view.zoomIn()
+
+            expect(view.position.value).toEqual({x: 120, y: -60})
+        })
+    })
+
+    describe('a pinch and the view around it', () => {
+        it('anchors on the view centre the pinch started with', () => {
+            let centre = {x: 200, y: 150}
+            const view = usePanZoom({fitScale: () => 1, viewCentre: () => centre})
+            view.handleTouchStart(fingers(100, {x: 120, y: 90}))
+            centre = {x: 200, y: 190} // the URL bar slid in mid-gesture
+            view.handleTouchMove(fingers(200, {x: 120, y: 90}))
+
+            const anchored = imagePointAt({scale: 2, position: view.position.value}, {x: 200, y: 150}, {x: 120, y: 90})
+            expect(anchored).toEqual(imagePointAt({scale: 1, position: {x: 0, y: 0}}, {x: 200, y: 150}, {x: 120, y: 90}))
+        })
+
+        it('a fit landing mid-pinch is kept, the pinch going on from it', () => {
+            const view = usePanZoom({fitScale: () => 0.25})
+            view.handleTouchStart(fingers(100))
+            view.handleTouchMove(fingers(200))
+            expect(view.scale.value).toBeCloseTo(2)
+
+            view.fitToView({width: 400, height: 400}, 1600, 1600)
+            view.handleTouchMove(fingers(200))
+            expect(view.scale.value).toBeCloseTo(0.2375)
+            view.handleTouchMove(fingers(400))
+            expect(view.scale.value).toBeCloseTo(0.475)
         })
     })
 

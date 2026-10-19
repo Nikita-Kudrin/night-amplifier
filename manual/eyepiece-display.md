@@ -71,8 +71,9 @@ you once it is up:
   for the next exposure. At 60-second subs that used to be a minute of black, and a
   display opened after capture had stopped stayed black indefinitely.
 - Its size is **Settings → Eyepiece → Eyepiece Streaming Resolution**, not the
-  display's own: set it to match the panel — 1440p for a 1440×1440 screen (see
-  [Streaming Resolution](/noise-reduction#streaming-resolution)).
+  display's own. Native, the default, is the best quality; if frames arrive slowly,
+  a size matching the panel — 1440p for a 1440×1440 screen — sends about a quarter
+  of the data (see [Streaming Resolution](/noise-reduction#streaming-resolution)).
 
 Launch it in kiosk mode from your startup script, waiting for the server first —
 Chromium will not retry a page that failed to load:

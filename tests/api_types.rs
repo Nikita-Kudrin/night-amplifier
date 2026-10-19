@@ -28,7 +28,7 @@ use night_amplifier::server::{
 use night_amplifier::session::capture::BLACK_FLOOR_RANGE;
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
 use night_amplifier::session::services::{PushToStatus, UpdateSettingsRequest};
-use night_amplifier::session::state::{CaptureSettings, StackingTypeInfo};
+use night_amplifier::session::state::{CaptureSettings, StackingTypeInfo, MAX_STREAM_EDGE};
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
 use serde_json::{json, Map, Value};
@@ -418,7 +418,9 @@ fn generate_settings() -> String {
          export const SERVER_SETTING_RANGES = {} as const satisfies \
          Record<string, {{min: number | null; max: number | null}}>\n\n\
          /** A setting the server clamps, by its dotted path in `Settings`. */\n\
-         export type ClampedPath = keyof typeof SERVER_SETTING_RANGES\n",
+         export type ClampedPath = keyof typeof SERVER_SETTING_RANGES\n\n\
+         /** The longest edge the server streams a frame at, Native included (`MAX_STREAM_EDGE`). */\n\
+         export const SERVER_MAX_STREAM_EDGE = {MAX_STREAM_EDGE}\n",
         defaults.unwrap(),
         serde_json::to_string_pretty(&ranges).unwrap(),
     )

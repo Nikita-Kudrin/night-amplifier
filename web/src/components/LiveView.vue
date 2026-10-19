@@ -85,7 +85,6 @@ const showGuideArrow = computed(() => currentTarget.value !== null && pushDirect
 const containerRef = useTemplateRef<HTMLDivElement>('container')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 
-const containerSize = ref({width: 400, height: 300})
 const canvasBounds = ref<ScreenRect>({left: 0, top: 0, width: 400, height: 300})
 
 const {
@@ -118,8 +117,8 @@ const {
 } = usePanZoom({
   onChange: requestFit,
   fitScale: () => {
-    const {width, height} = dimensions.value
-    return width && height ? fitScale(containerSize.value, width, height, FIT_MARGIN) : null
+    const fit = fitInputs()
+    return fit ? fitScale(fit.container, fit.width, fit.height, FIT_MARGIN) : null
   },
   // The canvas is centred in the container, so an untranslated canvas's centre is the container's.
   viewCentre: () => {
@@ -161,16 +160,21 @@ const {label: backendLabel} = useFrameRenderer({
   onSizeChange: () => updateContainerSize(),
 })
 
-function fitToView() {
-  if (!containerRef.value) return
-  const container = containerRef.value.getBoundingClientRect()
-  // Use canvas intrinsic dimensions when available, otherwise use stream dimensions
+/**
+ * What the fit is measured against, for Fit to view and the zoom's floor alike: the
+ * container as laid out now, and the stream's size, else the canvas's before one arrives.
+ */
+function fitInputs() {
+  const container = containerRef.value?.getBoundingClientRect()
   const canvas = canvasRef.value
-  const imgW = dimensions.value.width || (canvas && canvas.width)
-  const imgH = dimensions.value.height || (canvas && canvas.height)
-  if (imgW && imgH) {
-    fitToViewBase(container, imgW, imgH)
-  }
+  const width = dimensions.value.width || canvas?.width
+  const height = dimensions.value.height || canvas?.height
+  return container && width && height ? {container, width, height} : null
+}
+
+function fitToView() {
+  const fit = fitInputs()
+  if (fit) fitToViewBase(fit.container, fit.width, fit.height)
 }
 
 function toggleFullscreen() {
@@ -303,7 +307,6 @@ function handleOrientationChange() {
 function updateContainerSize() {
   if (containerRef.value) {
     const containerRect = containerRef.value.getBoundingClientRect()
-    containerSize.value = {width: containerRect.width, height: containerRect.height}
 
     if (canvasRef.value && hasFrame.value) {
       const canvasRect = canvasRef.value.getBoundingClientRect()

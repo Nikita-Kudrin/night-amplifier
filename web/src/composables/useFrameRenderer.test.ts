@@ -21,23 +21,40 @@ interface PendingDecode {
     reject(error: Error): void
 }
 
-/** A JPEG decode resolved by hand, so a test decides when each one finishes. */
+/** A bitmap as a browser hands it out, sized and closable. */
+function fakeBitmap({width, height}: FrameSize): FakeBitmap {
+    return Object.assign(new FakeImageBitmap(), {width, height, close: vi.fn()})
+}
+
+/**
+ * A JPEG decode resolved by hand, so a test decides when each one finishes; a resize of a
+ * decoded bitmap (`createImageBitmap(bitmap, {resizeWidth, resizeHeight})`) resolves at once.
+ */
 function installDecoder() {
     const pending: PendingDecode[] = []
     const bitmaps: FakeBitmap[] = []
+    const resized: FakeBitmap[] = []
     vi.stubGlobal('ImageBitmap', FakeImageBitmap)
-    vi.stubGlobal('createImageBitmap', vi.fn((blob: SizedJpeg) => new Promise<FakeBitmap>((resolve, reject) => {
+    vi.stubGlobal('createImageBitmap', vi.fn((source: SizedJpeg | FakeBitmap, options?: ImageBitmapOptions) => {
+        if (source instanceof FakeImageBitmap) {
+            const bitmap = fakeBitmap({width: options?.resizeWidth ?? source.width, height: options?.resizeHeight ?? source.height})
+            resized.push(bitmap)
+            return Promise.resolve(bitmap)
+        }
+        return decodeLater(source)
+    }))
+    const decodeLater = (blob: SizedJpeg) => new Promise<FakeBitmap>((resolve, reject) => {
         pending.push({
             blob,
             resolve() {
-                const bitmap = Object.assign(new FakeImageBitmap(), {width: blob.width, height: blob.height, close: vi.fn()})
+                const bitmap = fakeBitmap(blob)
                 bitmaps.push(bitmap)
                 resolve(bitmap)
             },
             reject,
         })
-    })))
-    return {pending, bitmaps}
+    })
+    return {pending, bitmaps, resized}
 }
 
 interface MountOptions {
@@ -365,6 +382,67 @@ describe('useFrameRenderer', () => {
         it('takes the stream\'s frame and hands out a backend the labels name', () => {
             expectTypeOf<FrameRendererOptions['frameData']['value']>().toEqualTypeOf<Uint8Array | Blob | null>()
             expectTypeOf<FrameRenderer['backend']['value']>().toEqualTypeOf<keyof typeof BACKEND_LABELS>()
+        })
+    })
+
+    // The server never streams past SERVER_MAX_STREAM_EDGE, and a GPU uploads nothing past
+    // its texture size: the canvas keeps the frame's size, the source is cut to fit.
+    describe('frames larger than can be drawn', () => {
+        it('draws an RGB frame over the stream cap from a source cut to it', async () => {
+            const {glOf} = installCanvasContexts()
+            const view = mountRenderer()
+            await quietly(() => view.showRgb(7700, 4))
+
+            // 7700 px needs a factor of 3 to fit 3840: 2566x1.
+            expect(glOf(view.canvases[0]).uploads).toEqual([{width: 2566, height: 1}])
+            expect([view.canvases[0].width, view.canvases[0].height]).toEqual([7700, 4])
+        })
+
+        it('cuts an RGB frame to a GPU texture smaller than the cap', async () => {
+            const {glOf} = installCanvasContexts({maxTextureSize: 2048})
+            const view = mountRenderer()
+            await quietly(() => view.showRgb(3008, 4))
+
+            expect(glOf(view.canvases[0]).uploads).toEqual([{width: 1504, height: 2}])
+            expect(view.canvases[0].width).toBe(3008)
+        })
+
+        it('draws a frame within every limit as it is, saying nothing', async () => {
+            const {glOf} = installCanvasContexts({maxTextureSize: 4096})
+            const warn = vi.spyOn(console, 'warn')
+            const view = mountRenderer()
+            await view.showRgb(3840, 2)
+
+            expect(glOf(view.canvases[0]).uploads).toEqual([{width: 3840, height: 2}])
+            expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('[FrameRenderer]'))
+        })
+
+        it('resizes a decoded JPEG to the texture, closing the full-size bitmap', async () => {
+            const {glOf} = installCanvasContexts({maxTextureSize: 2048})
+            const decoder = installDecoder()
+            const sizes: FrameSize[] = []
+            const view = mountRenderer({isJpeg: true, onSizeChange: (size) => sizes.push(size)})
+            await view.showJpeg(3008, 2000)
+
+            decoder.pending[0].resolve()
+            await quietly(flush)
+
+            expect(window.createImageBitmap).toHaveBeenLastCalledWith(
+                decoder.bitmaps[0], {resizeWidth: 2048, resizeHeight: 1361, resizeQuality: 'high'})
+            expect(decoder.bitmaps[0].close).toHaveBeenCalled()
+            expect(glOf(view.canvases[0]).texImage2D).toHaveBeenLastCalledWith(
+                expect.anything(), 0, expect.anything(), expect.anything(), expect.anything(), decoder.resized[0])
+            expect(sizes).toEqual([{width: 3008, height: 2000}])
+        })
+
+        it('stretches a cut-down RGB source over a Canvas 2D canvas of the frame\'s size', async () => {
+            const {context2dOf} = installCanvasContexts({available: []})
+            const view = mountRenderer()
+            await quietly(() => view.showRgb(7700, 4))
+
+            const ctx = context2dOf(view.canvases[0])
+            expect(ctx.createImageData).toHaveBeenLastCalledWith(2566, 1)
+            expect(ctx.drawImage).toHaveBeenLastCalledWith(view.canvases[0], 0, 0, 2566, 1, 0, 0, 7700, 4)
         })
     })
 

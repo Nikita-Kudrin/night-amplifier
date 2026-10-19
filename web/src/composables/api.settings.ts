@@ -166,3 +166,6 @@ export const SERVER_SETTING_RANGES = {
 
 /** A setting the server clamps, by its dotted path in `Settings`. */
 export type ClampedPath = keyof typeof SERVER_SETTING_RANGES
+
+/** The longest edge the server streams a frame at, Native included (`MAX_STREAM_EDGE`). */
+export const SERVER_MAX_STREAM_EDGE = 3840

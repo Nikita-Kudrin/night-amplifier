@@ -11,7 +11,7 @@ type GlContextType = 'webgl2' | 'webgl' | 'experimental-webgl'
 /** The `texImage2D` of an RGB8 buffer: target, level, internal format, size, border, format, type, pixels. */
 type PixelUpload = [GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, ArrayBufferView]
 
-function createGl(type: GlContextType, {compiles}: {compiles: boolean}) {
+function createGl(type: GlContextType, {compiles, maxTextureSize}: {compiles: boolean; maxTextureSize: number}) {
     const loseContext = vi.fn()
     const gl = {
         type,
@@ -61,7 +61,7 @@ function createGl(type: GlContextType, {compiles}: {compiles: boolean}) {
         getUniformLocation: vi.fn(() => ({})),
         uniform1i: vi.fn(),
         drawArrays: vi.fn(),
-        getParameter: vi.fn(() => 'Mock GPU'),
+        getParameter: vi.fn((pname: GLenum) => (pname === gl.MAX_TEXTURE_SIZE ? maxTextureSize : 'Mock GPU')),
         loseContext,
         getExtension: vi.fn((name: string) => (name === 'WEBGL_lose_context' ? {loseContext} : null)),
         VERTEX_SHADER: 1,
@@ -85,6 +85,7 @@ function createGl(type: GlContextType, {compiles}: {compiles: boolean}) {
         TRIANGLE_STRIP: 19,
         UNPACK_ALIGNMENT: 20,
         INVALID_OPERATION: 21,
+        MAX_TEXTURE_SIZE: 22,
     }
     return gl
 }
@@ -95,7 +96,7 @@ function create2d() {
         createImageData: vi.fn((width: number, height: number) =>
             ({data: new Uint8ClampedArray(4 * width * height), width, height})),
         putImageData: vi.fn<(imageData: ImageData, dx: number, dy: number) => void>(),
-        drawImage: vi.fn<(image: CanvasImageSource, dx: number, dy: number) => void>(),
+        drawImage: vi.fn<(image: CanvasImageSource, ...coordinates: number[]) => void>(),
     }
 }
 
@@ -110,6 +111,8 @@ export interface Gpu {
     available?: readonly ('webgl2' | 'webgl')[]
     /** The ones whose shaders compile (default every available one). */
     compiling?: readonly ('webgl2' | 'webgl')[]
+    /** `MAX_TEXTURE_SIZE` (default 16384, a current desktop GPU's). */
+    maxTextureSize?: number
 }
 
 /**
@@ -118,7 +121,7 @@ export interface Gpu {
  * the ones whose shaders compile.
  */
 export function installCanvasContexts(gpu: Gpu = {}) {
-    const {available = ['webgl2', 'webgl'], compiling = available} = gpu
+    const {available = ['webgl2', 'webgl'], compiling = available, maxTextureSize = 16384} = gpu
     const contexts = new WeakMap<HTMLCanvasElement, FakeContext>()
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement, type: string) {
         const held = contexts.get(this)
@@ -127,7 +130,7 @@ export function installCanvasContexts(gpu: Gpu = {}) {
         if (type === '2d') ctx = create2d()
         else if (isGlType(type)) {
             const family = type === 'experimental-webgl' ? 'webgl' : type
-            if (available.includes(family)) ctx = createGl(type, {compiles: compiling.includes(family)})
+            if (available.includes(family)) ctx = createGl(type, {compiles: compiling.includes(family), maxTextureSize})
         }
         if (ctx) contexts.set(this, ctx)
         return ctx && asContext(ctx)

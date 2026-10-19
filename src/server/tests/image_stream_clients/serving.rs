@@ -143,6 +143,28 @@ async fn simultaneous_first_clients_of_an_unwatched_family_all_get_the_frame() {
     }
 }
 
+/// Native is capped at 3840 px a side on every socket: a 6248x4176 sensor arrives at
+/// 3840x2566, from the render task's encode and from a first client's on-demand one alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[parallel(image_stream_log)]
+async fn a_native_stream_never_exceeds_3840_a_side() {
+    const IMX571: (usize, usize) = (6248, 4176);
+    let server = start_server().await;
+    server.state.settings.update(|settings| {
+        settings.streaming_resolution = Resolution::Native;
+        settings.eyepiece.stream_resolution = EyepieceStreamResolution::Native;
+    });
+    let mut live = server.connect_registered(LIVE_VIEW).await;
+    let mut eyepiece = server.connect_registered(EYEPIECE).await;
+    server.render(IMX571, 0.25).await;
+
+    assert_jpeg(&next_frame(&mut live).await, (3840, 2566), "live view");
+    assert_jpeg(&next_frame(&mut eyepiece).await, (3840, 2566), "eyepiece");
+    // Nobody watched the lossless family while the frame rendered: encoded on demand.
+    let mut lossless = server.connect(LOSSLESS).await;
+    assert_lossless(&next_frame(&mut lossless).await, (3840, 2566), "eyepiece quality, on demand");
+}
+
 /// Clients waiting before anything was rendered get nothing, then the first frame.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[parallel(image_stream_log)]

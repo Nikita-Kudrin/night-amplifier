@@ -6,6 +6,8 @@ import type {RenderSource, RendererBackend} from './useWebGLRenderer'
 import {useCanvas2DRenderer} from './useCanvas2DRenderer'
 import type {FrameData, FrameSize} from './useImageStream'
 import {formatResolution} from '../utils/format'
+import {downscaleRgb8, fitWithinEdge} from '../utils/pixelConversion'
+import {SERVER_MAX_STREAM_EDGE} from './api.settings'
 
 /** What the frame on screen is drawn by: a renderer, or `jpeg`, the stream's own. */
 export type FrameBackend = RendererBackend | 'jpeg'
@@ -31,14 +33,21 @@ function isFrameBackend(backend: string): backend is FrameBackend {
     return Object.hasOwn(BACKEND_LABELS, backend)
 }
 
-/** An image ready to draw, held for a redraw; a decoded JPEG's bitmap is closed when it is let go. */
+/**
+ * An image ready to draw, held for a redraw; a decoded JPEG's bitmap is closed when it is let
+ * go. The size is the frame's, which the canvas takes; `sourceSize` is what `source` holds
+ * when it was cut down to fit (`sourceLimit`).
+ */
 interface HeldImage extends FrameSize {
     source: RenderSource
+    sourceSize?: FrameSize
     close?: () => void
 }
 
 interface Surface {
     backend: () => RendererBackend
+    /** The largest source side this canvas can draw. */
+    maxSourceEdge: () => number
     draw: (image: HeldImage) => boolean
     cleanup: () => void
 }
@@ -66,12 +75,14 @@ function createSurface(canvas: HTMLCanvasElement, onRestored: () => void): Surfa
     const webgl = useWebGLRenderer({onRestored})
     const renderer = webgl.init(canvas) ? webgl : useCanvas2DRenderer()
     if (renderer !== webgl && !renderer.init(canvas)) {
-        return {backend: () => 'none', draw: () => false, cleanup() {}}
+        return {backend: () => 'none', maxSourceEdge: () => Infinity, draw: () => false, cleanup() {}}
     }
     return {
         backend: () => renderer.backend.value,
+        maxSourceEdge: renderer.maxSourceEdge,
         /** Whether it drew: a lost GL context skips the frame, canvas resize included. */
-        draw: (image: HeldImage) => renderer.render(canvas, image.source, image.width, image.height),
+        draw: ({source, width, height, sourceSize = {width, height}}: HeldImage) =>
+            renderer.render(canvas, source, width, height, sourceSize.width, sourceSize.height),
         cleanup: renderer.cleanup,
     }
 }
@@ -86,6 +97,11 @@ function createSurface(canvas: HTMLCanvasElement, onRestored: () => void): Surfa
  * held, so a restored GL context or a newly shown canvas is drawn without waiting for
  * the next frame (an idle stream sends none); a null frame (`no_frame`, a cleared view)
  * drops it, and with it any decode under way.
+ *
+ * No source larger than the server's stream cap, or than a canvas's GPU takes, is drawn:
+ * the canvas keeps the frame's size, so fit, zoom and overlays stay in stream pixels, and
+ * the smaller source is stretched over it. Past the GPU's texture size an upload fails
+ * silently and leaves the canvas black.
  */
 export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSizeChange}: FrameRendererOptions) {
     const surfaces = new Map<HTMLCanvasElement, Surface>()
@@ -96,6 +112,7 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
     let decoding = false
     let pendingJpeg: Blob | null = null
     let drawnSize: FrameSize | null = null
+    let warnedOversize = false
 
     function surfaceFor(canvas: HTMLCanvasElement) {
         let surface = surfaces.get(canvas)
@@ -132,6 +149,22 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
         onSizeChange?.(drawnSize)
     }
 
+    /** The largest source side every canvas on screen can draw. */
+    function sourceLimit() {
+        return Math.min(SERVER_MAX_STREAM_EDGE, ...attach().map((surface) => surface.maxSourceEdge()))
+    }
+
+    /** Whether a `width`x`height` frame must be cut down to `limit`, saying so once a stream. */
+    function oversize({width, height}: FrameSize, limit: number) {
+        if (Math.max(width, height) <= limit) return false
+        if (!warnedOversize) {
+            warnedOversize = true
+            console.warn(`[FrameRenderer] ${width}x${height} frame drawn at ${limit} px a side ` +
+                `(stream cap ${SERVER_MAX_STREAM_EDGE}, GPU texture ${Math.min(...attach().map((s) => s.maxSourceEdge()))})`)
+        }
+        return true
+    }
+
     function hold(next: HeldImage | null) {
         image?.close?.()
         image = next
@@ -154,7 +187,14 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
             hold(null)
             return
         }
-        hold({source: frame, ...dimensions.value})
+        const size = dimensions.value
+        const limit = sourceLimit()
+        if (oversize(size, limit)) {
+            const small = downscaleRgb8(frame, size.width, size.height, limit)
+            hold({source: small.data, ...size, sourceSize: {width: small.width, height: small.height}})
+        } else {
+            hold({source: frame, ...size})
+        }
         draw()
     }
 
@@ -172,11 +212,31 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
                     bitmap.close()
                     continue
                 }
-                hold({source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close()})
+                const size = {width: bitmap.width, height: bitmap.height}
+                const fitted = await fitBitmap(bitmap, sourceLimit())
+                if (current !== generation) {
+                    fitted.close()
+                    continue
+                }
+                const sourceSize = {width: fitted.width, height: fitted.height}
+                hold({source: fitted, ...size, sourceSize, close: () => fitted.close()})
                 draw()
             }
         } finally {
             decoding = false
+        }
+    }
+
+    /** `bitmap`, or a copy fitted within `limit` (the original closed); the original if resizing fails. */
+    async function fitBitmap(bitmap: ImageBitmap, limit: number) {
+        if (!oversize(bitmap, limit)) return bitmap
+        const {width, height} = fitWithinEdge(bitmap.width, bitmap.height, limit)
+        try {
+            const fitted = await window.createImageBitmap(bitmap, {resizeWidth: width, resizeHeight: height, resizeQuality: 'high'})
+            bitmap.close()
+            return fitted
+        } catch {
+            return bitmap
         }
     }
 

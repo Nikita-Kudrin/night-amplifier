@@ -40,11 +40,11 @@ dithering or letting the stack grow past it.
 
 ## They run at the size you stream, not the size you capture
 
-Both filters work on the streamed image after it has been reduced to its
-[streaming resolution](#streaming-resolution), not on the full sensor frame. On a
-9-megapixel camera streamed at 1440p to a 1440×1440 eyepiece display that is four
-and a half times less work for exactly the same visible result — three quarters of
-a denoised sensor frame is thrown away by the resize anyway.
+Both filters work on the streamed image at its
+[streaming resolution](#streaming-resolution), not on the full sensor frame. At the
+default, Native, those are the same up to 3840 px a side. A smaller streaming
+resolution is the cheapest way to lighten the load on a small board: a 9-megapixel
+camera streamed at 1440p is four and a half times less filtering per frame.
 
 There is a bonus in the ordering: that resize is itself an area average, which
 already halves the noise before either filter starts.
@@ -292,27 +292,30 @@ the same view receives exactly the same picture:
 | **Streaming Resolution** | Settings → Preview | the live view `/` and `/eyepiece` | 1080p, 1440p, 4K, Native |
 | **Eyepiece Streaming Resolution** | Settings → Eyepiece | `/eyepiece_quality` | 1440p, 4K, Native |
 
-Both start at **Native** and are independent: changing one never resizes the
+Both start at **Native**, the best quality: every processed pixel, up to 3840 px a
+side — a larger sensor is fitted to 3840 px on its long edge, so no browser is sent
+a frame it cannot draw. The two are independent: changing one never resizes the
 other's views. The image is fitted inside the chosen size with its shape kept — a
-square sensor at 1440p arrives as 1440×1440. Neither ever goes
-above the Processing Resolution, and a camera smaller than the choice is sent at
-its own size.
+square sensor at 1440p arrives as 1440×1440. Neither ever goes above the Processing
+Resolution, and a camera smaller than the choice is sent at its own size.
 
-- **Match the screen you look at.** The server shrinks the image with an area
-  average, which also removes noise. A larger image left for the browser to shrink
-  looks grainier and shimmers through an eyepiece lens.
+- **Smaller is faster.** Choose a smaller size to save bandwidth and get a more
+  responsive stream — on weak Wi-Fi, a small board, or with many screens. A 9-megapixel
+  camera's lossless eyepiece frame is about 15 MB at Native and 3.5 MB at 1440p.
 - **Bigger costs everyone.** Every screen on that view pays for the size in
   bandwidth, and the server in encoding time. A view nobody has open costs nothing.
 - **Noise reduction makes `/` and `/eyepiece` larger.** With it on they are compressed
   at a higher quality, so the smoothed sky keeps its finest brightness steps — 1.5 to 2
-  times the data per frame, about 2.5–4 megabits at 1440p. On a slow network, lower
+  times the data per frame, about 2.5–4 megabits at 1440p and four times that at Native
+  on a 9-megapixel camera. On a slow network, lower
   **Streaming Resolution** before turning noise reduction off.
 - **A change applies to the next frame** the server renders — including the frame
   of an exposure that was already running when you changed it.
 
 ::: warning After upgrading
 Older versions picked the size from each screen. A settings file saved by a
-version that defaulted to 1440p keeps 1440p for both: lower or raise them here.
+version that defaulted to 1440p keeps 1440p for both: choose Native here for the
+best quality.
 :::
 
 ## Not applied to planetary targets

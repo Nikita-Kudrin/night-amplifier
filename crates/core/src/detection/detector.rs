@@ -627,6 +627,25 @@ mod tests {
         assert_eq!(star.fwhm, None);
     }
 
+    /// A field of stars too wide to measure reads as the window's width, never as its few
+    /// narrow stars: the renderer sizes Detail by it.
+    #[test]
+    fn typical_fwhm_counts_unmeasurable_stars_as_the_widest() {
+        let (width, height) = (300usize, 100usize);
+        let mut data = vec![0.05f32; width * height];
+        for (i, sigma) in [2.0f32, 6.0, 6.0].iter().enumerate() {
+            add_gaussian_star(&mut data, width, 50.0 + i as f32 * 100.0, 50.0, 0.6, *sigma);
+        }
+        let frame = Frame::from_f32_vec(data, width, height, 1).unwrap();
+        let stars = StarDetector::with_defaults().detect(&frame).unwrap();
+        assert_eq!(stars.len(), 3);
+
+        let narrow = super::super::compute_median_fwhm(&stars).unwrap();
+        assert!((narrow - 2.354_82 * 2.0).abs() < 0.5, "the gate's median sees only the sigma-2 star: {narrow}");
+        assert_eq!(super::super::typical_fwhm(&stars), Some(super::super::widest_measurable_fwhm()));
+        assert_eq!(super::super::typical_fwhm(&[]), None);
+    }
+
     #[test]
     fn fwhm_is_not_pinned_to_the_window_ceiling() {
         // Regression: the old second-moment estimate saturated at

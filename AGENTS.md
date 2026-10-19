@@ -364,7 +364,11 @@ on a quiet suspend), or the last session's frame passed for live for three minut
 
 **Streaming resolution is a setting, not negotiated**: every client of a family gets the **same payload**
 (`streaming_resolution` / `eyepiece.stream_resolution`, both default Native, each read only by its family) — per-viewport tiers were tried and
-reverted (one denoised conversion per distinct size plus unbounded concurrent first-frame encodes).
+reverted (one denoised conversion per distinct size plus unbounded concurrent first-frame encodes). **No stream exceeds
+`MAX_STREAM_EDGE` (3840 px a side)**, Native included (`Resolution::bounding_box`; processing, snapshot and saved files
+stay native): a 26 MP frame blacked out GPUs with a 4096 texture limit and cost ~940 MB of denoise scratch. The browser
+reads it as the generated `SERVER_MAX_STREAM_EDGE` and also cuts a source to the GPU's `MAX_TEXTURE_SIZE`, keeping the
+canvas at the frame's size so geometry stays in stream pixels.
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 

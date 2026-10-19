@@ -275,14 +275,15 @@ impl QualityHistory {
     }
 }
 
-fn push_bounded(values: &mut VecDeque<f32>, value: f32) {
+/// Appends `value`, keeping the newest [`HISTORY_LEN`].
+pub(crate) fn push_bounded(values: &mut VecDeque<f32>, value: f32) {
     if values.len() == HISTORY_LEN {
         values.pop_front();
     }
     values.push_back(value);
 }
 
-fn median(values: &VecDeque<f32>) -> Option<f32> {
+pub(crate) fn median(values: &VecDeque<f32>) -> Option<f32> {
     quantile(values, 2)
 }
 

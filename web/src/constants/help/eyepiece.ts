@@ -5,7 +5,7 @@ export const EYEPIECE_HELP = {
     eyepiece_screen_settings:
         'Configure physical screen dimensions and resolution to calculate accurate split for Binoview.',
     eyepiece_stream_resolution:
-        'Image size for the lossless eyepiece view (/eyepiece_quality). Match your eyepiece screen: 1440p for a 1440 × 1440 panel. Larger than the screen and the browser has to shrink the image, which adds grain and shimmer you will see through the lens; Native sends every processed pixel. Changes apply from the next frame.',
+        'Image size for the lossless eyepiece view (/eyepiece_quality). Native, the default, sends every processed pixel up to 3840 px a side: the best quality. Lossless frames are large, so choose a smaller size, such as 1440p for a 1440 × 1440 panel, to save bandwidth and get a more responsive stream on weak Wi-Fi or with several eyepieces. Changes apply from the next frame.',
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     eyepiece_intensity:

@@ -177,6 +177,8 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
     let gl: GL | null = null
     let version: GLVersion | null = null
     let boundCanvas: HTMLCanvasElement | null = null
+    // The largest texture side the GPU takes: an upload past it fails without a word.
+    let maxTextureSize = Infinity
     let program: WebGLProgram | null = null
     let texture: WebGLTexture | null = null
     let positionBuffer: WebGLBuffer | null = null
@@ -264,6 +266,8 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
                 break
             }
             boundCanvas = canvas
+            const limit: unknown = ctx.getParameter(ctx.MAX_TEXTURE_SIZE)
+            maxTextureSize = typeof limit === 'number' && limit > 0 ? limit : Infinity
             canvas.addEventListener('webglcontextlost', handleContextLost)
             canvas.addEventListener('webglcontextrestored', handleContextRestored)
             backend.value = candidate.backend
@@ -275,8 +279,19 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         return false
     }
 
-    /** Whether it drew: not while the context is lost, when the canvas keeps its old size. */
-    function render(canvas: HTMLCanvasElement, frameData: RenderSource | null, width: number, height: number) {
+    /**
+     * Whether it drew: not while the context is lost, when the canvas keeps its old size. The
+     * canvas takes `width`x`height`; RGB pixels are `sourceWidth`x`sourceHeight`, smaller
+     * when the frame was cut down to fit the texture, and stretched over the canvas.
+     */
+    function render(
+        canvas: HTMLCanvasElement,
+        frameData: RenderSource | null,
+        width: number,
+        height: number,
+        sourceWidth = width,
+        sourceHeight = height,
+    ) {
         if (!gl || !program || !texture || !locations || !frameData) return false
 
         if (canvas.width !== width || canvas.height !== height) {
@@ -297,7 +312,7 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
             // previous frame stays on screen. Set per upload: it is context state.
             gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
             gl.texImage2D(
-                gl.TEXTURE_2D, 0, gl.RGB, width, height, 0,
+                gl.TEXTURE_2D, 0, gl.RGB, sourceWidth, sourceHeight, 0,
                 gl.RGB, gl.UNSIGNED_BYTE, frameData
             )
         }
@@ -335,6 +350,7 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         // the listeners are gone first, so nothing rebuilds on a canvas being torn down.
         gl?.getExtension('WEBGL_lose_context')?.loseContext()
         boundCanvas = null
+        maxTextureSize = Infinity
         gl = null
         version = null
         forgetResources()
@@ -345,10 +361,16 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         return backend.value !== 'unknown' && backend.value !== 'none'
     }
 
+    /** The largest source side `render` can upload; unbounded before `init`. */
+    function maxSourceEdge() {
+        return maxTextureSize
+    }
+
     return {
         backend,
         init,
         render,
+        maxSourceEdge,
         cleanup,
         isInitialized,
     }

@@ -73,8 +73,8 @@ fn compress_rgb8_to_jpeg(
 
 /// Encode a frame as JPEG (SA10 format) fitted into an exact bounding box.
 ///
-/// The box is used verbatim: `(u32::MAX, u32::MAX)` streams the frame at its native size
-/// (see `Resolution::bounding_box`).
+/// The box is used verbatim: `(u32::MAX, u32::MAX)` encodes the frame at its native size;
+/// a stream's box comes from `Resolution::bounding_box`, which caps Native.
 pub fn encode_rgb8_jpeg_bounded(
     ready_frame: &night_amplifier_core::render::display::RenderReadyFrame,
     max_w: u32,

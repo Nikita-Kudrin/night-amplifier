@@ -19,7 +19,7 @@ export const IMAGE_QUALITY_HELP = {
     preview_resolution:
         'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
     streaming_resolution:
-        'Image size sent to every screen viewing the live view and the eyepiece view. All of them get the same picture, so larger sizes cost bandwidth and server time for every viewer. It never goes above the Processing Resolution. On a screen smaller than the image the browser shrinks it, which looks grainier than choosing the smaller size here. Changes apply from the next frame.',
+        'Image size sent to every screen viewing the live view and the eyepiece view. Native, the default, sends every processed pixel up to 3840 px a side: the best quality, with real detail to zoom into. Choose a smaller size to save bandwidth and get a more responsive stream on weak Wi-Fi or with many viewers; every viewer gets the same picture, so each one pays for the size. It never goes above the Processing Resolution. Changes apply from the next frame.',
     denoise_enabled:
         'Turns every noise filter on or off at once. Off shows the stacked image exactly as it comes out of the pipeline — useful for judging what the filters are doing to a target, and the quickest way back if something looks plastic. Background Grain switches off with the filters, including the brightness it trades: off, the picture is rendered as at the dial\'s default. Focus/Finder mode never touches this switch.',
     denoise_chroma:

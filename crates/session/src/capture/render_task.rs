@@ -67,6 +67,7 @@ pub fn run_render_task(
             stack_depth,
             mut noise,
             crop,
+            star_fwhm,
         } = latest;
 
         let _iter_span =
@@ -174,9 +175,12 @@ pub fn run_render_task(
         // encoders changes it, so the map rides through untouched.
         let noise = noise.map(Arc::new);
 
+        let mut pipeline_config = rendered.pipeline_config;
+        pipeline_config.denoise.luma.star_sigma = star_sigma(star_fwhm, if binned { bin } else { 1 });
+
         let ready_frame = Arc::new(night_amplifier_core::render::display::RenderReadyFrame {
             linear_frame: display_frame,
-            pipeline_config: rendered.pipeline_config,
+            pipeline_config,
             stretch_result: rendered.stretch_result,
             noise,
         });
@@ -224,6 +228,13 @@ pub fn run_render_task(
     }
 
     debug!("Render task ended");
+}
+
+/// The session's typical star as a Gaussian sigma in the pixels of the frame the render
+/// pipeline ran on: binned by `bin`, never resized by a crop. The encoder takes it on to
+/// each stream's size.
+fn star_sigma(star_fwhm: Option<f32>, bin: usize) -> Option<f32> {
+    star_fwhm.map(|fwhm| fwhm / night_amplifier_core::detection::FWHM_PER_SIGMA / bin as f32)
 }
 
 /// The size of the `/ws/stream` payload `frame` is encoded at: what a crop change tells the
@@ -574,6 +585,7 @@ mod tests {
             settings: settings.into(),
             stack_depth: 0,
             crop: None,
+            star_fwhm: None,
         };
 
         // No extra messages — should return initial
@@ -597,6 +609,7 @@ mod tests {
             settings: settings.clone().into(),
             stack_depth: 0,
             crop: None,
+            star_fwhm: None,
         };
 
         // Queue additional frames
@@ -610,6 +623,7 @@ mod tests {
                 settings: settings.clone().into(),
                 stack_depth: 0,
                 crop: None,
+                star_fwhm: None,
             };
             tx.send(msg).unwrap();
         }
@@ -623,6 +637,7 @@ mod tests {
             settings: settings.clone().into(),
             stack_depth: 0,
             crop: None,
+            star_fwhm: None,
         };
         tx.send(last).unwrap();
 

@@ -24,6 +24,11 @@ export const FIT_MARGIN = 0.95
 export const ZOOM_LIMITS = {
     minOfFit: 0.5,
     max: 5,
+    /**
+     * How far apart two fingers must be before a pinch is anchored: its zoom is the ratio
+     * of their spread to this start, so fingers landing together jumped straight to `max`.
+     */
+    minPinchSpreadPx: 10,
     zoomInFactor: 1.2,
     zoomOutFactor: 0.8,
     wheelZoomIn: 1.1,

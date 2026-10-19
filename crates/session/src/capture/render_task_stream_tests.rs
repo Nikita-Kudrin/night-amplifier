@@ -30,6 +30,7 @@ fn stacked_frame(frame: Arc<night_amplifier_core::frame::Frame>, settings: Captu
         frame_number: 1,
         settings: settings.into(),
         stack_depth: 0,
+        star_fwhm: None,
     }
 }
 
@@ -279,4 +280,22 @@ async fn an_encode_failure_is_reported_once_and_is_not_a_camera_rejection() {
         "expected one error per family for the first failure and again after the recovery: {errors:#?}"
     );
     assert!(errors.iter().all(|e| e.contains("error")), "{errors:#?}");
+}
+
+/// The session's star width reaches the encoders as a sigma in the pixels the pipeline ran
+/// on: a Processing Resolution that bins the frame by 2 halves it.
+#[tokio::test]
+async fn the_star_width_travels_in_the_rendered_frames_pixels() {
+    for (processing, bin) in [(Resolution::Native, 1.0f32), (Resolution::Hd1080, 2.0)] {
+        let state = Arc::new(AppState::new_for_testing().0);
+        let settings = CaptureSettings { preview_resolution: processing, ..passthrough_settings() };
+        let mut frame = stacked_frame(filled(3008, 3008), settings);
+        frame.star_fwhm = Some(9.4);
+        render(&state, vec![frame]).await;
+
+        let ready = state.main_stream.get_latest_raw_frame().expect("published");
+        let sigma = ready.pipeline_config.denoise.luma.star_sigma.expect("carried");
+        let expected = 9.4 / night_amplifier_core::detection::FWHM_PER_SIGMA / bin;
+        assert!((sigma - expected).abs() < 1e-4, "{processing:?}: {sigma} vs {expected}");
+    }
 }

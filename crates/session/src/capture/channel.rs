@@ -290,6 +290,9 @@ pub struct StackedFrame {
     /// `auto_crop`'s verdict on this snapshot (see `capture::stack_crop`). `None` shows the
     /// frame whole, as it always is with the setting off.
     pub crop: Option<night_amplifier_core::stacking::CropRect>,
+    /// The session's typical star FWHM in `display_frame`'s pixels (`LiveStacker::star_fwhm`),
+    /// raw fallback included: same sensor, same optics.
+    pub star_fwhm: Option<f32>,
 }
 
 #[cfg(test)]
