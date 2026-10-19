@@ -5,13 +5,13 @@ use tracing::{debug, field, info, info_span, instrument, warn, Span};
 use super::{LiveStackError, LiveStacker, StackSettings, MIN_REFERENCE_STARS};
 use night_amplifier_core::detection::{
     collapse_doubles, compute_median_fwhm, compute_median_snr, doubled_star_share,
-    dominant_companion_offset, Star,
+    dominant_companion_offset, typical_fwhm, Star,
 };
 use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::registration::{AdaptiveRegistration, AffineTransform};
 use night_amplifier_core::stacking::{FrameQuality, Stacker, StackingType};
 
-use crate::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason, StarField};
+use crate::capture::frame_gate::{median, push_bounded, FrameAdmission, FrameGate, RejectionReason, StarField};
 
 pub struct StackingContext {
     pub stacker: Stacker,
@@ -23,6 +23,9 @@ pub struct StackingContext {
     /// The last stacked sub's transform against `reference_stars`: an alt-az field keeps
     /// turning against the fixed reference, and registration searches near it.
     last_transform: Option<AffineTransform>,
+    /// Each sub's [`typical_fwhm`], registered or not: the size of a star on screen, which
+    /// the renderer holds Detail off by. Not the gate's FWHM, which drops the widest stars.
+    star_widths: std::collections::VecDeque<f32>,
 }
 
 impl StackingContext {
@@ -50,6 +53,7 @@ impl StackingContext {
             is_initialized: false,
             gate: FrameGate::default(),
             last_transform: None,
+            star_widths: Default::default(),
         })
     }
 
@@ -68,6 +72,7 @@ impl StackingContext {
                 found: self.reference_stars.len(),
             });
         }
+        self.record_star_width(typical_fwhm(&self.reference_stars));
 
         // Compute quality metrics from detected stars
         let quality = FrameQuality {
@@ -83,6 +88,12 @@ impl StackingContext {
         self.is_initialized = true;
         Span::current().record("star_count", self.reference_stars.len());
         Ok(self.reference_stars.len())
+    }
+
+    fn record_star_width(&mut self, width: Option<f32>) {
+        if let Some(width) = width {
+            push_bounded(&mut self.star_widths, width);
+        }
     }
 
     /// Offers one frame to the stack.
@@ -128,6 +139,7 @@ impl StackingContext {
                 f32::NAN,
             ));
         }
+        self.record_star_width(typical_fwhm(&target_stars));
 
         let field = StarField::of(&target_stars);
 
@@ -301,6 +313,10 @@ impl LiveStacker for StackingContext {
         self.is_initialized
     }
 
+    fn star_fwhm(&self) -> Option<f32> {
+        median(&self.star_widths)
+    }
+
     fn apply_settings(&mut self, settings: &StackSettings) {
         self.update_from_settings(settings);
     }
@@ -358,6 +374,38 @@ mod tests {
     fn context() -> StackingContext {
         let settings = StackSettings::of(&CaptureSettings::default(), &Plugins::none());
         StackingContext::new(64, 64, 1, &settings).expect("context builds")
+    }
+
+    /// A 64² field of five Gaussian stars of width `sigma`.
+    fn starfield(sigma: f32) -> Frame {
+        let mut frame = Frame::filled(64, 64, 1, 0.05).unwrap();
+        for (cx, cy) in [(16.0f32, 16.0f32), (48.0, 16.0), (32.0, 32.0), (16.0, 48.0), (48.0, 48.0)] {
+            for y in 0..64 {
+                for x in 0..64 {
+                    let r2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
+                    let v = frame.get_pixel(x, y, 0) + 0.6 * (-r2 / (2.0 * sigma * sigma)).exp();
+                    frame.set_pixel(x, y, 0, v);
+                }
+            }
+        }
+        frame
+    }
+
+    /// The session's star width starts at the reference's and follows the subs, a field
+    /// too wide to measure reading as the widest measurable star rather than nothing.
+    #[test]
+    fn the_star_width_follows_the_subs_and_counts_wide_stars() {
+        let mut ctx = context();
+        assert_eq!(ctx.star_fwhm(), None, "nothing measured yet");
+
+        ctx.initialize_with_reference(&starfield(2.0)).expect("reference");
+        let sharp = ctx.star_fwhm().expect("measured on the reference");
+        assert!((sharp - 2.0 * night_amplifier_core::detection::FWHM_PER_SIGMA).abs() < 0.5, "{sharp}");
+
+        // A soft sub need not register to be measured.
+        ctx.add_frame(&starfield(6.0)).expect("offered");
+        ctx.add_frame(&starfield(6.0)).expect("offered");
+        assert_eq!(ctx.star_fwhm(), Some(night_amplifier_core::detection::widest_measurable_fwhm()));
     }
 
     /// A starless reference cannot anchor registration, and says so by count rather than

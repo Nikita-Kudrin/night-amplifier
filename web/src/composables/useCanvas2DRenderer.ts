@@ -36,8 +36,15 @@ export function useCanvas2DRenderer() {
         return true
     }
 
-    /** Whether it drew, as `useWebGLRenderer`'s does. */
-    function render(canvas: HTMLCanvasElement, frameData: RenderSource | null, width: number, height: number) {
+    /** Whether it drew, as `useWebGLRenderer`'s does, a smaller source stretched over the canvas. */
+    function render(
+        canvas: HTMLCanvasElement,
+        frameData: RenderSource | null,
+        width: number,
+        height: number,
+        sourceWidth = width,
+        sourceHeight = height,
+    ) {
         if (!ctx2d || !frameData) return false
 
         if (canvas.width !== width || canvas.height !== height) {
@@ -45,19 +52,28 @@ export function useCanvas2DRenderer() {
             canvas.height = height
             imageData = null
         }
+        const stretched = sourceWidth !== width || sourceHeight !== height
 
         if (isImageBitmap(frameData)) {
-            ctx2d.drawImage(frameData, 0, 0)
+            if (stretched) ctx2d.drawImage(frameData, 0, 0, width, height)
+            else ctx2d.drawImage(frameData, 0, 0)
             return true
         }
 
-        if (!imageData || imageData.width !== width || imageData.height !== height) {
-            imageData = ctx2d.createImageData(width, height)
+        if (!imageData || imageData.width !== sourceWidth || imageData.height !== sourceHeight) {
+            imageData = ctx2d.createImageData(sourceWidth, sourceHeight)
         }
 
         rgb8ToRgba8(frameData, imageData.data)
         ctx2d.putImageData(imageData, 0, 0)
+        // `putImageData` does not scale; a canvas drawn onto itself is copied first.
+        if (stretched) ctx2d.drawImage(canvas, 0, 0, sourceWidth, sourceHeight, 0, 0, width, height)
         return true
+    }
+
+    /** No texture to outgrow: the stream's own cap bounds what this draws. */
+    function maxSourceEdge() {
+        return Infinity
     }
 
     function cleanup() {
@@ -74,6 +90,7 @@ export function useCanvas2DRenderer() {
         backend,
         init,
         render,
+        maxSourceEdge,
         cleanup,
         isInitialized,
     }

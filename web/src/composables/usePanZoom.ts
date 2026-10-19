@@ -43,8 +43,9 @@ export function usePanZoom(options: PanZoomOptions = {}) {
     const dragStart = ref({x: 0, y: 0})
     const {isFullscreen, toggleFullscreen, handleFullscreenChange} = useFullscreen(options)
 
-    // The pinch in progress: where it started, and the view it started from.
-    let pinch: {distance: number; centre: Point; view: View} | null = null
+    // The pinch in progress: where it started, the view it started from, and where the
+    // untranslated canvas centre was then.
+    let pinch: {distance: number; centre: Point; view: View; viewCentre: Point | null} | null = null
 
     const canvasStyle = computed(() => ({
         transform: `translate(${position.value.x}px, ${position.value.y}px) scale(${scale.value})`,
@@ -67,9 +68,11 @@ export function usePanZoom(options: PanZoomOptions = {}) {
         return clamp(value, min, max)
     }
 
-    /** Zooms `base` to `next`, moving the image point that was under `from` to `to`. */
-    function zoomAbout(next: number, from: Point, to: Point, base: View) {
-        const centre = options.viewCentre?.()
+    /**
+     * Zooms `base` to `next`, moving the image point that was under `from` to `to`; without
+     * the canvas `centre`, about the canvas centre.
+     */
+    function zoomAbout(next: number, from: Point, to: Point, base: View, centre = options.viewCentre?.() ?? null) {
         scale.value = next
         if (!centre) return
         const k = next / base.scale
@@ -81,6 +84,8 @@ export function usePanZoom(options: PanZoomOptions = {}) {
 
     function handleWheel(e: Pick<WheelEvent, 'deltaY' | 'clientX' | 'clientY' | 'preventDefault'>) {
         e.preventDefault()
+        // A sideways trackpad swipe: nothing asked to zoom.
+        if (e.deltaY === 0) return
         const delta = e.deltaY > 0 ? ZOOM_LIMITS.wheelZoomOut : ZOOM_LIMITS.wheelZoomIn
         const pointer = {x: e.clientX, y: e.clientY}
         zoomAbout(clampScale(scale.value * delta), pointer, pointer, currentView())
@@ -108,9 +113,13 @@ export function usePanZoom(options: PanZoomOptions = {}) {
         isDragging.value = false
     }
 
+    /** Anchors a pinch on `touches`, once they are far enough apart to be measured against. */
     function startPinch(touches: GestureTouches) {
         isDragging.value = false
-        pinch = {distance: touchDistance(touches), centre: touchCenter(touches), view: currentView()}
+        const distance = touchDistance(touches)
+        pinch = distance >= ZOOM_LIMITS.minPinchSpreadPx
+            ? {distance, centre: touchCenter(touches), view: currentView(), viewCentre: options.viewCentre?.() ?? null}
+            : null
     }
 
     function handleTouchStart(e: TouchGesture) {
@@ -122,9 +131,12 @@ export function usePanZoom(options: PanZoomOptions = {}) {
     }
 
     function handleTouchMove(e: TouchGesture) {
-        if (e.touches.length === 2 && pinch) {
+        if (e.touches.length === 2) {
+            // Not yet anchored (fingers landed together), or a fit dropped the anchor.
+            if (!pinch) startPinch(e.touches)
+            if (!pinch) return
             const next = clampScale(pinch.view.scale * (touchDistance(e.touches) / pinch.distance), pinch.view.scale)
-            zoomAbout(next, pinch.centre, touchCenter(e.touches), pinch.view)
+            zoomAbout(next, pinch.centre, touchCenter(e.touches), pinch.view, pinch.viewCentre)
         } else if (e.touches.length === 1 && isDragging.value) {
             position.value = {
                 x: e.touches[0].clientX - dragStart.value.x,
@@ -149,15 +161,23 @@ export function usePanZoom(options: PanZoomOptions = {}) {
         isDragging.value = false
     }
 
+    /** The buttons zoom about the middle of the view, as the wheel does about the pointer. */
+    function zoomAtViewCentre(factor: number) {
+        const centre = options.viewCentre?.() ?? null
+        const middle = centre ?? {x: 0, y: 0}
+        zoomAbout(clampScale(scale.value * factor), middle, middle, currentView(), centre)
+    }
+
     function zoomIn() {
-        scale.value = clampScale(scale.value * ZOOM_LIMITS.zoomInFactor)
+        zoomAtViewCentre(ZOOM_LIMITS.zoomInFactor)
     }
 
     function zoomOut() {
-        scale.value = clampScale(scale.value * ZOOM_LIMITS.zoomOutFactor)
+        zoomAtViewCentre(ZOOM_LIMITS.zoomOutFactor)
     }
 
     function resetView() {
+        pinch = null
         scale.value = 1
         position.value = {x: 0, y: 0}
     }
@@ -169,6 +189,8 @@ export function usePanZoom(options: PanZoomOptions = {}) {
     ) {
         if (!containerRect || !canvasWidth || !canvasHeight) return
 
+        // A pinch under way re-anchors on its next move rather than undoing the fit.
+        pinch = null
         scale.value = fitScale(containerRect, canvasWidth, canvasHeight, FIT_MARGIN)
         position.value = {x: 0, y: 0}
     }

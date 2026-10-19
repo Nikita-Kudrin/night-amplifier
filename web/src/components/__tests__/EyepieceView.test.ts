@@ -34,6 +34,7 @@ vi.mock('../../composables/useWebGLRenderer', () => ({
   useWebGLRenderer: vi.fn(() => ({
     init: vi.fn(() => true),
     render: vi.fn(() => true), // drew, as a live context does
+    maxSourceEdge: vi.fn(() => Infinity),
     cleanup: vi.fn(),
     isInitialized: vi.fn(() => true),
     backend: ref<RendererBackend>('webgl2-8bit'),
@@ -44,6 +45,7 @@ vi.mock('../../composables/useCanvas2DRenderer', () => ({
   useCanvas2DRenderer: vi.fn(() => ({
     init: vi.fn(() => false),
     render: vi.fn(() => true),
+    maxSourceEdge: vi.fn(() => Infinity),
     cleanup: vi.fn(),
     isInitialized: vi.fn(() => false),
     backend: ref<RendererBackend>('canvas2d'),

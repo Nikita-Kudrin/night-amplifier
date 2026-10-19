@@ -434,10 +434,13 @@ fn render_rgb8<S: RowSource>(
 ) -> Vec<u8> {
     let tail = RowTail::new(ready_frame);
     let display = ready_frame.pipeline_config.display;
-    let denoise = ready_frame.pipeline_config.denoise;
 
     let target_width = source.target_width();
     let target_height = source.target_height();
+    let denoise = ready_frame
+        .pipeline_config
+        .denoise
+        .at_output_scale(target_width as f32 / ready_frame.linear_frame.width().max(1) as f32);
     let row_len = target_width * 3;
     let mut output = vec![0u8; row_len * target_height];
 

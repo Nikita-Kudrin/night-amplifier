@@ -2,6 +2,12 @@
 
 use night_amplifier_core::render::denoise::settings::{finite_or, nullable_f32};
 
+/// The longest edge any stream is sent at, `Native` included. A 6248x4176 sensor streamed
+/// whole was a 26 MP canvas: past the 4096 px texture limit of many mobile GPUs (a silently
+/// black view) and iOS's 16.7 MP canvas cap, with ~940 MB of denoise scratch on the server.
+/// 3840² fits all three; the browser mirrors it as `SERVER_MAX_STREAM_EDGE`.
+pub const MAX_STREAM_EDGE: u32 = 3840;
+
 /// A resolution the observer picks, as a bounding box: the frame is fitted inside it with
 /// its aspect ratio intact and never upscaled. Serves three settings:
 ///
@@ -18,7 +24,8 @@ use night_amplifier_core::render::denoise::settings::{finite_or, nullable_f32};
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Resolution {
-    /// No bounding box: every stage and stream sees the full frame.
+    /// No bounding box: every stage sees the full frame, and every stream up to
+    /// [`MAX_STREAM_EDGE`].
     Native,
     Uhd2160,
     Qhd1440,
@@ -36,9 +43,10 @@ impl Resolution {
         }
     }
 
-    /// [`Self::target_box`] with `Native` as an unbounded box, for the encoders.
+    /// The box a stream is encoded into: [`Self::target_box`], with `Native` bounded only by
+    /// [`MAX_STREAM_EDGE`]. Processing and the saved/snapshot images stay truly native.
     pub fn bounding_box(self) -> (u32, u32) {
-        self.target_box().unwrap_or((u32::MAX, u32::MAX))
+        self.target_box().unwrap_or((MAX_STREAM_EDGE, MAX_STREAM_EDGE))
     }
 
     /// The name the settings UI shows.
@@ -193,5 +201,40 @@ impl Default for EyepieceSettings {
             dither: default_dither(),
             stream_resolution: EyepieceStreamResolution::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use night_amplifier_core::render::display::output_dimensions;
+
+    fn streamed(resolution: Resolution, width: usize, height: usize) -> (usize, usize) {
+        let (max_w, max_h) = resolution.bounding_box();
+        output_dimensions(width, height, max_w, max_h)
+    }
+
+    /// Native streams a sensor whole up to 3840 px a side, and only shrinks one past it.
+    #[test]
+    fn native_streams_are_capped_at_3840_a_side() {
+        assert_eq!(streamed(Resolution::Native, 3008, 3008), (3008, 3008));
+        assert_eq!(streamed(Resolution::Native, 3840, 2160), (3840, 2160));
+        assert_eq!(streamed(Resolution::Native, 6248, 4176), (3840, 2566));
+        assert_eq!(streamed(Resolution::Native, 4176, 6248), (2566, 3840));
+        assert_eq!(streamed(Resolution::Native, 9576, 9576), (3840, 3840));
+    }
+
+    /// The cap is not the 4K option: that box is 3840x2160, so it stays the smaller size.
+    #[test]
+    fn native_stays_larger_than_4k_on_a_large_sensor() {
+        assert_eq!(streamed(Resolution::Uhd2160, 6248, 4176), (3231, 2160));
+        assert_eq!(streamed(Resolution::Uhd2160, 3008, 3008), (2160, 2160));
+        assert_eq!(streamed(Resolution::Native, 3008, 3008), (3008, 3008));
+    }
+
+    /// Processing reads `target_box`, which the stream cap must not reach.
+    #[test]
+    fn processing_at_native_is_never_bounded() {
+        assert_eq!(Resolution::Native.target_box(), None);
     }
 }

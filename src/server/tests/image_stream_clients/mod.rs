@@ -178,6 +178,7 @@ impl TestServer {
             settings: Arc::new(settings),
             stack_depth: if showing_stack { 10 } else { 0 },
             crop,
+            star_fwhm: None,
         })
         .unwrap();
         drop(tx);

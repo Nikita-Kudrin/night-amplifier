@@ -43,6 +43,7 @@ fn stack_of(frame: Frame, crop: Option<CropRect>, settings: CaptureSettings) -> 
         stack_depth: 10,
         noise: None,
         crop,
+        star_fwhm: None,
     }
 }
 

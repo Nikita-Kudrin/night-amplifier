@@ -264,6 +264,31 @@ async fn each_guide_family_follows_only_its_own_resolution() {
     }
 }
 
+/// A guide camera's Native streams are capped at 3840 px a side like the imaging camera's.
+#[tokio::test]
+async fn a_native_guide_stream_never_exceeds_3840_a_side() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let _jpeg = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
+    let _lossless = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Lossless);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let camera = counting_camera(1, Arc::clone(&stop)).sized(6248, 4176);
+    let info = guide_camera_info();
+    let loop_state = Arc::clone(&state);
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        run(&loop_state, &info, Box::new(camera), &stop, None, &rt);
+    })
+    .await
+    .expect("guide loop panicked");
+
+    for kind in [StreamKind::Jpeg, StreamKind::Lossless] {
+        let payload = state.guide_stream.payload(kind, 1).expect("no payload");
+        assert_eq!(payload_size(&payload), (3840, 2566), "{kind:?}");
+    }
+}
+
 /// The lossless family follows Eyepiece Streaming Resolution, read live: a change made
 /// during the exposure applies to the frame it renders, as it does for the JPEG.
 #[tokio::test]

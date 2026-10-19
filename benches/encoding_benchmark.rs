@@ -159,6 +159,18 @@ fn bench_encoding(c: &mut Criterion) {
         })
     });
 
+    // The same sensor at the default Native stream: no resample but 4.4x the output pixels,
+    // x86 20-core 4.6 ms/call (denoise off; Pro's denoisers make it ~94 ms).
+    let (native_w, native_h) = night_amplifier::session::state::Resolution::Native.bounding_box();
+    const IMX533_NATIVE_REPS: usize = 24;
+    group_conv.bench_function(format!("imx533_to_native_stream_x{}", IMX533_NATIVE_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..IMX533_NATIVE_REPS {
+                black_box(frame_to_rgb8_downsampled(black_box(&ready_imx533_rgb), native_w, native_h).unwrap());
+            }
+        })
+    });
+
     // The same tier with the black floor's sky shadow on (denoise off), x86 20-core:
     // 4.3 ms plain; 10.3 ms staging the image; 9.3 streamed with a sorted sky estimate;
     // 6.0 ms streamed with selection, 8k sky samples and vectorising row loops.

@@ -261,7 +261,8 @@ same solve and blocker, so a lost event never leaves "Searching…" or a stale a
 
 Each stream is encoded once per frame in the render task, not once per connected client, at a size chosen in
 Settings: **Streaming Resolution** for the live view and eyepiece view (JPEG), **Eyepiece Streaming Resolution** for
-the lossless eyepiece view — 1080p (JPEG only), 1440p, 4K or Native, both Native by default. Every client of a stream
+the lossless eyepiece view — 1080p (JPEG only), 1440p, 4K or Native (up to 3840 px a side), both Native by default
+for the best quality; a smaller size saves bandwidth and streams more responsively. Every client of a stream
 receives the same frame, so ten phones cost one encode per frame, and a stream nobody is watching costs nothing.
 
 #### Adding New Camera Providers

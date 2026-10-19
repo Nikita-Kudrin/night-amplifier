@@ -529,6 +529,64 @@ fn ready_with_denoise(
     ready
 }
 
+/// Records the star width each pass is handed, at the size it is handed it.
+struct StarSigmaProbe(std::sync::Mutex<Vec<(usize, Option<f32>)>>);
+
+impl crate::render::denoise::DenoisePlugin for StarSigmaProbe {
+    fn config(
+        &self,
+        _settings: &crate::render::denoise::DenoiseSettings,
+        _aggressiveness: crate::render::StretchAggressiveness,
+    ) -> crate::render::DenoiseConfig {
+        crate::render::DenoiseConfig::OFF
+    }
+
+    fn grain_split(&self, _settings: &crate::render::denoise::DenoiseSettings) -> f32 {
+        crate::render::autostretch::logic::DEFAULT_GRAIN_SPLIT
+    }
+
+    fn denoise_rgb_interleaved(
+        &self,
+        _buf: &mut [f32],
+        width: usize,
+        _height: usize,
+        config: &crate::render::DenoiseConfig,
+        _noise: Option<&crate::frame::NoiseField>,
+        _scratch: &mut crate::render::denoise::DenoiseScratch,
+    ) {
+        self.0.lock().unwrap().push((width, config.luma.star_sigma));
+    }
+}
+
+/// The star width travels in the rendered frame's pixels and reaches the filters in the
+/// output's: a 400 px frame streamed at 200 px halves it, at its own size keeps it.
+#[test]
+fn the_star_width_reaches_the_filters_at_output_scale() {
+    let probe = std::sync::Arc::new(StarSigmaProbe(std::sync::Mutex::new(Vec::new())));
+    let mut ready = ready_with_denoise(
+        &Frame::filled(400, 200, 3, 0.2).unwrap(),
+        crate::render::DenoiseConfig {
+            luma: crate::render::LumaDenoiseConfig {
+                enabled: true,
+                strength: 1.0,
+                star_sigma: Some(4.0),
+                ..crate::render::LumaDenoiseConfig::OFF
+            },
+            ..crate::render::DenoiseConfig::OFF
+        },
+    );
+    ready.pipeline_config.plugins = crate::plugins::Plugins::none()
+        .with_denoise(probe.clone())
+        .always_licensed();
+
+    frame_to_rgb8_downsampled(&ready, 200, 200).unwrap();
+    frame_to_rgb8_downsampled(&ready, u32::MAX, u32::MAX).unwrap();
+    ready.pipeline_config.denoise.luma.star_sigma = None;
+    frame_to_rgb8_downsampled(&ready, 200, 200).unwrap();
+
+    assert_eq!(*probe.0.lock().unwrap(), vec![(200, Some(2.0)), (400, Some(4.0)), (200, None)]);
+}
+
 /// Every spelling of "off" must take the fused traversal, not a staged one that
 /// happens to compute the same thing. `is_enabled` is what routes between them,
 /// so its contract is pinned at the byte level on both kernels.

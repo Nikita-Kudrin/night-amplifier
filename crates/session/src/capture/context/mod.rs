@@ -64,6 +64,13 @@ pub trait LiveStacker: Send {
 
     fn has_reference(&self) -> bool;
 
+    /// The session's typical star FWHM, in the stack's pixels, as recent subs measured it;
+    /// `None` where the mode measures none. The renderer holds Detail off stars too wide
+    /// for its ring tables by it.
+    fn star_fwhm(&self) -> Option<f32> {
+        None
+    }
+
     /// Re-reads the mode's parameters; called before every frame so an edit lands mid-stack.
     fn apply_settings(&mut self, settings: &StackSettings);
 

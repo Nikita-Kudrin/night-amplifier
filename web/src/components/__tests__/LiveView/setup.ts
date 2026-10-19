@@ -73,6 +73,7 @@ export function createMockWebGLRenderer() {
         backend: ref<RendererBackend>('webgl2-8bit'),
         init: vi.fn<WebGLRenderer['init']>(() => true),
         render: vi.fn<WebGLRenderer['render']>(() => true), // drew, as a live context does
+        maxSourceEdge: vi.fn(() => Infinity),
         cleanup: vi.fn(),
         isInitialized: vi.fn(() => true),
     } satisfies WebGLRenderer
@@ -83,6 +84,7 @@ export function createMockCanvas2DRenderer() {
         backend: ref<RendererBackend>('canvas2d'),
         init: vi.fn<Canvas2DRenderer['init']>(() => false),
         render: vi.fn<Canvas2DRenderer['render']>(() => true),
+        maxSourceEdge: vi.fn(() => Infinity),
         cleanup: vi.fn(),
         isInitialized: vi.fn(() => false),
     } satisfies Canvas2DRenderer

@@ -42,6 +42,11 @@ pub struct LumaDenoiseConfig {
     /// Local-contrast gain above unity on the target's structure; `0` for none. Unlike
     /// `gain` it is not uniform: the plugin keeps it off the sky and every star.
     pub detail: f32,
+    /// The stack's typical star as a Gaussian sigma, in pixels of the frame this config
+    /// renders; `None` when unmeasured. Filled by the render task, not the plugin, and
+    /// rescaled to the output size by the encoder ([`DenoiseConfig::at_output_scale`]):
+    /// Detail's ring tables hold only up to a star width, which Native streams pass.
+    pub star_sigma: Option<f32>,
 }
 
 impl LumaDenoiseConfig {
@@ -51,6 +56,7 @@ impl LumaDenoiseConfig {
         k: [0.0; MAX_LEVELS],
         strength: 0.0,
         detail: 0.0,
+        star_sigma: None,
     };
 
     pub fn is_enabled(&self) -> bool {
@@ -147,6 +153,12 @@ impl DenoiseConfig {
     pub fn linear_enabled(&self) -> bool {
         self.luma.is_enabled() || self.chroma.is_enabled()
     }
+
+    /// This config for an output `scale` times the size of the frame it was filled for.
+    pub fn at_output_scale(mut self, scale: f32) -> Self {
+        self.luma.star_sigma = self.luma.star_sigma.map(|sigma| sigma * scale);
+        self
+    }
 }
 
 /// The spatial denoisers, and the mapping from the observer's controls onto them.
@@ -217,6 +229,33 @@ pub struct DenoiseScratch {
     /// reads it. Pro's Detail control keeps its block maps here: allocated per pass they
     /// were ~1,260 page faults a 1440² call and a third of what the control cost.
     pub plugin: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl DenoiseScratch {
+    /// Frees what this holds past a `pixels`-pixel pass, once a buffer holds over twice
+    /// that: a stream made smaller, or one nobody watches (`0`), gives the rest back, and
+    /// two families at sizes within 2x of each other do not reallocate every frame. Grown
+    /// for life, a Native stream's 326 MB at 3008² stayed after it was switched to 1440p.
+    pub fn release_beyond(&mut self, pixels: usize) {
+        fn trim(buf: &mut Vec<f32>, len: usize) {
+            if buf.capacity() > 2 * len {
+                buf.truncate(len);
+                buf.shrink_to(len);
+            }
+        }
+        trim(&mut self.staged, pixels * 3);
+        for buf in self.planes.iter_mut().chain(self.aux.iter_mut()) {
+            trim(buf, pixels);
+        }
+        if pixels == 0 {
+            self.plugin = None;
+        }
+    }
+
+    /// Samples held across every buffer, in use or not.
+    pub fn held_samples(&self) -> usize {
+        self.staged.capacity() + self.planes.iter().chain(&self.aux).map(Vec::capacity).sum::<usize>()
+    }
 }
 
 /// Grow `buf` to hold at least `len` samples and hand back exactly `len`.
@@ -329,6 +368,30 @@ pub fn grain_split_for(plugins: &Plugins, settings: &DenoiseSettings) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pass at a smaller size, or none, gives back what a larger one grew; sizes within
+    /// 2x of what is held keep it.
+    #[test]
+    fn scratch_is_released_past_twice_the_pass() {
+        let mut scratch = DenoiseScratch::default();
+        let grow = |scratch: &mut DenoiseScratch, pixels: usize| {
+            take(&mut scratch.staged, pixels * 3);
+            for buf in scratch.planes.iter_mut().chain(scratch.aux.iter_mut()) {
+                take(buf, pixels);
+            }
+        };
+        grow(&mut scratch, 1000);
+        assert_eq!(scratch.held_samples(), 9000);
+
+        scratch.release_beyond(600);
+        assert_eq!(scratch.held_samples(), 9000, "within 2x: kept");
+        scratch.release_beyond(400);
+        assert_eq!(scratch.held_samples(), 3600, "past 2x: cut to the pass");
+        scratch.plugin = Some(Box::new(0u8));
+        scratch.release_beyond(0);
+        assert_eq!(scratch.held_samples(), 0);
+        assert!(scratch.plugin.is_none(), "nothing to keep the plugin's maps for");
+    }
 
     #[test]
     fn every_community_default_is_off() {

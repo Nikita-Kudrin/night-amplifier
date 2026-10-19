@@ -48,7 +48,7 @@ pub use disk_warning::DiskWarning;
 pub use display_settings::{
     default_preview_resolution, default_streaming_resolution, EyepieceSettings,
     EyepieceStreamResolution, Resolution, DEFAULT_PREVIEW_RESOLUTION,
-    DEFAULT_STREAMING_RESOLUTION,
+    DEFAULT_STREAMING_RESOLUTION, MAX_STREAM_EDGE,
 };
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;

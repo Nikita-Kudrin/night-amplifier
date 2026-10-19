@@ -41,13 +41,19 @@ pub(super) struct ConversionCache {
     /// Kept here rather than in a thread-local so nothing else in the process
     /// can strand 75 MB behind a pooled worker.
     scratch: night_amplifier_core::render::denoise::DenoiseScratch,
+    /// The largest conversion of the frame in progress, in output pixels: what the
+    /// scratch is trimmed to when the next frame begins.
+    peak_pixels: usize,
 }
 
 impl ConversionCache {
-    /// Drop the previous frame's conversions, keeping the buffers that produced
-    /// them.
+    /// Drop the previous frame's conversions, keeping the buffers that produced them as
+    /// far as that frame used them (`DenoiseScratch::release_beyond`): a frame nobody
+    /// watched frees them, a stream made smaller gives back the difference.
     pub(super) fn begin_frame(&mut self) {
         self.entries.clear();
+        self.scratch.release_beyond(self.peak_pixels);
+        self.peak_pixels = 0;
     }
 
     /// The RGB8 buffer for a bounding box, converting only if nothing already
@@ -68,6 +74,7 @@ impl ConversionCache {
             return Ok(Arc::clone(data));
         }
 
+        self.peak_pixels = self.peak_pixels.max(key.0 * key.1);
         let _span = tracing::info_span!("frame_to_rgb8", width = key.0, height = key.1).entered();
         let data = night_amplifier_core::render::display::frame_to_rgb8_downsampled_with(
             frame,
@@ -86,6 +93,11 @@ impl ConversionCache {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn scratch_samples(&self) -> usize {
+        self.scratch.held_samples()
     }
 }
 

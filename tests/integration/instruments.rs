@@ -1807,13 +1807,26 @@ pub fn measure_real_session(
             .with_test_writer()
             .try_init();
     }
-    let settings = night_amplifier::session::state::CaptureSettings::default();
     // The accumulator at every depth, so the filtered half renders with the noise map the
     // render task would attach. With denoising off the map has nothing to act on.
     let snapshots = accumulator_snapshots(files, depths, load);
+    for (stream, stream_box) in STREAM_BOXES {
+        measure_snapshots_at(&format!("{label} @ {stream}"), &snapshots, denoise_modes, stream_box());
+    }
+}
 
+/// The stream sizes a real session is measured at: 1440p, which the filters were tuned on,
+/// and the default Native (up to `MAX_STREAM_EDGE`), where every processed pixel is shown.
+const STREAM_BOXES: [(&str, fn() -> (u32, u32)); 2] = [
+    ("1440p", || night_amplifier::session::state::Resolution::Qhd1440.bounding_box()),
+    ("Native", || night_amplifier::session::state::Resolution::Native.bounding_box()),
+];
+
+/// [`measure_real_session`]'s assertions on its snapshots rendered into `stream_box`.
+fn measure_snapshots_at(label: &str, snapshots: &[AccumulatorSnapshot], denoise_modes: &[bool], stream_box: (u32, u32)) {
+    let settings = night_amplifier::session::state::CaptureSettings::default();
     let deepest = snapshots.last().unwrap();
-    let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, (2560, 1440), deepest.depth as u32);
+    let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, stream_box, deepest.depth as u32);
     let (sky, target) = locate_boxes(&deep_rgb, w, h);
 
     for &denoise in denoise_modes {
@@ -1823,10 +1836,10 @@ pub fn measure_real_session(
         );
         println!("   N   sigma(ADU)  sky lvl  grain(lvl)  target(lvl)  target/grain  N^-1/4");
         let mut rows = Vec::new();
-        for snapshot in &snapshots {
+        for snapshot in snapshots {
             let (n, stack) = (&snapshot.depth, &snapshot.frame);
             let stats = night_amplifier::statistics::compute_image_stats(stack).unwrap();
-            let (rgb8, w, _) = render_snapshot(snapshot, &settings, denoise, (2560, 1440));
+            let (rgb8, w, _) = render_snapshot(snapshot, &settings, denoise, stream_box);
             let m = measure_sky_and_target(&rgb8, w, sky, target);
             println!(
                 "{n:>4}   {:>9.2}   {:>6.1}   {:>9.2}   {:>10.1}   {:>11.2}   {:>7.2}",
