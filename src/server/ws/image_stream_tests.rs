@@ -62,8 +62,8 @@ async fn a_first_client_is_served_from_the_raw_frame_at_the_configured_size() {
 
         assert_eq!(tag, counter);
         assert_eq!(magic(&payload), expected_magic);
-        // Both settings default to 1440p.
-        assert_eq!(dimensions(&payload), (1440, 1440));
+        // Both settings default to Native.
+        assert_eq!(dimensions(&payload), (3008, 3008));
         assert!(
             stream.payload(kind, counter).is_some(),
             "the on-demand {kind:?} payload was not stored for the next client"
@@ -186,14 +186,14 @@ async fn nothing_to_encode_yields_nothing() {
 #[tokio::test]
 async fn configured_resolution_reads_each_familys_setting() {
     let state = test_state();
-    assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Qhd1440);
-    assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Qhd1440);
+    assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Native);
+    assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Native);
 
     state.settings.update(|settings| {
-        settings.streaming_resolution = Resolution::Native;
+        settings.streaming_resolution = Resolution::Hd1080;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
     });
-    assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Native);
+    assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Hd1080);
     assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Uhd2160);
 }
 

@@ -40,8 +40,16 @@ pub(super) struct TestServer {
 }
 
 /// The real WebSocket routes and the real settings endpoint, over loopback.
+///
+/// Both families start at 1440p rather than the Native default: against a 3008² frame
+/// that is a size of its own, so a family left at it is told apart from one resized to
+/// Native, and one family's setting leaking into the other shows.
 pub(super) async fn start_server() -> TestServer {
     let state = create_test_state();
+    state.settings.update(|settings| {
+        settings.streaming_resolution = crate::session::state::Resolution::Qhd1440;
+        settings.eyepiece.stream_resolution = crate::session::state::EyepieceStreamResolution::Qhd1440;
+    });
     let app = axum::Router::new()
         .nest("/ws", crate::server::ws::routes())
         .route(

@@ -167,7 +167,7 @@ async fn a_changed_setting_applies_from_the_next_frame() {
     set_resolutions(&state, Resolution::Hd1080, EyepieceStreamResolution::Uhd2160).await;
     render_each(&state, vec![stacked_frame(filled(3008, 3008), passthrough_settings())]).await;
 
-    assert_eq!(dimensions(&first_jpeg), (1440, 1440), "the published frame changed size");
+    assert_eq!(dimensions(&first_jpeg), (3008, 3008), "the published frame changed size");
     assert_eq!(current_size(&state, StreamKind::Jpeg), (1080, 1080));
     assert_eq!(current_size(&state, StreamKind::Lossless), (2160, 2160));
 }

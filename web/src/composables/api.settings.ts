@@ -60,7 +60,7 @@ export const SERVER_DEFAULT_SETTINGS = {
     "ai_compute": "auto"
   },
   "preview_resolution": "native",
-  "streaming_resolution": "qhd1440",
+  "streaming_resolution": "native",
   "eyepiece": {
     "binoview": true,
     "screen_width": 140.0,
@@ -73,7 +73,7 @@ export const SERVER_DEFAULT_SETTINGS = {
     "black_floor": 0.04,
     "darker_sky": false,
     "dither": true,
-    "stream_resolution": "qhd1440"
+    "stream_resolution": "native"
   },
   "telescope": {
     "focal_length_mm": null,

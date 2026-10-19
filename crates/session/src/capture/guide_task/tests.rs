@@ -228,6 +228,42 @@ async fn both_families_are_encoded_when_both_are_watched() {
     assert_eq!(payload_size(&jpeg), payload_size(&lossless));
 }
 
+/// Each family follows only its own setting on the guide camera too: Streaming Resolution
+/// never resizes the eyepiece quality view, nor Eyepiece Streaming Resolution the JPEG.
+#[tokio::test]
+async fn each_guide_family_follows_only_its_own_resolution() {
+    use crate::state::EyepieceStreamResolution;
+    for (streaming, eyepiece, jpeg_size, lossless_size) in [
+        (Resolution::Hd1080, EyepieceStreamResolution::Native, (1620, 1080), (2400, 1600)),
+        (Resolution::Native, EyepieceStreamResolution::Qhd1440, (2400, 1600), (2160, 1440)),
+    ] {
+        let (state, _dw) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        state.settings.update(|s| {
+            s.streaming_resolution = streaming;
+            s.eyepiece.stream_resolution = eyepiece;
+        });
+        let _jpeg = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
+        let _lossless = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Lossless);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let camera = counting_camera(1, Arc::clone(&stop)).sized(2400, 1600);
+        let info = guide_camera_info();
+        let loop_state = Arc::clone(&state);
+        let rt = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            run(&loop_state, &info, Box::new(camera), &stop, None, &rt);
+        })
+        .await
+        .expect("guide loop panicked");
+
+        let jpeg = state.guide_stream.payload(StreamKind::Jpeg, 1).expect("no JPEG");
+        let lossless = state.guide_stream.payload(StreamKind::Lossless, 1).expect("no SA09");
+        assert_eq!(payload_size(&jpeg), jpeg_size, "JPEG at {streaming:?} / {eyepiece:?}");
+        assert_eq!(payload_size(&lossless), lossless_size, "SA09 at {streaming:?} / {eyepiece:?}");
+    }
+}
+
 /// The lossless family follows Eyepiece Streaming Resolution, read live: a change made
 /// during the exposure applies to the frame it renders, as it does for the JPEG.
 #[tokio::test]

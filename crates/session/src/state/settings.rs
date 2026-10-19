@@ -464,12 +464,15 @@ mod tests {
     #[test]
     fn each_stream_family_reads_its_own_resolution_setting() {
         let mut settings = CaptureSettings::default();
-        assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Qhd1440);
-        assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Qhd1440);
-
-        settings.streaming_resolution = Resolution::Native;
-        settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
         assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Native);
+        assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Native);
+
+        settings.streaming_resolution = Resolution::Hd1080;
+        assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Hd1080);
+        assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Native);
+
+        settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
+        assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Hd1080);
         assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Uhd2160);
     }
 

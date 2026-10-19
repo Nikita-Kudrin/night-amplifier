@@ -56,8 +56,9 @@ impl Resolution {
 /// resolution no part of the UI asked for.
 pub const DEFAULT_PREVIEW_RESOLUTION: Resolution = Resolution::Native;
 
-/// The Streaming Resolution default for `/` and `/eyepiece`.
-pub const DEFAULT_STREAMING_RESOLUTION: Resolution = Resolution::Qhd1440;
+/// The Streaming Resolution default for `/` and `/eyepiece`: every processed pixel, as
+/// Processing Resolution, so a fresh install loses no detail it did not choose to.
+pub const DEFAULT_STREAMING_RESOLUTION: Resolution = Resolution::Native;
 
 pub fn default_preview_resolution() -> Resolution {
     DEFAULT_PREVIEW_RESOLUTION
@@ -74,9 +75,9 @@ pub fn default_streaming_resolution() -> Resolution {
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum EyepieceStreamResolution {
+    #[default]
     Native,
     Uhd2160,
-    #[default]
     Qhd1440,
 }
 
