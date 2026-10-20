@@ -121,9 +121,12 @@ describe('EyepieceSettings', () => {
 describe('EyepieceSettings in the panel', () => {
     afterEach(() => vi.useRealTimers())
 
+    /** Binoview on, so the screen size fields are shown. */
+    const binoview = () => settings({eyepiece: {binoview: true}})
+
     /** The panel under a stand-in for the settings store: every save's answer is adopted. */
     function mountPanel() {
-        const server = ref(settings())
+        const server = ref(binoview())
         const applySettings = vi.fn(async (patch: UpdateSettingsRequest) => {
             server.value = {...server.value, ...JSON.parse(JSON.stringify(patch))}
             return server.value
@@ -164,7 +167,7 @@ describe('EyepieceSettings in the panel', () => {
     it('keeps a field in flight over an earlier write\'s answer', async () => {
         vi.useFakeTimers()
         const answers: {patch: UpdateSettingsRequest, resolve: (answer: Settings) => void}[] = []
-        const server = ref(settings())
+        const server = ref(binoview())
         const applySettings = vi.fn((patch: UpdateSettingsRequest) =>
             new Promise<Settings>((resolve) => answers.push({patch, resolve})))
         const wrapper = mountWithDefaults(SettingsPanel, {provide: {settings: server, applySettings}})

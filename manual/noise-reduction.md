@@ -57,6 +57,7 @@ its neighbours, and guesses badly when the neighbours are noisy.
 
 This is the cheap, safe half. Your eye resolves far less colour detail than
 brightness detail, so colour can be smoothed hard with almost nothing to lose.
+It is off by default: switch it on if the background shows colour blotches.
 The filter is *guided* by the brightness image, which means it stops smoothing
 wherever the brightness has an edge — a star keeps its own colour instead of
 bleeding it across the sky beside it.
@@ -145,7 +146,7 @@ noticeably cleaner background.
 
 **Structure strength** scales the thresholds for the mid scales — the soft mottle across
 the target, not the fine speckle and not the broad background blotches the dial above
-handles. **100 % is both the tuned value and the maximum.** Past it the filter stops
+handles. **50 % is the default; 100 % is both the tuned value and the maximum.** Past it the filter stops
 helping and starts hurting: the mottle is not removed, it is pushed out to a scale the
 filter cannot reach, and stars grow a visible ring around them. Lower it if the target
 starts looking soft or plastic.
@@ -177,8 +178,8 @@ sharpening:
 - **Anything already high-contrast**, such as the edge of a nebula against the sky, so it
   does not grow a halo.
 
-**50 % is the default.** On a bright nebula like Orion it roughly doubles the visible
-structure in the core; on Andromeda it brings out the disk. On a nebula sitting in a
+**25 % is the default.** At 50 %, on a bright nebula like Orion it roughly doubles the
+visible structure in the core; on Andromeda it brings out the disk. On a nebula sitting in a
 dense star field — the Dumbbell — it raises the nebula between the stars and leaves the
 stars, which there are most of what you see, so the change is modest; on a globular
 cluster it does very little, by design. **0 %** shows the target as before this control

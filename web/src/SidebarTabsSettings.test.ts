@@ -86,7 +86,7 @@ function loadedSettings(): Settings {
         rejection_sigma: 2.2,
         auto_crop: true,
         raw_frame_saving: {...DEFAULT_SETTINGS.raw_frame_saving, live_view: false, wanderer: false, stacking: true},
-        eyepiece: {...DEFAULT_SETTINGS.eyepiece, screen_width: 133, screen_height: 71},
+        eyepiece: {...DEFAULT_SETTINGS.eyepiece, binoview: true, screen_width: 133, screen_height: 71},
         telescope: TELESCOPE,
         camera_telescope_profiles: {'Camera A': {...TELESCOPE}},
         last_camera_name: 'Camera A',

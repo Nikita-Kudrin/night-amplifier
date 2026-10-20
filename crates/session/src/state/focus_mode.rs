@@ -19,35 +19,29 @@ use night_amplifier_core::plugins::Plugins;
 /// Stored rather than recomputed: once live values are off they no longer say what
 /// the observer chose.
 ///
-/// Every field is `#[serde(default)]`: a parse failure here fails the whole settings
-/// file. Each default is the setting's own, not `false`, so a missing
-/// field restores the correction rather than disabling it (five of six are on).
+/// `#[serde(default)]` on the whole struct: a parse failure here fails the whole settings
+/// file. A missing field takes the *setting's* default, read off `CaptureSettings`, so it
+/// restores the correction rather than disabling it — hand-kept copies once drifted
+/// (`saturation_boost` defaulted off while the setting shipped on).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct FocusModeSnapshot {
-    #[serde(default = "default_on")]
     pub background_subtraction: bool,
-    #[serde(default)]
     pub saturation_boost: bool,
-    #[serde(default = "default_on")]
     pub fpn_removal: bool,
-    #[serde(default = "default_on")]
     pub denoise_chroma: bool,
     /// The wavelet's strength, which is what turns it off — zeroing it is how the mode
     /// holds the filter down, so a boolean could not say what to hand back. Note this is
     /// the *strength* and not the Background Grain dial: the dial also moves the tone
     /// curve's split, which this mode has no business touching, so it is unmanaged.
-    #[serde(default = "default_luma_strength")]
     pub denoise_luma_strength: f32,
-    #[serde(default = "default_on")]
     pub dither: bool,
 }
 
-fn default_on() -> bool {
-    true
-}
-
-fn default_luma_strength() -> f32 {
-    1.0
+impl Default for FocusModeSnapshot {
+    fn default() -> Self {
+        Self::capture(&CaptureSettings::default())
+    }
 }
 
 impl FocusModeSnapshot {

@@ -91,8 +91,8 @@ the fingerprinted bundle only while it is still the current one.
 
 ## Black level
 
-How dark the background sky is pushed. Raising it darkens the sky and lifts the
-contrast of the target — and it also pushes more of the sky's noise below black,
+How dark the background sky is pushed; it starts at 0 %. Raising it darkens the sky
+and lifts the contrast of the target — and it also pushes more of the sky's noise below black,
 so the background looks smoother as well as darker.
 
 This slider is not the only thing that calms the sky any more. A deeper stack
@@ -139,9 +139,9 @@ just very dark. On an OLED they are switched fully off, and at eyepiece
 magnification each one is large enough for your eye to resolve on its own, so
 they read as hard black speckle scattered through a grey sky rather than as sky.
 
-The floor lifts everything just clear of that. The default is 4 % of full scale,
-which is around output level 10 — dark enough to still read as black, bright
-enough that the panel keeps the pixel lit.
+The floor lifts everything just clear of that. 4 % of full scale is around output
+level 10 — dark enough to still read as black, bright enough that the panel keeps
+the pixel lit.
 
 Raise it if the background shows hard black dots. Lower it for maximum contrast
 on a screen that does not switch pixels off.
@@ -150,12 +150,14 @@ on a screen that does not switch pixels off.
 
 With the floor at zero the sky still sits at 14 to 17 output levels, which
 through an eyepiece lens is a clearly visible grey rather than a night sky.
-Turning **Black level** down darkens it, but that works by weakening the stretch,
+Raising **Black level** darkens it, but that works by weakening the stretch,
 so the target dims with the background: at full travel it takes the sky down by
-half and the target's contrast down by nearly two thirds.
+half and the target's contrast down by nearly two thirds. (These figures, and
+the table below, were measured when Black level's default was 30 %.)
 
 The negative half of Black floor lowers the background *without* touching the
-stretch, so the target keeps its brightness. Measured on the reference frames:
+stretch, so the target keeps its brightness. The default is −3 %. Measured on the
+reference frames:
 
 | Setting | Sky | Target contrast |
 |---|---|---|

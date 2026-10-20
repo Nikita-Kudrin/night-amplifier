@@ -75,6 +75,15 @@ describe('ProcessingSettings', () => {
         expect(rbf?.text()).toContain('🔒')
     })
 
+    // A locked toggle cannot be switched off, so a build without the boost must never show
+    // it on: a fresh Community install reads the server's defaults.
+    it('never shows the locked boost on, with the server\'s defaults', () => {
+        const wrapper = mountSection({saturationBoostAvailable: false})
+
+        expect(findToggleByLabel(wrapper, 'Shadow Saturation Boost').element.disabled).toBe(true)
+        expect(findToggleByLabel(wrapper, 'Shadow Saturation Boost').element.checked).toBe(false)
+    })
+
     it('holds dithering, background subtraction and the boost while Focus/Finder mode is on', () => {
         const wrapper = mountSection({focusMode: true})
 

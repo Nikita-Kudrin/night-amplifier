@@ -11,6 +11,7 @@ use night_amplifier_core::background::BackgroundExtractionAlgorithm;
 use night_amplifier_core::camera::{CaptureConfig, DualSamplingMode};
 use night_amplifier_core::cfa::SensorCorrectionSettings;
 use night_amplifier_core::planetary::AlignmentRoi;
+use night_amplifier_core::plugins::Plugins;
 use night_amplifier_core::push_to::TelescopeSettings;
 use night_amplifier_core::render::denoise::DenoiseSettings;
 use night_amplifier_core::render::{SaturationBoostConfig, StretchAggressiveness};
@@ -45,7 +46,8 @@ pub struct CaptureSettings {
     pub rejection_method: RejectionMethod,
     /// Enable background subtraction
     pub background_subtraction: bool,
-    /// Algorithm for background extraction (GridBilinear or RBF)
+    /// Algorithm for background extraction. A fresh install and a file without the key both
+    /// start on [`BackgroundExtractionAlgorithm::best_available`].
     pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
     /// Which capture modes write their raw frames to disk (FITS format)
     pub raw_frame_saving: RawFrameSaving,
@@ -57,9 +59,10 @@ pub struct CaptureSettings {
     pub weighting_preset: WeightingPreset,
     /// Auto stretch aggressiveness (Low, Medium, High)
     pub stretch_aggressiveness: StretchAggressiveness,
-    /// Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.3)
+    /// Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.2)
     pub auto_stretch_intensity: f32,
-    /// Enable shadow saturation boost
+    /// Enable shadow saturation boost. On by default only in a build that ships it
+    /// ([`Plugins::ships_saturation`]): Community's API refuses it.
     pub saturation_boost: bool,
     /// Shadow saturation boost strength (0.0-1.0)
     pub saturation_boost_strength: f32,
@@ -177,7 +180,7 @@ impl Default for CaptureSettings {
             // session has run sigma clipping since the plugin existed.
             rejection_method: RejectionMethod::best_available(),
             background_subtraction: true,
-            background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
+            background_extraction_algorithm: BackgroundExtractionAlgorithm::best_available(),
             preview_resolution: DEFAULT_PREVIEW_RESOLUTION,
             streaming_resolution: DEFAULT_STREAMING_RESOLUTION,
             raw_frame_saving: RawFrameSaving::default(),
@@ -185,9 +188,9 @@ impl Default for CaptureSettings {
             stacking_type: StackingType::default(),
             weighting_preset: WeightingPreset::default(),
             stretch_aggressiveness: StretchAggressiveness::default(),
-            auto_stretch_intensity: 0.3,
-            saturation_boost: false,
-            saturation_boost_strength: 0.5,
+            auto_stretch_intensity: 0.2,
+            saturation_boost: Plugins::installed().ships_saturation(),
+            saturation_boost_strength: 0.1,
             use_simulated_camera: false,
             simulated_preload_images: 5,
             show_focus_image: true,
@@ -203,7 +206,7 @@ impl Default for CaptureSettings {
             dew_heater_enabled: hw.dew_heater_enabled,
             dew_heater_power: hw.dew_heater_power,
             wanderer_mode: false,
-            auto_crop: false,
+            auto_crop: true,
             auto_reconnect: true,
             auto_resume_capture: true,
             sensor_correction: SensorCorrectionSettings::default(),

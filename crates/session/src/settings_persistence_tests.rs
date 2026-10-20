@@ -351,12 +351,12 @@ fn test_a_snapshot_without_the_flag_is_discarded() {
 }
 
 /// A snapshot written before a setting joined the managed set is missing that key.
-/// Defaulting it to `false` would silently disable a correction that is on by default —
-/// five of the six are — so each field defaults to the setting's own default.
+/// Defaulting it to `false` would silently disable a correction that is on by default, so
+/// each field defaults to the setting's own default.
 #[test]
 fn test_a_snapshot_missing_a_field_restores_that_settings_default() {
     let snapshot: FocusModeSnapshot = serde_json::from_value(serde_json::json!({
-        "saturation_boost": false,
+        "background_subtraction": true,
     }))
     .unwrap();
 
@@ -794,20 +794,20 @@ fn a_file_without_streaming_resolutions_loads_them_at_native() {
     assert!((loaded.eyepiece.intensity - 0.7).abs() < f32::EPSILON);
 }
 
-/// Auto crop is opt-in: a file from before it existed, and a fresh install, load with it
-/// off, and the observer's choice survives a save.
+/// Auto crop is on by default: a file from before it existed, and a fresh install, load
+/// with it on, and the observer's choice to turn it off survives a save.
 #[test]
-fn auto_crop_is_off_unless_the_file_says_otherwise() {
-    assert!(!CaptureSettings::default().auto_crop);
+fn auto_crop_is_on_unless_the_file_says_otherwise() {
+    assert!(CaptureSettings::default().auto_crop);
 
     let mut older = written(&CaptureSettings { wanderer_mode: true, ..CaptureSettings::default() });
     older.as_object_mut().unwrap().remove("auto_crop");
     let loaded = read(older);
-    assert!(!loaded.auto_crop);
+    assert!(loaded.auto_crop);
     assert!(loaded.wanderer_mode, "the rest of the file was lost");
 
-    let on = CaptureSettings { auto_crop: true, ..CaptureSettings::default() };
-    assert!(read(written(&on)).auto_crop);
+    let off = CaptureSettings { auto_crop: false, ..CaptureSettings::default() };
+    assert!(!read(written(&off)).auto_crop);
 }
 
 /// The defaults the UI promises: processing and both streams at Native.
@@ -1005,6 +1005,22 @@ fn a_file_without_a_rejection_method_loads_the_builds_best_method() {
     assert_eq!(read(json).rejection_method, RejectionMethod::best_available());
     assert_eq!(RejectionMethod::best_available(), RejectionMethod::None);
     assert_eq!(CaptureSettings::default().rejection_method, RejectionMethod::None);
+}
+
+/// The background algorithm defaults the same way: RBF only where the build ships it, since
+/// Community's extractor refuses every RBF frame. Pro's `plugin_defaults` checks the other half.
+#[test]
+fn a_file_without_a_background_algorithm_loads_the_builds_best_one() {
+    let mut json = written(&CaptureSettings::default());
+    json.as_object_mut().unwrap().remove("background_extraction_algorithm");
+    assert_eq!(
+        read(json).background_extraction_algorithm,
+        BackgroundExtractionAlgorithm::GridBilinear
+    );
+    assert_eq!(
+        CaptureSettings::default().background_extraction_algorithm,
+        BackgroundExtractionAlgorithm::GridBilinear
+    );
 }
 
 /// A hand-edited file is held to the same ranges the API holds a request to, in every

@@ -148,15 +148,15 @@ describe('SettingsPanel', () => {
         const hasAutoCrop = (wrapper: VueWrapper) =>
             wrapper.findAll('.toggle-label').some((el) => el.text().includes('Auto Crop'))
 
-        it('is off when the server omits it, as it is by default', () => {
-            expect(DEFAULT_SETTINGS.auto_crop).toBe(false)
+        it('is on when the server omits it, as it is by default', () => {
+            expect(DEFAULT_SETTINGS.auto_crop).toBe(true)
             const wrapper = mountSettingsPanel({settings: {stacking: true}})
-            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(false)
+            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(true)
         })
 
         it('shows what the server reports', () => {
-            const wrapper = mountSettingsPanel({settings: {stacking: true, auto_crop: true}})
-            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(true)
+            const wrapper = mountSettingsPanel({settings: {stacking: true, auto_crop: false}})
+            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(false)
         })
 
         it('sends auto_crop when toggled', async () => {

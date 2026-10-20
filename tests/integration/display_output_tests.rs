@@ -114,6 +114,15 @@ fn prepare_fixture_with(
     fixture: &Fixture,
     configure: impl FnOnce(&mut night_amplifier::session::state::CaptureSettings),
 ) -> Option<night_amplifier::render::display::RenderReadyFrame> {
+    prepare_fixture_with_plugins(fixture, &night_amplifier::plugins::Plugins::installed(), configure)
+}
+
+/// [`prepare_fixture_with`], rendered with `plugins` rather than the installed set.
+fn prepare_fixture_with_plugins(
+    fixture: &Fixture,
+    plugins: &night_amplifier::plugins::Plugins,
+    configure: impl FnOnce(&mut night_amplifier::session::state::CaptureSettings),
+) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     // Ensure fixtures are downloaded from Google Drive. Under nextest
     // partitioning this file may run in a shard with no other test that
     // downloads fixtures first, so it has to do it itself.
@@ -135,12 +144,7 @@ fn prepare_fixture_with(
         pipeline_config,
         stretch_result,
         ..
-    } = night_amplifier::session::capture::pipeline::process_preview_frame(
-        &mut frame,
-        &settings,
-        &night_amplifier::plugins::Plugins::installed(),
-    )
-    .ok()?;
+    } = night_amplifier::session::capture::pipeline::process_preview_frame(&mut frame, &settings, plugins).ok()?;
 
     Some(night_amplifier::render::display::RenderReadyFrame {
         noise: None,
@@ -795,12 +799,28 @@ fn a_negative_floor_without_auto_stretch_leaves_the_stream_alone() {
 
 /// The floor follows contrast's path: fused into the LUT or the encoder's deferred row tail.
 /// One setting, two code paths that must agree, or the slider means different things in
-/// Community and Pro — reachable here since the split follows the saturation *flag*, not the
-/// plugin, so the floor still takes the deferred path even when the boost itself is a no-op.
+/// Community and Pro. The boost only splits the paths with a plugin to run it, so the
+/// deferred side renders with an identity one: what differs is the order, never the colour.
 ///
 /// Measured against a control, not zero: `probe_fused_render_clamp_difference` already shows
 /// fused and deferred contrast disagreeing by 34 levels on clipping highlights with the floor
 /// off — so this only asks whether adding the floor makes that disagreement worse.
+/// The installed set plus a saturation boost that changes nothing.
+fn with_identity_boost() -> night_amplifier::plugins::Plugins {
+    use night_amplifier::render::{SaturationBoostConfig, SaturationPlugin};
+
+    struct Identity;
+    impl SaturationPlugin for Identity {
+        fn apply_boost(&self, _: &mut night_amplifier::Frame, _: &SaturationBoostConfig) -> night_amplifier::error::Result<()> {
+            Ok(())
+        }
+        fn apply_boost_slice(&self, _: &mut [f32], _: &SaturationBoostConfig) {}
+    }
+    night_amplifier::plugins::Plugins::installed()
+        .with_saturation(std::sync::Arc::new(Identity))
+        .always_licensed()
+}
+
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -827,7 +847,7 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
     // shape the fixture is, rather than against a restated 1440x1440.
     let compare = |black_floor: f32| -> Option<(usize, f64, usize)> {
         let prepare = |saturation: bool| {
-            prepare_fixture_with(fixture, |settings| {
+            prepare_fixture_with_plugins(fixture, &with_identity_boost(), |settings| {
                 settings.eyepiece.intensity = 0.0;
                 settings.eyepiece.black_floor = black_floor;
                 // The clip is the pointwise form that can ride either path; the

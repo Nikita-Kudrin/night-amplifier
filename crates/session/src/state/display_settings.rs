@@ -153,7 +153,7 @@ pub struct EyepieceSettings {
 }
 
 fn default_intensity() -> f32 {
-    0.3
+    0.0
 }
 
 fn default_circular_view() -> bool {
@@ -161,7 +161,7 @@ fn default_circular_view() -> bool {
 }
 
 fn default_black_floor() -> f32 {
-    0.04
+    -0.03
 }
 
 fn default_dither() -> bool {
@@ -187,14 +187,14 @@ impl EyepieceSettings {
 impl Default for EyepieceSettings {
     fn default() -> Self {
         Self {
-            binoview: true,
+            binoview: false,
             screen_width: 140.0,
             screen_height: 67.0,
             screen_measurement: "mm".to_string(),
             screen_resolution_x: 2880,
             screen_resolution_y: 1440,
             circular_view: true,
-            intensity: 0.3,
+            intensity: default_intensity(),
             black_floor: default_black_floor(),
             darker_sky: false,
             dither: default_dither(),

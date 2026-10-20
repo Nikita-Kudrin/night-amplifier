@@ -724,11 +724,13 @@ mod tests {
     /// target background.
     #[test]
     fn render_stacked_png_applies_the_stretch() {
-        let settings = CaptureSettings {
+        let mut settings = CaptureSettings {
             auto_stretch: true,
             background_subtraction: false,
             ..Default::default()
         };
+        // A neutral floor, so the byte read below is the stretch's alone.
+        settings.eyepiece.black_floor = 0.0;
 
         // A perfectly uniform frame makes the black-point solver degenerate (median
         // equals every pixel, sigma is ~0), so black-point subtraction alone nearly
@@ -758,7 +760,7 @@ mod tests {
         let idx = (16 * width as usize + 16) * 3;
         let stretched = rgb8[idx] as f32 / 255.0;
         assert!(
-            stretched > 0.07,
+            stretched > 0.05,
             "stacked PNG frame was not stretched: pixel stayed at {stretched} (background was ~{background})"
         );
     }

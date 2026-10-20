@@ -91,11 +91,11 @@ describe('SettingsPanel noise reduction', () => {
         it('sends the whole denoise object when a filter is toggled', async () => {
             const wrapper = mountSettingsPanel(WITH_DENOISE)
 
-            await findToggleByLabel(wrapper, 'Colour Mottle').setValue(false)
+            await findToggleByLabel(wrapper, 'Colour Mottle').setValue(true)
             await flushPromises()
 
             expect(updateSettings).toHaveBeenCalledWith({
-                denoise: expect.objectContaining({chroma: false, background_grain: 0.5}),
+                denoise: expect.objectContaining({chroma: true, background_grain: 0.5}),
             })
         })
 
@@ -186,7 +186,7 @@ describe('SettingsPanel noise reduction', () => {
             const slider = findSliderByLabel(wrapper, 'Detail')
             expect(slider.props('min')).toBe(0.0)
             expect(slider.props('max')).toBe(1.0)
-            expect(slider.props('modelValue')).toBe(0.5)
+            expect(slider.props('modelValue')).toBe(0.25)
             expect(slider.props('disabled')).toBeFalsy()
 
             slider.vm.$emit('update:modelValue', 0.8)
@@ -215,11 +215,11 @@ describe('SettingsPanel noise reduction', () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
-            expect(findToggleByLabel(wrapper, 'Colour Mottle').element.checked).toBe(true)
+            expect(findToggleByLabel(wrapper, 'Colour Mottle').element.checked).toBe(false)
             const grain = findSliderByLabel(wrapper, 'Background Grain')
             expect(grain.props('modelValue')).toBe(0.5)
             const detail = findSliderByLabel(wrapper, 'Detail')
-            expect(detail.props('modelValue')).toBe(0.5)
+            expect(detail.props('modelValue')).toBe(0.25)
         })
     })
 

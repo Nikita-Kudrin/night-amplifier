@@ -514,10 +514,12 @@ mod tests {
         // fixture's MAD identically at both sizes, masking the noise the 2x2 box halves.
         // Real stacks moved both ways (worst point, 0.7 -> 1.0: M101 89 -> 120, fireworks
         // 108 -> 7, Cat's Eye 11 -> 11), and the session holds its bin, so nothing flips.
+        // 12.37 at Black level 0 %, the default since 2026-10-20 (9.85 was at 30 %): the
+        // brighter sky target spends more gain in the shadows at both sizes.
         assert!(
-            worst < 12.0,
-            "binning moved the tone curve by {worst:.4}, up from the 9.85 measured once \
-             background removal took the whole gradient"
+            worst < 13.5,
+            "binning moved the tone curve by {worst:.4}, up from the 12.37 measured at the \
+             shipped Black level"
         );
     }
 

@@ -66,6 +66,9 @@ When designing new features or refactoring, adhere to the following architectura
   installer, and the field-objects port background protection solves stacks through) so Community works standalone. The binary `install`s its set via `app::run`; `AppState::plugins` carries
   it to stacking, rendering and Push-To, so a test hands in its own set (`always_licensed` for fakes) instead of
   filling process-wide slots. Accessors are licence-gated per call: a lapsed licence degrades the next frame.
+  A Pro default is keyed on the build (`best_available`, `ships_*`) and resolved per frame (`resolve_rejection`,
+  `resolve_background_algorithm`, the boost gated in `get_render_pipeline_config`): an unresolved RBF failed every
+  lapsed frame's background, and a boost Community could not run held the contrast out of the LUT.
 - Layers are crates, so Cargo enforces them: `night_amplifier` (root: `server`, `app.rs`, binary; re-exports the
   others at their old paths) → `night_amplifier_session` (`crates/session`: use cases, `AppState`, events) →
   `night_amplifier_core` (`crates/core`: the domain). A `cfg(test)` shortcut in session (e.g. `DISCOVERY_TIMEOUT`)

@@ -32,7 +32,10 @@ export interface Settings {
     rejection_method: RejectionMethod
     /** Enable background subtraction */
     background_subtraction: boolean
-    /** Algorithm for background extraction (GridBilinear or RBF) */
+    /**
+     * Algorithm for background extraction. A fresh install and a file without the key both
+     * start on [`BackgroundExtractionAlgorithm::best_available`].
+     */
     background_extraction_algorithm: BackgroundExtractionAlgorithm
     /** Which capture modes write their raw frames to disk (FITS format) */
     raw_frame_saving: RawFrameSaving
@@ -44,9 +47,12 @@ export interface Settings {
     weighting_preset: WeightingPreset
     /** Auto stretch aggressiveness (Low, Medium, High) */
     stretch_aggressiveness: StretchAggressiveness
-    /** Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.3) */
+    /** Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.2) */
     auto_stretch_intensity: number
-    /** Enable shadow saturation boost */
+    /**
+     * Enable shadow saturation boost. On by default only in a build that ships it
+     * ([`Plugins::ships_saturation`]): Community's API refuses it.
+     */
     saturation_boost: boolean
     /** Shadow saturation boost strength (0.0-1.0) */
     saturation_boost_strength: number
@@ -514,7 +520,7 @@ export interface DenoiseSettings {
     /**
      * Guided-filter smoothing of the chroma planes, against luminance as the
      * guide. Removes colour mottle; the eye resolves little chroma detail, so
-     * this is the cheap half with almost nothing to lose.
+     * this is the cheap half with almost nothing to lose. Off by default.
      */
     chroma: boolean
     /** How far the chroma planes move toward the filtered result, `0..=1`. */
@@ -535,8 +541,9 @@ export interface DenoiseSettings {
      */
     background_grain: number
     /**
-     * Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
-     * tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
+     * Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is the tuned
+     * value and the ceiling, [`DEFAULT_LUMA_STRENGTH`] the default; `0.0` is the wavelet's
+     * genuine off switch.
      *
      * Note what this can and cannot reach: it leaves the finest level and the coarse
      * pair alone, so it is the "the target still looks too noisy" control, not the "the
@@ -1080,7 +1087,7 @@ export interface DenoiseSettingsInput {
     /**
      * Guided-filter smoothing of the chroma planes, against luminance as the
      * guide. Removes colour mottle; the eye resolves little chroma detail, so
-     * this is the cheap half with almost nothing to lose.
+     * this is the cheap half with almost nothing to lose. Off by default.
      */
     chroma?: boolean
     /** How far the chroma planes move toward the filtered result, `0..=1`. */
@@ -1101,8 +1108,9 @@ export interface DenoiseSettingsInput {
      */
     background_grain?: number
     /**
-     * Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
-     * tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
+     * Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is the tuned
+     * value and the ceiling, [`DEFAULT_LUMA_STRENGTH`] the default; `0.0` is the wavelet's
+     * genuine off switch.
      *
      * Note what this can and cannot reach: it leaves the finest level and the coarse
      * pair alone, so it is the "the target still looks too noisy" control, not the "the

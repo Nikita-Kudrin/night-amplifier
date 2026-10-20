@@ -1790,6 +1790,7 @@ pub fn measure_real_session(
     files: &[std::path::PathBuf],
     depths: &[usize],
     denoise_modes: &[bool],
+    give_back: GiveBack,
     load: &dyn Fn(&Path) -> RawSub,
 ) {
     if std::env::var("STACK_GRAIN_TRACE").is_ok() {
@@ -1802,7 +1803,7 @@ pub fn measure_real_session(
     // render task would attach. With denoising off the map has nothing to act on.
     let snapshots = accumulator_snapshots(files, depths, load);
     for (stream, stream_box) in STREAM_BOXES {
-        measure_snapshots_at(&format!("{label} @ {stream}"), &snapshots, denoise_modes, stream_box());
+        measure_snapshots_at(&format!("{label} @ {stream}"), &snapshots, denoise_modes, give_back, stream_box());
     }
 }
 
@@ -1815,8 +1816,24 @@ const STREAM_BOXES: [(&str, StreamBox); 2] = [
     ("Native", || night_amplifier::session::state::Resolution::Native.bounding_box()),
 ];
 
+/// How [`measure_real_session`] judges a target's contrast against a shallower stack's.
+#[derive(Clone, Copy, Debug)]
+pub enum GiveBack {
+    /// Never more than 2 output levels below the best so far.
+    Banded,
+    /// A target too faint for a 2-level band, named by its test: it must still reach
+    /// `min_peak` levels, so it cannot fade out unseen.
+    Faint { min_peak: f64 },
+}
+
 /// [`measure_real_session`]'s assertions on its snapshots rendered into `stream_box`.
-fn measure_snapshots_at(label: &str, snapshots: &[AccumulatorSnapshot], denoise_modes: &[bool], stream_box: (u32, u32)) {
+fn measure_snapshots_at(
+    label: &str,
+    snapshots: &[AccumulatorSnapshot],
+    denoise_modes: &[bool],
+    give_back: GiveBack,
+    stream_box: (u32, u32),
+) {
     let settings = night_amplifier::session::state::CaptureSettings::default();
     let deepest = snapshots.last().unwrap();
     let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, stream_box, deepest.depth as u32);
@@ -1923,12 +1940,18 @@ fn measure_snapshots_at(label: &str, snapshots: &[AccumulatorSnapshot], denoise_
             "  target contrast peaked at {best:.0} levels, worst give-back \
              {worst_drop:.0} levels at {worst_n} subs"
         );
-        assert!(
-            worst_drop <= 2.0,
-            "{label}: rendered target contrast fell {worst_drop:.0} levels below a \
-             shallower stack's by {worst_n} subs — the curve is spending more depth on \
-             the sky than the stack delivers"
-        );
+        match give_back {
+            GiveBack::Banded => assert!(
+                worst_drop <= 2.0,
+                "{label}: rendered target contrast fell {worst_drop:.0} levels below a \
+                 shallower stack's by {worst_n} subs — the curve is spending more depth on \
+                 the sky than the stack delivers"
+            ),
+            GiveBack::Faint { min_peak } => assert!(
+                best >= min_peak,
+                "{label}: the faint target peaked at {best:.0} levels, under {min_peak:.0}"
+            ),
+        }
 
         // Stability: the sky must not jump between one stack update and the next. In a
         // dark eyepiece a few levels of background step reads as the field pumping.
