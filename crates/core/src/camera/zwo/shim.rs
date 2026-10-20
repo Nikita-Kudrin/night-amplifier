@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::ffi::CStr;
 use std::os::raw::{c_int, c_long};
 
 use super::ffi_types::*;
 use super::sdk::ZwoSdk;
 use crate::camera::device_lost;
 use crate::camera::DeviceLease;
+use crate::ffi_safety::{fixed_c_str, from_sdk_long};
 
 /// Provider key for [`DeviceLease`] slots. `ASICloseCamera` takes a device
 /// index, so a stale close would land on whoever holds that index now.
@@ -41,6 +41,11 @@ fn asi_symbol(err: ASI_ERROR_CODE) -> &'static str {
 /// Render a ZWO failure symbolically, tagging the codes that mean the device
 /// is gone. Before this the message was a bare integer, which is why device
 /// loss on ZWO was never classified at all.
+/// A sensor edge from a C `long`, saturating where a 64-bit `long` would not fit `i32`.
+fn sensor_edge(value: c_long) -> i32 {
+    i32::try_from(from_sdk_long(value)).unwrap_or(i32::MAX)
+}
+
 fn asi_err(op: &str, err: ASI_ERROR_CODE) -> String {
     let detail = format!("{} failed: {} ({})", op, asi_symbol(err), err);
     if matches!(
@@ -77,14 +82,12 @@ pub struct CameraInfoASI {
 impl CameraInfoASI {
     /// Readable without opening the device — `ASIGetCameraProperty` needs no handle.
     fn from_property(info: &ASI_CAMERA_INFO) -> Self {
-        let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
+        let name = fixed_c_str(&info.Name);
         let supported_bins = info
             .SupportedBins
             .iter()
             .take_while(|&&b| b != 0)
-            .map(|&b| b)
+            .copied()
             .collect();
         let supported_video_format = info
             .SupportedVideoFormat
@@ -95,20 +98,20 @@ impl CameraInfoASI {
 
         Self {
             name,
-            camera_id: info.CameraID as i32,
-            max_height: info.MaxHeight as i32,
-            max_width: info.MaxWidth as i32,
+            camera_id: info.CameraID,
+            max_height: sensor_edge(info.MaxHeight),
+            max_width: sensor_edge(info.MaxWidth),
             is_color_cam: info.IsColorCam == ASI_BOOL_ASI_TRUE,
             bayer_pattern: info.BayerPattern,
             supported_bins,
             supported_video_format,
-            pixel_size: info.PixelSize as f64,
+            pixel_size: info.PixelSize,
             mechanical_shutter: info.MechanicalShutter == ASI_BOOL_ASI_TRUE,
             is_cooler_cam: info.IsCoolerCam == ASI_BOOL_ASI_TRUE,
             is_usb3_host: info.IsUSB3Host == ASI_BOOL_ASI_TRUE,
             is_usb3_camera: info.IsUSB3Camera == ASI_BOOL_ASI_TRUE,
-            elec_per_adu: info.ElecPerADU as f32,
-            bit_depth: info.BitDepth as i32,
+            elec_per_adu: info.ElecPerADU,
+            bit_depth: info.BitDepth,
             is_trigger_cam: info.IsTriggerCam == ASI_BOOL_ASI_TRUE,
         }
     }
@@ -123,10 +126,12 @@ pub struct Camera {
 impl Camera {
     pub fn open(camera_id: i32) -> Result<(Self, CameraInfoASI), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIOpenCamera(camera_id) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
             return Err(asi_err("ASIOpenCamera", err));
         }
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIInitCamera(camera_id) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
             return Err(asi_err("ASIInitCamera", err));
@@ -155,6 +160,7 @@ impl Camera {
             return Ok(());
         }
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASICloseCamera(self.camera_id) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
@@ -170,6 +176,7 @@ impl Camera {
         auto: ASI_BOOL,
     ) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe {
             sdk.api
                 .ASISetControlValue(self.camera_id, control_type as c_int, value, auto)
@@ -188,6 +195,7 @@ impl Camera {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let mut value: c_long = 0;
         let mut auto: ASI_BOOL = ASI_BOOL_ASI_FALSE;
+        // SAFETY: `value`, `auto` are live locals the SDK writes during the call.
         let err = unsafe {
             sdk.api
                 .ASIGetControlValue(self.camera_id, control_type as c_int, &mut value, &mut auto)
@@ -200,7 +208,7 @@ impl Camera {
     }
 
     // Control values are C `long`s, 32 bits on Windows: narrowed with `to_sdk_long` here,
-    // widened with `i64::from` in the getters.
+    // widened with `from_sdk_long` in the getters.
     pub fn set_exposure(&self, us: i64) -> Result<(), String> {
         self.set_control_value(
             ASI_CONTROL_TYPE_ASI_EXPOSURE,
@@ -248,17 +256,17 @@ impl Camera {
 
     pub fn get_gain_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_GAIN)
-            .map(|(v, _)| i64::from(v))
+            .map(|(v, _)| from_sdk_long(v))
     }
 
     pub fn get_offset_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_OFFSET)
-            .map(|(v, _)| i64::from(v))
+            .map(|(v, _)| from_sdk_long(v))
     }
 
     pub fn get_exposure(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE)
-            .map(|(v, _)| i64::from(v))
+            .map(|(v, _)| from_sdk_long(v))
     }
 
     pub fn get_cooler(&self) -> Result<bool, String> {
@@ -281,6 +289,8 @@ impl Camera {
         let mut height = 0;
         let mut bin = 1;
         let mut old_format = ASI_IMG_TYPE_ASI_IMG_RAW8;
+        // SAFETY: `width`, `height`, `bin`, `old_format` are live locals the SDK writes during the
+        // call.
         unsafe {
             sdk.api.ASIGetROIFormat(
                 self.camera_id,
@@ -290,6 +300,7 @@ impl Camera {
                 &mut old_format,
             )
         };
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe {
             sdk.api
                 .ASISetROIFormat(self.camera_id, width, height, bin, format)
@@ -307,6 +318,8 @@ impl Camera {
         let mut old_height = 0;
         let mut old_bin = 1;
         let mut format = ASI_IMG_TYPE_ASI_IMG_RAW8;
+        // SAFETY: `old_width`, `old_height`, `old_bin`, `format` are live locals the SDK writes
+        // during the call.
         unsafe {
             sdk.api.ASIGetROIFormat(
                 self.camera_id,
@@ -317,11 +330,13 @@ impl Camera {
             )
         };
 
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASISetStartPos(self.camera_id, x, y) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
             return Err(asi_err("ASISetStartPos", err));
         }
 
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe {
             sdk.api
                 .ASISetROIFormat(self.camera_id, width, height, bin, format)
@@ -335,6 +350,7 @@ impl Camera {
 
     pub fn start_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIStartExposure(self.camera_id, ASI_BOOL_ASI_FALSE) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
@@ -345,6 +361,7 @@ impl Camera {
 
     pub fn stop_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIStopExposure(self.camera_id) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
@@ -356,6 +373,7 @@ impl Camera {
     pub fn is_image_ready(&self) -> Result<bool, String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let mut status = ASI_EXPOSURE_STATUS_ASI_EXP_IDLE;
+        // SAFETY: `status` is a live local the SDK writes during the call.
         let err = unsafe { sdk.api.ASIGetExpStatus(self.camera_id, &mut status) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
             return Err(asi_err("ASIGetExpStatus", err));
@@ -371,6 +389,7 @@ impl Camera {
 
     pub fn get_image_data(&self, buffer: &mut [u8]) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: `buffer` is valid for the `buffer.len()` bytes the SDK is told it may write.
         let err = unsafe {
             sdk.api.ASIGetDataAfterExp(
                 self.camera_id,
@@ -387,6 +406,7 @@ impl Camera {
 
     pub fn start_video_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIStartVideoCapture(self.camera_id) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
@@ -397,6 +417,7 @@ impl Camera {
 
     pub fn stop_video_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.ASIStopVideoCapture(self.camera_id) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
@@ -407,6 +428,7 @@ impl Camera {
 
     pub fn get_video_data(&self, buffer: &mut [u8], wait_ms: i32) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        // SAFETY: `buffer` is valid for the `buffer.len()` bytes the SDK is told it may write.
         let err = unsafe {
             sdk.api.ASIGetVideoData(
                 self.camera_id,
@@ -433,10 +455,14 @@ impl Drop for Camera {
 /// nothing.
 pub fn get_camera_properties() -> Option<BTreeMap<i32, CameraInfoASI>> {
     let sdk = ZwoSdk::try_load()?;
+    // SAFETY: plain-value arguments to an SDK function bound with this signature.
     let count = unsafe { sdk.api.ASIGetNumOfConnectedCameras() };
     let mut map = BTreeMap::new();
     for i in 0..count.max(0) {
+        // SAFETY: every field of `ASI_CAMERA_INFO` is an integer, float or `char` array, for which
+        // zero is valid.
         let mut info: ASI_CAMERA_INFO = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is a live local the SDK writes during the call.
         let err = unsafe { sdk.api.ASIGetCameraProperty(&mut info, i) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             map.insert(info.CameraID as i32, CameraInfoASI::from_property(&info));
@@ -456,6 +482,7 @@ pub fn get_camera_ids() -> Option<BTreeMap<i32, String>> {
 
 pub fn num_cameras() -> i32 {
     if let Some(sdk) = ZwoSdk::try_load() {
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         unsafe { sdk.api.ASIGetNumOfConnectedCameras() }
     } else {
         0

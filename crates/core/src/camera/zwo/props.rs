@@ -36,7 +36,7 @@ pub(crate) fn camera_info_from_properties(info: &CameraInfoASI, id: i32) -> Came
 
     // Get exposure and gain limits
     let min_exposure_us = 32;
-    let max_exposure_us = 2000_000_000;
+    let max_exposure_us = 2_000_000_000;
     let min_gain = 0;
     let max_gain = 600;
 

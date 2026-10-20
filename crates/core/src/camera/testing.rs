@@ -553,8 +553,10 @@ mod tests {
 
         camera.set_dew_heater(true, 40).unwrap();
         camera.set_dew_heater(false, 0).unwrap();
-        let mut config = CaptureConfig::default();
-        config.target_temp_c = Some(-10.0);
+        let config = CaptureConfig {
+            target_temp_c: Some(-10.0),
+            ..Default::default()
+        };
         camera.capture(&config).unwrap();
         camera.status().unwrap();
         camera.close().unwrap();

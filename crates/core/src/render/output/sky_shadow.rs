@@ -98,7 +98,7 @@ impl SkyShadow {
 
     /// Scale one interleaved RGB row, given its luminance and guide rows.
     pub(crate) fn apply_row(&self, rgb: &mut [f32], luma: &[f32], guide: &[f32]) {
-        for ((px, &l), &g) in rgb.chunks_exact_mut(3).zip(luma).zip(guide) {
+        for ((px, &l), &g) in rgb.as_chunks_mut::<3>().0.iter_mut().zip(luma).zip(guide) {
             let m = self.multiplier_at(l, g);
             px.iter_mut().for_each(|v| *v *= m);
         }
@@ -122,7 +122,7 @@ pub(crate) fn sky_sample_stride(width: usize) -> usize {
 
 /// Rec.709 luminance of an interleaved RGB row.
 pub(crate) fn luma_row(rgb: &[f32], out: &mut [f32]) {
-    for (o, px) in out.iter_mut().zip(rgb.chunks_exact(3)) {
+    for (o, px) in out.iter_mut().zip(rgb.as_chunks::<3>().0) {
         *o = luminance(px[0], px[1], px[2]);
     }
 }

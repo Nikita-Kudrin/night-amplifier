@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{error, warn};
 
 use crate::indi::connection::IndiConnection;
-use crate::indi::device::IndiDevice;
+use crate::indi::device::{IndiDevice, IndiProperty};
 use crate::indi::error::{IndiError, Result};
 use crate::indi::xml::{
     BlobEnable, EnableBlob, GetProperties, IndiMessage, NewNumber, NewNumberVector, NewSwitch,
@@ -182,156 +182,109 @@ impl IndiClient {
 
         match msg {
             IndiMessage::DefNumberVector(v) => {
-                let dev = devs
-                    .entry(v.device.clone())
-                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
-                let mut elements = HashMap::new();
-                for el in &v.elements {
-                    elements.insert(el.name.clone(), el.clone());
-                }
-                dev.properties.insert(
-                    v.name.clone(),
-                    crate::indi::device::IndiProperty::Number {
-                        state: v.state.clone(),
-                        elements,
-                    },
-                );
-            }
-            IndiMessage::SetNumberVector(v) => {
-                if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Number { state, elements }) =
-                        dev.properties.get_mut(&v.name)
-                    {
-                        *state = v.state.clone();
-                        for el in &v.elements {
-                            if let Some(def) = elements.get_mut(&el.name) {
-                                def.value = el.value;
-                            }
-                        }
-                    }
-                }
+                let elements = by_name(&v.elements, |el| &el.name);
+                let property = IndiProperty::Number { state: v.state.clone(), elements };
+                define(&mut devs, &v.device, &v.name, property);
             }
             IndiMessage::DefSwitchVector(v) => {
-                let dev = devs
-                    .entry(v.device.clone())
-                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
-                let mut elements = HashMap::new();
-                for el in &v.elements {
-                    elements.insert(el.name.clone(), el.clone());
-                }
-                dev.properties.insert(
-                    v.name.clone(),
-                    crate::indi::device::IndiProperty::Switch {
-                        state: v.state.clone(),
-                        rule: v.rule.clone(),
-                        elements,
-                    },
-                );
-            }
-            IndiMessage::SetSwitchVector(v) => {
-                if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Switch {
-                        state, elements, ..
-                    }) = dev.properties.get_mut(&v.name)
-                    {
-                        *state = v.state.clone();
-                        for el in &v.elements {
-                            if let Some(def) = elements.get_mut(&el.name) {
-                                def.value = el.value.clone();
-                            }
-                        }
-                    }
-                }
+                let elements = by_name(&v.elements, |el| &el.name);
+                let (state, rule) = (v.state.clone(), v.rule.clone());
+                define(&mut devs, &v.device, &v.name, IndiProperty::Switch { state, rule, elements });
             }
             IndiMessage::DefTextVector(v) => {
-                let dev = devs
-                    .entry(v.device.clone())
-                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
-                let mut elements = HashMap::new();
-                for el in &v.elements {
-                    elements.insert(el.name.clone(), el.clone());
-                }
-                dev.properties.insert(
-                    v.name.clone(),
-                    crate::indi::device::IndiProperty::Text {
-                        state: v.state.clone(),
-                        elements,
-                    },
-                );
-            }
-            IndiMessage::SetTextVector(v) => {
-                if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Text { state, elements }) =
-                        dev.properties.get_mut(&v.name)
-                    {
-                        *state = v.state.clone();
-                        for el in &v.elements {
-                            if let Some(def) = elements.get_mut(&el.name) {
-                                def.value = el.value.clone();
-                            }
-                        }
-                    }
-                }
+                let elements = by_name(&v.elements, |el| &el.name);
+                let property = IndiProperty::Text { state: v.state.clone(), elements };
+                define(&mut devs, &v.device, &v.name, property);
             }
             IndiMessage::DefLightVector(v) => {
-                let dev = devs
-                    .entry(v.device.clone())
-                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
-                let mut elements = HashMap::new();
-                for el in &v.elements {
-                    elements.insert(el.name.clone(), el.clone());
-                }
-                dev.properties.insert(
-                    v.name.clone(),
-                    crate::indi::device::IndiProperty::Light {
-                        state: v.state.clone(),
-                        elements,
-                    },
-                );
+                let elements = by_name(&v.elements, |el| &el.name);
+                let property = IndiProperty::Light { state: v.state.clone(), elements };
+                define(&mut devs, &v.device, &v.name, property);
             }
-            IndiMessage::SetLightVector(v) => {
-                if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Light { state, elements }) =
-                        dev.properties.get_mut(&v.name)
-                    {
-                        *state = v.state.clone();
-                        for el in &v.elements {
-                            if let Some(def) = elements.get_mut(&el.name) {
-                                def.value = el.value.clone();
-                            }
+            IndiMessage::DefBlobVector(v) => {
+                let elements = by_name(&v.elements, |el| &el.name);
+                let property = IndiProperty::Blob { state: v.state.clone(), elements };
+                define(&mut devs, &v.device, &v.name, property);
+            }
+            IndiMessage::SetNumberVector(v) => {
+                let property = defined(&mut devs, &v.device, &v.name);
+                if let Some(IndiProperty::Number { state, elements }) = property {
+                    *state = v.state.clone();
+                    for el in &v.elements {
+                        if let Some(def) = elements.get_mut(&el.name) {
+                            def.value = el.value;
                         }
                     }
                 }
             }
-            IndiMessage::DefBlobVector(v) => {
-                let dev = devs
-                    .entry(v.device.clone())
-                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
-                let mut elements = HashMap::new();
-                for el in &v.elements {
-                    elements.insert(el.name.clone(), el.clone());
-                }
-                dev.properties.insert(
-                    v.name.clone(),
-                    crate::indi::device::IndiProperty::Blob {
-                        state: v.state.clone(),
-                        elements,
-                    },
-                );
-            }
-            IndiMessage::DelProperty(v) => {
-                if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(name) = &v.name {
-                        dev.properties.remove(name);
-                    } else {
-                        // Delete entire device
-                        devs.remove(&v.device);
+            IndiMessage::SetSwitchVector(v) => {
+                let property = defined(&mut devs, &v.device, &v.name);
+                if let Some(IndiProperty::Switch { state, elements, .. }) = property {
+                    *state = v.state.clone();
+                    for el in &v.elements {
+                        if let Some(def) = elements.get_mut(&el.name) {
+                            def.value = el.value.clone();
+                        }
                     }
                 }
             }
+            IndiMessage::SetTextVector(v) => {
+                let property = defined(&mut devs, &v.device, &v.name);
+                if let Some(IndiProperty::Text { state, elements }) = property {
+                    *state = v.state.clone();
+                    for el in &v.elements {
+                        if let Some(def) = elements.get_mut(&el.name) {
+                            def.value = el.value.clone();
+                        }
+                    }
+                }
+            }
+            IndiMessage::SetLightVector(v) => {
+                let property = defined(&mut devs, &v.device, &v.name);
+                if let Some(IndiProperty::Light { state, elements }) = property {
+                    *state = v.state.clone();
+                    for el in &v.elements {
+                        if let Some(def) = elements.get_mut(&el.name) {
+                            def.value = el.value.clone();
+                        }
+                    }
+                }
+            }
+            IndiMessage::DelProperty(v) => match &v.name {
+                Some(name) => {
+                    if let Some(dev) = devs.get_mut(&v.device) {
+                        dev.properties.remove(name);
+                    }
+                }
+                // Delete entire device
+                None => {
+                    devs.remove(&v.device);
+                }
+            },
             _ => {}
         }
     }
+}
+
+/// Registers a (re)defined property, creating its device on first sight.
+fn define(devs: &mut HashMap<String, IndiDevice>, device: &str, name: &str, property: IndiProperty) {
+    devs.entry(device.to_string())
+        .or_insert_with(|| IndiDevice::new(device.to_string()))
+        .properties
+        .insert(name.to_string(), property);
+}
+
+/// The property a `set*Vector` updates; `None` if its device or definition is unknown.
+fn defined<'a>(
+    devs: &'a mut HashMap<String, IndiDevice>,
+    device: &str,
+    name: &str,
+) -> Option<&'a mut IndiProperty> {
+    devs.get_mut(device)?.properties.get_mut(name)
+}
+
+fn by_name<T: Clone>(elements: &[T], name: impl Fn(&T) -> &String) -> HashMap<String, T> {
+    elements.iter().map(|el| (name(el).clone(), el.clone())).collect()
 }
 
 /// BLOBs from one property, from the moment [`IndiClient::watch_blobs`] was called.
@@ -368,5 +321,57 @@ impl BlobWatch {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indi::xml::{parse_message, PropertyState, SwitchState};
+
+    async fn apply(devices: &Arc<RwLock<HashMap<String, IndiDevice>>>, xml: &str) {
+        let msg = parse_message(xml).unwrap_or_else(|e| panic!("{xml}: {e}"));
+        IndiClient::update_device_state(devices, &msg).await;
+    }
+
+    /// A `set*Vector` moves only elements its `def*Vector` declared, and never creates a device.
+    #[tokio::test]
+    async fn a_set_vector_updates_only_what_was_defined() {
+        let devices = Arc::new(RwLock::new(HashMap::new()));
+        apply(&devices, r#"<defNumberVector device="CCD" name="TEMP" state="Idle"><defNumber name="T" min="-50" max="50" step="1">0</defNumber></defNumberVector>"#).await;
+        apply(&devices, r#"<defSwitchVector device="CCD" name="STREAM" state="Idle" rule="OneOfMany"><defSwitch name="ON">Off</defSwitch></defSwitchVector>"#).await;
+
+        apply(&devices, r#"<setNumberVector device="CCD" name="TEMP" state="Busy"><oneNumber name="T">-10</oneNumber><oneNumber name="U">5</oneNumber></setNumberVector>"#).await;
+        apply(&devices, r#"<setSwitchVector device="CCD" name="STREAM" state="Ok"><oneSwitch name="ON">On</oneSwitch></setSwitchVector>"#).await;
+        apply(&devices, r#"<setSwitchVector device="Mount" name="STREAM" state="Ok"><oneSwitch name="ON">On</oneSwitch></setSwitchVector>"#).await;
+        apply(&devices, r#"<setNumberVector device="CCD" name="UNDEFINED" state="Ok"><oneNumber name="T">1</oneNumber></setNumberVector>"#).await;
+
+        let devs = devices.read().await;
+        let ccd = &devs["CCD"];
+        assert_eq!(ccd.get_number("TEMP", "T").map(|n| n.value), Some(-10.0));
+        assert!(ccd.get_number("TEMP", "U").is_none(), "an undeclared element was inserted");
+        assert_eq!(ccd.get_property_state("TEMP"), Some(PropertyState::Busy));
+        assert_eq!(ccd.get_switch("STREAM", "ON").map(|s| s.value.clone()), Some(SwitchState::On));
+        assert!(!ccd.properties.contains_key("UNDEFINED"));
+        assert!(!devs.contains_key("Mount"), "a set for an unknown device created it");
+    }
+
+    #[tokio::test]
+    async fn del_property_removes_one_property_or_the_whole_device() {
+        let devices = Arc::new(RwLock::new(HashMap::new()));
+        apply(&devices, r#"<defNumberVector device="CCD" name="TEMP" state="Idle"><defNumber name="T" min="-50" max="50" step="1">0</defNumber></defNumberVector>"#).await;
+        apply(&devices, r#"<defNumberVector device="CCD" name="GAIN" state="Idle"><defNumber name="G" min="0" max="500" step="1">100</defNumber></defNumberVector>"#).await;
+
+        apply(&devices, r#"<delProperty device="CCD" name="TEMP"/>"#).await;
+        apply(&devices, r#"<delProperty device="Mount" name="TEMP"/>"#).await;
+        {
+            let devs = devices.read().await;
+            assert!(!devs["CCD"].properties.contains_key("TEMP"));
+            assert!(devs["CCD"].properties.contains_key("GAIN"), "deleting one property took another");
+            assert!(!devs.contains_key("Mount"));
+        }
+
+        apply(&devices, r#"<delProperty device="CCD"/>"#).await;
+        assert!(devices.read().await.is_empty());
     }
 }

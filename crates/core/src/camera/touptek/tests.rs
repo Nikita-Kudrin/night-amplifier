@@ -63,11 +63,11 @@ fn test_parse_fourcc_unknown() {
 #[test]
 fn test_make_fourcc_values() {
     // Verify our const fn produces the correct byte ordering
-    assert_eq!(FOURCC_RGGB, u32::from_le_bytes([b'R', b'G', b'G', b'B']));
-    assert_eq!(FOURCC_BGGR, u32::from_le_bytes([b'B', b'G', b'G', b'R']));
-    assert_eq!(FOURCC_GRBG, u32::from_le_bytes([b'G', b'R', b'B', b'G']));
-    assert_eq!(FOURCC_GBRG, u32::from_le_bytes([b'G', b'B', b'R', b'G']));
-    assert_eq!(FOURCC_YYYY, u32::from_le_bytes([b'Y', b'Y', b'Y', b'Y']));
+    assert_eq!(FOURCC_RGGB, u32::from_le_bytes(*b"RGGB"));
+    assert_eq!(FOURCC_BGGR, u32::from_le_bytes(*b"BGGR"));
+    assert_eq!(FOURCC_GRBG, u32::from_le_bytes(*b"GRBG"));
+    assert_eq!(FOURCC_GBRG, u32::from_le_bytes(*b"GBRG"));
+    assert_eq!(FOURCC_YYYY, u32::from_le_bytes(*b"YYYY"));
 }
 
 #[test]

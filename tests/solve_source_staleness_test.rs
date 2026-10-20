@@ -31,8 +31,10 @@ struct CountingPlugin {
     /// Run synchronously inside `get_status`, so a test can simulate the rig changing
     /// while that exact `.await` is suspended — the gap the solve arm's second
     /// re-check exists for.
-    on_get_status: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+    on_get_status: StatusHook,
 }
+
+type StatusHook = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
 
 fn fake_target() -> CatalogEntryResponse {
     CatalogEntryResponse {
@@ -176,7 +178,7 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
 
     let observe_calls = Arc::new(AtomicUsize::new(0));
     let process_calls = Arc::new(AtomicUsize::new(0));
-    let on_get_status: Arc<Mutex<Option<Box<dyn Fn() + Send>>>> = Arc::new(Mutex::new(None));
+    let on_get_status: StatusHook = Arc::new(Mutex::new(None));
 
     let plugins = Plugins::none()
         .with_push_to_solver(Arc::new(CountingPlugin {

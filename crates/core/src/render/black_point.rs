@@ -277,7 +277,7 @@ fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
     }
     let quartile = (below.len() as f32 * CENTRE_SPREAD_QUANTILE) as usize;
     let sigma = select_nth(&mut below, quartile) * CENTRE_QUARTILE_TO_SIGMA;
-    if !(sigma > 0.0) || !sigma.is_finite() {
+    if !sigma.is_finite() || sigma <= 0.0 {
         return None;
     }
 

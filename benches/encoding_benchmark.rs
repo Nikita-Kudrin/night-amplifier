@@ -1,10 +1,12 @@
 fn to_ready_frame(
     frame: &night_amplifier::frame::Frame,
 ) -> night_amplifier::render::display::RenderReadyFrame {
-    let mut config = night_amplifier::render::RenderPipelineConfig::default();
-    config.contrast = false;
-    config.auto_stretch = false;
-    config.saturation_boost = false;
+    let config = night_amplifier::render::RenderPipelineConfig {
+        contrast: false,
+        auto_stretch: false,
+        saturation_boost: false,
+        ..Default::default()
+    };
     night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
@@ -42,6 +44,15 @@ fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     frame
 }
 
+/// The sensors every group measures, built once: this binary is the suite's tightest.
+struct TestFrames {
+    frame_imx464_rgb: Frame,
+    frame_imx464_mono: Frame,
+    frame_mono_large: Frame,
+    frame_4k: Frame,
+    frame_8k: Frame,
+}
+
 fn bench_encoding(c: &mut Criterion) {
     // IMX464 resolution (3 channels - fast path)
     let frame_imx464_rgb = create_test_frame(2712, 1538, 3);
@@ -60,6 +71,17 @@ fn bench_encoding(c: &mut Criterion) {
     // 8K resolution (simulating a very large sensor that will trigger downsampling)
     let frame_8k = create_test_frame(7680, 4320, 3);
 
+    let frames = TestFrames { frame_imx464_rgb, frame_imx464_mono, frame_mono_large, frame_4k, frame_8k };
+
+    bench_lz4(c, &frames);
+    bench_frame_to_rgb8(c, &frames);
+    bench_chunked_lz4(c, &frames);
+    bench_lz4_only(c, &frames);
+    bench_jpeg_dynamic(c, &frames);
+}
+
+fn bench_lz4(c: &mut Criterion, frames: &TestFrames) {
+    let TestFrames { frame_imx464_rgb, frame_imx464_mono, frame_4k, frame_8k, .. } = frames;
     // Groups here run a 1 s measurement window rather than 2 s: this binary carries 16
     // cases, and at 2 s each the wall clock reached 50 s against a ~30 s budget. Every
     // case clears the ~100 ms floor, so a 1 s window still collects ten samples of real
@@ -83,7 +105,7 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_imx464_rgb_x{}", RGB_REPS), |b| {
         b.iter(|| {
             for _ in 0..RGB_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb)), 3840, 2160).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(frame_imx464_rgb)), 3840, 2160).unwrap());
             }
         })
     });
@@ -93,7 +115,7 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_imx464_mono_x{}", MONO_REPS), |b| {
         b.iter(|| {
             for _ in 0..MONO_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono)), 3840, 2160).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(frame_imx464_mono)), 3840, 2160).unwrap());
             }
         })
     });
@@ -103,18 +125,21 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_4k_x{}", FOUR_K_REPS), |b| {
         b.iter(|| {
             for _ in 0..FOUR_K_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k)), 3840, 2160).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(frame_4k)), 3840, 2160).unwrap());
             }
         })
     });
 
     // Already ~145 ms on its own — clears the floor without repeating.
     group.bench_function("encode_8k", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_8k)), 3840, 2160).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(frame_8k)), 3840, 2160).unwrap())
     });
 
     group.finish();
+}
 
+fn bench_frame_to_rgb8(c: &mut Criterion, frames: &TestFrames) {
+    let TestFrames { frame_imx464_rgb, frame_8k, .. } = frames;
     // --- frame_to_rgb8_downsampled ---
     let mut group_conv = c.benchmark_group("frame_to_rgb8");
     group_conv.sampling_mode(SamplingMode::Flat);
@@ -129,7 +154,7 @@ fn bench_encoding(c: &mut Criterion) {
             for _ in 0..NATIVE_REPS {
                 black_box(
                     frame_to_rgb8_downsampled(
-                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        black_box(&to_ready_frame(frame_imx464_rgb)),
                         3840,
                         2160,
                     )
@@ -193,12 +218,15 @@ fn bench_encoding(c: &mut Criterion) {
     // Already ~138 ms on its own — clears the floor without repeating.
     group_conv.bench_function("8k_to_4k", |b| {
         b.iter(|| {
-            frame_to_rgb8_downsampled(black_box(&to_ready_frame(&frame_8k)), 3840, 2160).unwrap()
+            frame_to_rgb8_downsampled(black_box(&to_ready_frame(frame_8k)), 3840, 2160).unwrap()
         })
     });
 
     group_conv.finish();
+}
 
+fn bench_chunked_lz4(c: &mut Criterion, frames: &TestFrames) {
+    let TestFrames { frame_imx464_rgb, frame_imx464_mono, .. } = frames;
     // --- Chunked LZ4 (SA09) ---
     let mut group_chunked = c.benchmark_group("encode_chunked_lz4");
     group_chunked.sampling_mode(SamplingMode::Flat);
@@ -212,7 +240,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1, 3840, 2160)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(frame_imx464_rgb)), 1, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -224,7 +252,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4, 3840, 2160)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(frame_imx464_rgb)), 4, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -236,7 +264,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8, 3840, 2160)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(frame_imx464_rgb)), 8, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -251,7 +279,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNKED_MONO_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4, 3840, 2160)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(frame_imx464_mono)), 4, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -259,7 +287,10 @@ fn bench_encoding(c: &mut Criterion) {
     });
 
     group_chunked.finish();
+}
 
+fn bench_lz4_only(c: &mut Criterion, frames: &TestFrames) {
+    let TestFrames { frame_imx464_rgb, .. } = frames;
     // --- LZ4-only (no debayer, no f32→u8 conversion) ---
     let rgb8_imx464 = frame_imx464_rgb.to_rgb8_fast();
 
@@ -283,7 +314,10 @@ fn bench_encoding(c: &mut Criterion) {
     });
 
     group_lz4.finish();
+}
 
+fn bench_jpeg_dynamic(c: &mut Criterion, frames: &TestFrames) {
+    let TestFrames { frame_imx464_rgb, frame_mono_large, .. } = frames;
     // --- Dynamic JPEG (SA10) ---
     let mut group_jpeg = c.benchmark_group("encode_jpeg_dynamic");
     group_jpeg.sampling_mode(SamplingMode::Flat);
@@ -299,7 +333,7 @@ fn bench_encoding(c: &mut Criterion) {
             for _ in 0..JPEG_REPS {
                 black_box(
                     encode_rgb8_jpeg_bounded(
-                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        black_box(&to_ready_frame(frame_imx464_rgb)),
                         1920,
                         1080,
                     )
@@ -314,7 +348,7 @@ fn bench_encoding(c: &mut Criterion) {
             for _ in 0..JPEG_REPS {
                 black_box(
                     encode_rgb8_jpeg_bounded(
-                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        black_box(&to_ready_frame(frame_imx464_rgb)),
                         1280,
                         720,
                     )
@@ -328,7 +362,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..JPEG_REPS {
                 black_box(
-                    encode_rgb8_jpeg_bounded(black_box(&to_ready_frame(&frame_imx464_rgb)), u32::MAX, u32::MAX)
+                    encode_rgb8_jpeg_bounded(black_box(&to_ready_frame(frame_imx464_rgb)), u32::MAX, u32::MAX)
                         .unwrap(),
                 );
             }
@@ -342,7 +376,7 @@ fn bench_encoding(c: &mut Criterion) {
             for _ in 0..JPEG_REPS {
                 black_box(
                     encode_rgb8_jpeg_bounded(
-                        black_box(&to_ready_frame(&frame_mono_large)),
+                        black_box(&to_ready_frame(frame_mono_large)),
                         1920,
                         1080,
                     )
@@ -369,7 +403,7 @@ fn save_output(picture_name: &str, resolution: &str, name: &str, ext: &str, data
 }
 
 fn load_and_resize_fixture(path: &str, width: u32, height: u32) -> Vec<u8> {
-    let img = image::open(path).expect(&format!("Failed to open {}", path));
+    let img = image::open(path).unwrap_or_else(|_| panic!("Failed to open {}", path));
     let resized = img.resize_exact(width, height, ResizeFilterType::Lanczos3);
     resized.to_rgb8().into_raw()
 }
@@ -480,62 +514,26 @@ fn run_benchmarks(
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(1));
 
-    let tj100_reps = calibrated_reps(tj100_elapsed);
-    group.bench_function(format!("turbojpeg_100_x{}", tj100_reps), |b| {
-        b.iter(|| {
-            for _ in 0..tj100_reps {
-                let mut compressor = turbojpeg::Compressor::new().unwrap();
-                let _ = compressor.set_quality(100);
-                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-                let image = turbojpeg::Image {
-                    pixels: black_box(rgb8_data),
-                    width,
-                    pitch: 3 * width,
-                    height,
-                    format: turbojpeg::PixelFormat::RGB,
-                };
-                black_box(compressor.compress_to_vec(image).unwrap());
-            }
-        })
-    });
-
-    let tj95_reps = calibrated_reps(tj95_elapsed);
-    group.bench_function(format!("turbojpeg_95_x{}", tj95_reps), |b| {
-        b.iter(|| {
-            for _ in 0..tj95_reps {
-                let mut compressor = turbojpeg::Compressor::new().unwrap();
-                let _ = compressor.set_quality(95);
-                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-                let image = turbojpeg::Image {
-                    pixels: black_box(rgb8_data),
-                    width,
-                    pitch: 3 * width,
-                    height,
-                    format: turbojpeg::PixelFormat::RGB,
-                };
-                black_box(compressor.compress_to_vec(image).unwrap());
-            }
-        })
-    });
-
-    let tj90_reps = calibrated_reps(tj90_elapsed);
-    group.bench_function(format!("turbojpeg_90_x{}", tj90_reps), |b| {
-        b.iter(|| {
-            for _ in 0..tj90_reps {
-                let mut compressor = turbojpeg::Compressor::new().unwrap();
-                let _ = compressor.set_quality(90);
-                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-                let image = turbojpeg::Image {
-                    pixels: black_box(rgb8_data),
-                    width,
-                    pitch: 3 * width,
-                    height,
-                    format: turbojpeg::PixelFormat::RGB,
-                };
-                black_box(compressor.compress_to_vec(image).unwrap());
-            }
-        })
-    });
+    for (quality, elapsed) in [(100, tj100_elapsed), (95, tj95_elapsed), (90, tj90_elapsed)] {
+        let reps = calibrated_reps(elapsed);
+        group.bench_function(format!("turbojpeg_{}_x{}", quality, reps), |b| {
+            b.iter(|| {
+                for _ in 0..reps {
+                    let mut compressor = turbojpeg::Compressor::new().unwrap();
+                    let _ = compressor.set_quality(quality);
+                    let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+                    let image = turbojpeg::Image {
+                        pixels: black_box(rgb8_data),
+                        width,
+                        pitch: 3 * width,
+                        height,
+                        format: turbojpeg::PixelFormat::RGB,
+                    };
+                    black_box(compressor.compress_to_vec(image).unwrap());
+                }
+            })
+        });
+    }
 
     let lz4_reps = calibrated_reps(lz4_elapsed);
     group.bench_function(format!("lz4_flex_x{}", lz4_reps), |b| {

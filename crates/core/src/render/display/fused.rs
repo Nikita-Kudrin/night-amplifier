@@ -270,7 +270,7 @@ impl RowSource for DownsampleSource<'_> {
                 }
             }
 
-            for (x, pixel) in out.chunks_exact_mut(3).enumerate() {
+            for (x, pixel) in out.as_chunks_mut::<3>().0.iter_mut().enumerate() {
                 let (first_col, col_weights) = self.columns.of(x);
                 let mut acc = [0.0f32; 3];
                 for (c, a) in acc.iter_mut().enumerate().take(self.channels) {
@@ -495,6 +495,7 @@ fn render_rgb8<S: RowSource>(
 ///
 /// The AI denoiser splits the tail: it reads the stretched image, so the stretch runs
 /// over the whole staged image first and the rest of the tail after the network.
+// The tail's inputs and the two buffers it writes, each distinct; none belongs with another.
 #[allow(clippy::too_many_arguments)]
 fn stage_and_denoise<S: RowSource>(
     source: &S,

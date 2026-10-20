@@ -1,7 +1,7 @@
 use super::ffi_types::POAImgFormat;
 use super::shim::Camera as POACamera;
 
-pub struct ROI {
+pub struct Roi {
     pub start_x: u32,
     pub start_y: u32,
     pub width: u32,
@@ -78,7 +78,7 @@ pub fn apply_config(
 
     // Set ROI or full frame
     if let Some((x, y, w, h)) = config.roi {
-        let roi = ROI {
+        let roi = Roi {
             start_x: x,
             start_y: y,
             width: w,
@@ -93,7 +93,7 @@ pub fn apply_config(
     } else {
         let width = info.max_width / config.bin as u32;
         let height = info.max_height / config.bin as u32;
-        let roi = ROI {
+        let roi = Roi {
             start_x: 0,
             start_y: 0,
             width,

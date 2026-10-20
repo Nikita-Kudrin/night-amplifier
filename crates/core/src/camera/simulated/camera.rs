@@ -433,7 +433,7 @@ impl Camera for SimulatedCamera {
                     // copy of it here is how the PNG and SER writers drifted before.
                     frame.write_rgb8_into(&mut buffer[..area * 3]);
                 } else {
-                    for (px, &v) in buffer.chunks_exact_mut(3).zip(frame.channel_data(0)) {
+                    for (px, &v) in buffer.as_chunks_mut::<3>().0.iter_mut().zip(frame.channel_data(0)) {
                         px.fill((v * 255.0).clamp(0.0, 255.0) as u8);
                     }
                 }
@@ -493,7 +493,7 @@ pub fn create_camera_info(
         supported_bins: vec![1],
         supported_formats: vec![ImageFormat::Raw16],
         min_exposure_us: 1,
-        max_exposure_us: 3600_000_000,
+        max_exposure_us: 3_600_000_000,
         min_gain: 0,
         max_gain: 500,
         unity_gain: 100,
@@ -554,7 +554,7 @@ mod tests {
             .capture(&base.clone().with_format(ImageFormat::Rgb24))
             .unwrap();
         assert_eq!(captured.data.len(), (w * h) as usize * 3);
-        for (i, px) in captured.data.chunks_exact(3).enumerate() {
+        for (i, px) in captured.data.as_chunks::<3>().0.iter().enumerate() {
             assert_eq!(
                 (px[0], px[1], px[2]),
                 (rgb[0], rgb[1], rgb[2]),
@@ -574,8 +574,8 @@ mod tests {
             let luma = f(rgb[0]) * kr + f(rgb[1]) * kg + f(rgb[2]) * kb;
             (luma * 65535.0) as u16
         };
-        for (i, s) in captured.data.chunks_exact(2).enumerate() {
-            let got = u16::from_le_bytes([s[0], s[1]]);
+        for (i, s) in captured.data.as_chunks::<2>().0.iter().enumerate() {
+            let got = u16::from_le_bytes(*s);
             assert!(
                 got.abs_diff(expect) <= 1,
                 "Raw16 sample {i} is {got}, expected ~{expect}"

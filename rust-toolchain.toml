@@ -1,2 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned, not `stable`: CI lints with `-D warnings`, and every stable release adds lints, which
+# turned CI red with no code change. Bump on purpose, with `rust-version` in Cargo.toml and the
+# same file in Pro and License, fixing the new lints in that PR.
+channel = "1.99"
+components = ["clippy", "rust-src"]

@@ -24,14 +24,13 @@ pub(crate) fn min_max_simd(values: &[f32]) -> (f32, f32) {
     }
 
     // SIMD for larger arrays
-    let chunks = values.chunks_exact(4);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = values.as_chunks::<4>();
 
     let mut min_vec = f32x4::splat(f32::MAX);
     let mut max_vec = f32x4::splat(f32::MIN);
 
-    for chunk in chunks {
-        let v = f32x4::new([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for &chunk in chunks {
+        let v = f32x4::new(chunk);
         min_vec = min_vec.min(v);
         max_vec = max_vec.max(v);
     }

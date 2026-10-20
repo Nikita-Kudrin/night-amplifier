@@ -156,7 +156,7 @@ mod tests {
         let mut r = Vec::with_capacity(n);
         let mut g = Vec::with_capacity(n);
         let mut b = Vec::with_capacity(n);
-        for px in interleaved.chunks_exact(3) {
+        for px in interleaved.as_chunks::<3>().0 {
             r.push(px[0]);
             g.push(px[1]);
             b.push(px[2]);

@@ -197,7 +197,7 @@ async fn test_update_settings_broadcasts_event() {
         .expect("Timeout waiting for event")
         .expect("Failed to receive event");
 
-    assert!(matches!(event, ServerEvent::SettingsUpdated { .. }));
+    assert!(matches!(event, ServerEvent::SettingsUpdated));
 }
 
 #[tokio::test]

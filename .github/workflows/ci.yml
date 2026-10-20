@@ -59,6 +59,29 @@ jobs:
         with:
           artifact: bench-binaries-archive
 
+  # Lints every target with the vendor providers, telemetry and the API schema compiled in, on
+  # x86_64 and on aarch64, the Pi: `c_char` is `u8` there, and x86's casts from it are lints.
+  # The rules live in Cargo.toml's `[workspace.lints]` and clippy.toml.
+  rust-clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: ./.github/actions/system-deps
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features telemetry,api-schema -- -D warnings
+      # The stubs that stand in for each vendor provider compiled out.
+      - name: Clippy without the vendor providers
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+
   rust-unit-tests:
     needs: rust-build-tests
     runs-on: ubuntu-24.04
@@ -197,8 +220,9 @@ jobs:
           RUSTFLAGS: -D warnings
         run: cargo nextest run --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony,indi -E 'package(night_amplifier_core) and (test(/^camera::/) or test(/^indi::/))'
 
-  # ToupTek's structs are UTF-16 on Windows; a const assertion in its FFI types fails the
-  # build when their layout drifts from toupcam.h.
+  # ToupTek's structs are UTF-16 on Windows and ZWO's `long`s 32 bits; const assertions in their
+  # FFI types fail the build when a layout drifts from the header. Clippy, as Linux's job runs
+  # it: code only Windows compiles (`long` casts, process and path handling) is linted here.
   rust-vendor-providers-windows:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -209,5 +233,5 @@ jobs:
         uses: ./.github/actions/system-deps
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Check vendor providers
-        run: cargo check --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony,indi
+      - name: Clippy with the vendor providers
+        run: cargo clippy --workspace --lib --bins --no-default-features --features playerone,zwo,qhy,touptek,svbony,indi -- -D warnings

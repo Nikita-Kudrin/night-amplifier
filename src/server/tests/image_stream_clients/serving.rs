@@ -50,10 +50,8 @@ async fn lossless_clients_share_their_own_payload_independent_of_jpeg() {
         settings.streaming_resolution = Resolution::Hd1080;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
     });
-    let mut eyepieces = vec![
-        server.connect_registered(LOSSLESS).await,
-        server.connect_registered(LOSSLESS).await,
-    ];
+    let mut eyepieces = [server.connect_registered(LOSSLESS).await,
+        server.connect_registered(LOSSLESS).await];
     let mut phone = server.connect_registered(LIVE_VIEW).await;
     send_viewport(&mut eyepieces[1], 1920, 1080).await;
 

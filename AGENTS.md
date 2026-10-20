@@ -34,11 +34,19 @@ SOLID Principles:
   the non-obvious "why" and any load-bearing numbers, cut restated context and hedging. If an explanation is still
   ballooning past that, split it or link out rather than let it sprawl. Exempt: runnable doctest/example code,
   wire-format/byte-layout tables, and other structured reference data (tables, one-fact-per-line lists) — tighten
-  wording there without breaking the structure that makes them scannable.
+  wording there without breaking the structure that makes them scannable. `tests/comment_budget.rs` enforces it:
+  10 prose lines a comment block, 15 for `//!` module docs (Pro runs the same file).
+- Clippy is the linter (`[workspace.lints]` in Cargo.toml, limits in `clippy.toml`): defaults plus functions ≤150
+  lines, nesting ≤6 blocks, and a `// SAFETY:` comment on every `unsafe` block and impl. CI denies warnings; a
+  justified exception is a local `#[allow]` beside its reason, never a crate-wide one. CI lints on x86_64, aarch64
+  and Windows (Pro adds macOS): a C `long`/`char` cast clean on one is a lint on another, and Linux x86 saw none.
+  `rust-toolchain.toml` pins the toolchain in all three repos (`rust-version` too, but in License), as each stable
+  release adds lints: bump it on purpose, fixing what it flags.
 - Avoid expensive operations; never run extremely heavy ones on the fly.
 - Optimize imports and remove unused code you created. No crate-wide lint `allow`s (in both repos): `dead_code` and
-  `unused_imports` are allowed only on vendored SDK binding modules, and an import only a `#[cfg(test)] use super::*`
-  child needs belongs in that child, or the non-test build warns. CI's vendor job builds with `-D warnings`.
+  `unused_imports` (and clippy's argument count) are allowed only on vendored SDK binding modules, and an import
+  only a `#[cfg(test)] use super::*` child needs belongs in that child, or the non-test build warns. CI's vendor job
+  builds with `-D warnings`.
 - Avoid deep nesting — use if+return to simplify.
 - ALWAYS prefer editing an existing file over creating a new one.
 - Update docs (*.md, especially the VitePress manual in `manual/`) after code changes, concisely.
@@ -83,7 +91,9 @@ When designing new features or refactoring, adhere to the following architectura
 # Test Guidelines
 
 If you can't fix a test, don't simplify it into not testing the idea. Tests can take a minute or two; benches longer.
-**Never run benchmarks alongside other tests/tasks** — it skews the numbers. Real-data fixtures live in
+**Never run benchmarks alongside other tests/tasks** — it skews the numbers. One benchmark run per **machine**
+at a time, counting other worktrees, checkouts and sessions: check `pgrep -af '[_]benchmark-|[c]argo bench'` comes
+back empty before starting, and wait otherwise. Real-data fixtures live in
 `DEFAULT_FIXTURES` (`tests/integration/common.rs`), download on demand; a test wanting one calls
 `stack_depth_grain_tests::managed_session`, which **panics** rather than skip. Measurement instruments
 (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. A stacking test replays a
@@ -108,6 +118,7 @@ per-stage.
 ```bash
 cargo build --release
 cargo test                                                          # fast unit tests, all three crates
+cargo clippy --workspace --all-targets --features telemetry,api-schema -- -D warnings  # as CI lints
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow, ignored by default)
 cargo bench --bench <name> -- --noplot                              # see Benchmark sizing
 cargo run --release -- [port]
@@ -115,6 +126,9 @@ cargo run --release --features telemetry -- --telemetry
 cargo run --release -- --span-timings                               # per-stage durations on span close
 UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.{types,settings,events}.ts
 ```
+
+**Clippy while editing**: point the IDE's on-save check at clippy (rust-analyzer `check.command = "clippy"`, or
+RustRover's external linter). It costs about a second over `cargo check` (2.0 → 2.8 s after touching one core file).
 
 **CI steps both repos repeat are composite actions in `.github/actions/`** (system deps, npm, benchmarks, disk
 space); Pro runs them from its Community checkout (branch of the same name, else `main`), so a change to one lands
@@ -272,6 +286,9 @@ the server sends no display text the UI does not show.
   work *while* framing. Post-processing runs only while `guide_stream.has_viewers()`; solving/raw saving sit above
   both early exits. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's; both
   encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
+- **QHY and ToupTek handles are pointers** the close frees: every shim call goes through `open_sdk`, which refuses
+  once the lease has closed. QHY's frame calls take no length and may write `GetQHYCCDMemLength` bytes, past the
+  ROI's frame; a smaller buffer reads through a scratch copy. ToupTek refuses a buffer under its RAW frame.
 - **Vendor closes take a device *index*, not a handle** — a stuck call's late `Drop` can close a reconnected
   camera; every close goes through `lease.begin_close()`, and an abandoned handle is never closed eagerly.
   `{provider}_{index}` ids follow USB enumeration order, so a guide reconnect can install the *imaging* camera —

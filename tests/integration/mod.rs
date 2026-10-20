@@ -1,31 +1,14 @@
-//! Integration tests for the complete stacking and stretching pipeline.
+//! Integration tests for the complete stacking and stretching pipeline, run on real TIFF or
+//! FITS frames under `tests/fixtures/`: one subdirectory per session, at least 2 frames each,
+//! whose name names its output in `tests/fixtures/processed/` (gitignored).
 //!
-//! These tests read actual TIFF or FITS files from the `tests/fixtures/` directory
-//! and run them through the full processing pipeline.
-//!
-//! # Test Data Setup
-//!
-//! Place your test images in subdirectories under `tests/fixtures/`:
-//! - Each subdirectory should contain TIFF files (`*.tif` or `*.tiff`) or FITS files (`*.fit` or `*.fits`)
-//! - Subdirectory names will be used as output filenames
-//!
-//! The test expects at least 2 frames for stacking per subdirectory.
-//! Processed results are saved to `tests/fixtures/processed/`.
-//!
-//! # Example Directory Structure
 //! ```text
-//! tests/
-//! └── fixtures/
-//!     ├── README.md
-//!     ├── processed/          <- Output directory (gitignored)
-//!     │   ├── session_001.tiff
-//!     │   └── session_002.tiff
-//!     ├── session_001/
-//!     │   ├── frame_00000.tiff
-//!     │   └── frame_00001.tiff
-//!     └── session_002/
-//!         ├── frame_00000.tiff
-//!         └── frame_00001.tiff
+//! tests/fixtures/
+//! ├── processed/
+//! │   └── session_001.tiff
+//! └── session_001/
+//!     ├── frame_00000.tiff
+//!     └── frame_00001.tiff
 //! ```
 //!
 //! # Module Organization
@@ -38,19 +21,11 @@
 //! - `stacking_tests` - Tests for the complete stacking pipeline
 //! - `stretch_tests` - Tests for auto-stretch and rendering
 //! - `detection_tests` - Tests for star detection on real images
-//! - `display_output_tests` - Black floor, stream resolution and the two denoisers,
-//!   measured in output levels on real fixtures
-//! - `dither_tests` - The blue-noise dither, judged by the lattice lines it leaves (none)
-//!   against the Bayer matrix it replaced, and by what the stream's JPEG keeps of it
-//! - `instruments` - the six measurement instruments, shared with the Pro repo by
-//!   `#[path]` inclusion: octave-band sky noise, the star radial profile, a centre/edge
-//!   split, line coherence, lattice lines and block-mean error. **No `crate::` paths may
-//!   appear there.**
-//! - `render_brightness_tests` - Octave-band sky noise, the star radial profile and
-//!   object brightness at three radii: the instruments any change to the
-//!   brightness-against-grain trade has to be judged on
-//! - `auto_crop_tests` - `auto_crop` on real sessions: the area kept, how often the live
-//!   crop moves, the cut preceding the stretch's statistics, nothing cut with it off
+//! - `display_output_tests` - Black floor, stream resolution and both denoisers, in output levels
+//! - `dither_tests` - The blue-noise dither against the Bayer matrix: lattice lines, what JPEG keeps
+//! - `instruments` - The measurement instruments, shared with Pro by `#[path]`: no `crate::` there
+//! - `render_brightness_tests` - The brightness-against-grain trade, on the instruments that judge it
+//! - `auto_crop_tests` - `auto_crop` on real sessions: area kept, crop motion, the cut before stretch
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 pub mod auto_crop_tests;

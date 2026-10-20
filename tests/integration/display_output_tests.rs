@@ -125,8 +125,10 @@ fn prepare_fixture_with(
         frame = night_amplifier::debayer_auto(&frame).ok()?.0;
     }
 
-    let mut settings = night_amplifier::session::state::CaptureSettings::default();
-    settings.auto_stretch = true;
+    let mut settings = night_amplifier::session::state::CaptureSettings {
+        auto_stretch: true,
+        ..Default::default()
+    };
     configure(&mut settings);
 
     let night_amplifier::session::capture::pipeline::PreviewRender {
@@ -451,7 +453,7 @@ fn measure_levels(rgb8: &[u8], width: usize, target_box: (usize, usize, usize, u
     let cut = green[green.len() * 60 / 100];
     let mut chroma = 0.0;
     let mut chroma_n = 0.0f64;
-    for px in rgb8.chunks_exact(3) {
+    for px in rgb8.as_chunks::<3>().0 {
         if px[1] > cut {
             continue;
         }

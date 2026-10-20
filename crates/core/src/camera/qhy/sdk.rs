@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+// The generated wrappers mirror the C signatures, argument for argument.
+#![allow(clippy::too_many_arguments)]
 use dlopen2::wrapper::{Container, WrapperApi};
 use std::os::raw::c_char;
 use std::sync::OnceLock;
@@ -40,6 +42,7 @@ pub struct QhySdkApi {
         img_data: *mut u8,
     ) -> u32,
     CancelQHYCCDExposingAndReadout: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
+    GetQHYCCDMemLength: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
     BeginQHYCCDLive: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
     StopQHYCCDLive: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
     GetQHYCCDLiveFrame: unsafe extern "C" fn(
@@ -80,11 +83,14 @@ impl QhySdk {
                 "libqhyccd.so"
             };
 
+            // SAFETY: the `QhySdkApi` struct mirrors the SDK header's signatures, and loading runs
+            // only the vendor library's initialisers.
             match unsafe { crate::native_library::load_eagerly::<QhySdkApi>(lib_name) } {
                 Ok(api) => {
                     info!("QHY SDK ({}) loaded successfully.", lib_name);
                     // Before the resource init, which otherwise prints a dozen lines to
                     // stderr. Older SDKs lack the switch, so it stays out of `QhySdkApi`.
+                    // SAFETY: `void EnableQHYCCDMessage(bool)`, and `api` keeps the library loaded.
                     let enable_messages = unsafe {
                         crate::native_library::optional_symbol::<unsafe extern "C" fn(bool)>(
                             lib_name,
@@ -92,9 +98,11 @@ impl QhySdk {
                         )
                     };
                     if let Some(enable_messages) = enable_messages {
+                        // SAFETY: a plain value, through the signature it was looked up with.
                         unsafe { enable_messages(false) };
                     }
                     // Initialize the QHY resource (required by QHY SDK)
+                    // SAFETY: plain-value arguments to an SDK function bound with this signature.
                     let res = unsafe { api.InitQHYCCDResource() };
                     if res != QHYCCD_SUCCESS {
                         warn!(

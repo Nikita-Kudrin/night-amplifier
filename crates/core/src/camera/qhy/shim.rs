@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+use std::cell::RefCell;
 use std::os::raw::c_char;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -67,12 +67,13 @@ pub struct QhyHandle {
     handle: QhyccdHandle,
     /// Gates `CloseQHYCCD` to exactly one call per handle.
     lease: DeviceLease,
+    /// Where a frame lands when the caller's buffer is smaller than the SDK may write.
+    scratch: RefCell<Vec<u8>>,
 }
 
 // SAFETY: QHY SDK handles are bound to a single device. All access to
 // QhyHandle goes through AppState's StdMutex, which serializes calls.
 unsafe impl Send for QhyHandle {}
-unsafe impl Sync for QhyHandle {}
 
 impl QhyHandle {
     /// Open `id`, waiting briefly for another handle of this process to let go of it.
@@ -93,6 +94,7 @@ impl QhyHandle {
         let (handle, lease) = claim_then_open(id, wait, || {
             let handle = {
                 let _calls = device_table_calls();
+                // SAFETY: `id_cstring` is NUL-terminated and outlives the call.
                 unsafe { sdk.api.OpenQHYCCD(id_cstring.as_ptr()) }
             };
             if handle.is_null() {
@@ -102,17 +104,29 @@ impl QhyHandle {
             }
         })?;
 
-        let camera = Self { handle, lease };
+        let camera = Self { handle, lease, scratch: RefCell::default() };
         // A failed init drops `camera`, which closes it through its lease.
         camera.init()?;
         Ok(camera)
     }
 
-    pub fn init(&self) -> Result<(), String> {
+    /// The SDK and this handle, refused once `close` has run: the handle is the pointer that
+    /// close freed, so any later call would be a use-after-free. `close` and every call take
+    /// `&self` of a `!Sync` handle, so none runs while another does.
+    fn open_sdk(&self) -> Result<(&'static QhySdk, QhyccdHandle), String> {
+        if self.lease.is_closed() {
+            return Err("QHY camera handle is closed".to_string());
+        }
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        Ok((sdk, self.handle))
+    }
+
+    pub fn init(&self) -> Result<(), String> {
+        let (sdk, handle) = self.open_sdk()?;
         let res = {
             let _calls = device_table_calls();
-            unsafe { sdk.api.InitQHYCCD(self.handle) }
+            // SAFETY: `handle` is open (`open_sdk`).
+            unsafe { sdk.api.InitQHYCCD(handle) }
         };
         if res == QHYCCD_SUCCESS {
             Ok(())
@@ -128,6 +142,8 @@ impl QhyHandle {
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
         let res = {
             let _calls = device_table_calls();
+            // SAFETY: the lease authorizes one close per handle, and `open_sdk` refuses every
+            // call after it, so `self.handle` is still open here and never used again.
             unsafe { sdk.api.CloseQHYCCD(self.handle) }
         };
         if res == QHYCCD_SUCCESS {
@@ -138,7 +154,7 @@ impl QhyHandle {
     }
 
     pub fn chip_info(&self) -> Result<ChipInfo, String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let (sdk, handle) = self.open_sdk()?;
         let mut chip_w = 0.0;
         let mut chip_h = 0.0;
         let mut img_w = 0;
@@ -147,9 +163,11 @@ impl QhyHandle {
         let mut pixel_h = 0.0;
         let mut bpp = 0;
 
+        // SAFETY: `handle` is open (`open_sdk`); `chip_w`, `chip_h`, `img_w`, `img_h`, `pixel_w`,
+        // `pixel_h`, `bpp` are live locals the SDK writes during the call.
         let res = unsafe {
             sdk.api.GetQHYCCDChipInfo(
-                self.handle,
+                handle,
                 &mut chip_w,
                 &mut chip_h,
                 &mut img_w,
@@ -166,9 +184,10 @@ impl QhyHandle {
 
         // IsQHYCCDControlAvailable(CAM_COLOR) returns the Bayer pattern ID for color
         // cameras (1=BAYER_GB, 2=BAYER_GR, 3=BAYER_BG, 4=BAYER_RG) or QHYCCD_ERROR for mono.
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
         let cam_color_result = unsafe {
             sdk.api
-                .IsQHYCCDControlAvailable(self.handle, ControlId::CamColor as u32)
+                .IsQHYCCDControlAvailable(handle, ControlId::CamColor as u32)
         };
 
         let bayer = parse_bayer_id(cam_color_result);
@@ -186,11 +205,11 @@ impl QhyHandle {
     }
 
     pub fn is_control_available(&self, ctrl: ControlId) -> bool {
-        if let Some(sdk) = QhySdk::try_load() {
-            unsafe { sdk.api.IsQHYCCDControlAvailable(self.handle, ctrl as u32) == QHYCCD_SUCCESS }
-        } else {
-            false
-        }
+        let Ok((sdk, handle)) = self.open_sdk() else {
+            return false;
+        };
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        unsafe { sdk.api.IsQHYCCDControlAvailable(handle, ctrl as u32) == QHYCCD_SUCCESS }
     }
 
     pub fn supported_bins(&self) -> Vec<u8> {
@@ -198,8 +217,9 @@ impl QhyHandle {
     }
 
     pub fn set_param(&self, ctrl: ControlId, value: f64) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.SetQHYCCDParam(self.handle, ctrl as u32, value) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let res = unsafe { sdk.api.SetQHYCCDParam(handle, ctrl as u32, value) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -208,8 +228,9 @@ impl QhyHandle {
     }
 
     pub fn get_param(&self, ctrl: ControlId) -> Result<f64, String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let val = unsafe { sdk.api.GetQHYCCDParam(self.handle, ctrl as u32) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let val = unsafe { sdk.api.GetQHYCCDParam(handle, ctrl as u32) };
         if val > 1_000_000_000.0 || val.is_nan() {
             Err(format!("GetQHYCCDParam returned invalid value: {}", val))
         } else {
@@ -218,13 +239,15 @@ impl QhyHandle {
     }
 
     pub fn param_range(&self, ctrl: ControlId) -> Result<(f64, f64, f64), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let (sdk, handle) = self.open_sdk()?;
         let mut min = 0.0;
         let mut max = 0.0;
         let mut step = 0.0;
+        // SAFETY: `handle` is open (`open_sdk`); `min`, `max`, `step` are live locals the SDK
+        // writes during the call.
         let res = unsafe {
             sdk.api.GetQHYCCDParamMinMaxStep(
-                self.handle,
+                handle,
                 ctrl as u32,
                 &mut min,
                 &mut max,
@@ -239,8 +262,9 @@ impl QhyHandle {
     }
 
     pub fn set_resolution(&self, x: u32, y: u32, w: u32, h: u32) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.SetQHYCCDResolution(self.handle, x, y, w, h) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let res = unsafe { sdk.api.SetQHYCCDResolution(handle, x, y, w, h) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -249,8 +273,9 @@ impl QhyHandle {
     }
 
     pub fn set_bin(&self, bin: u32) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.SetQHYCCDBinMode(self.handle, bin, bin) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let res = unsafe { sdk.api.SetQHYCCDBinMode(handle, bin, bin) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -259,8 +284,9 @@ impl QhyHandle {
     }
 
     pub fn set_bits(&self, bits: u32) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.SetQHYCCDBitsMode(self.handle, bits) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let res = unsafe { sdk.api.SetQHYCCDBitsMode(handle, bits) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -269,8 +295,9 @@ impl QhyHandle {
     }
 
     pub fn set_stream_mode(&self, mode: u8) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.SetQHYCCDStreamMode(self.handle, mode) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`); the rest are plain values.
+        let res = unsafe { sdk.api.SetQHYCCDStreamMode(handle, mode) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -279,8 +306,9 @@ impl QhyHandle {
     }
 
     pub fn start_single_frame(&self) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.ExpQHYCCDSingleFrame(self.handle) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`).
+        let res = unsafe { sdk.api.ExpQHYCCDSingleFrame(handle) };
         if res == QHYCCD_SUCCESS || res == QHYCCD_READ_DIRECTLY {
             Ok(())
         } else {
@@ -289,22 +317,14 @@ impl QhyHandle {
     }
 
     pub fn get_single_frame(&self, buf: &mut [u8]) -> Result<(u32, u32), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let mut w = 0;
-        let mut h = 0;
-        let mut bpp = 0;
-        let mut channels = 0;
-
-        let res = unsafe {
-            sdk.api.GetQHYCCDSingleFrame(
-                self.handle,
-                &mut w,
-                &mut h,
-                &mut bpp,
-                &mut channels,
-                buf.as_mut_ptr(),
-            )
-        };
+        let (res, w, h) = self.read_frame(buf, |sdk, handle, size, out| {
+            // SAFETY: `handle` is open and `out` holds `GetQHYCCDMemLength` bytes (`read_frame`),
+            // the most the SDK writes; the rest are live fields of `size`.
+            unsafe {
+                let FrameSize { w, h, bpp, channels } = size;
+                sdk.api.GetQHYCCDSingleFrame(handle, w, h, bpp, channels, out)
+            }
+        })?;
 
         if res == QHYCCD_SUCCESS {
             Ok((w, h))
@@ -317,9 +337,27 @@ impl QhyHandle {
         }
     }
 
+    /// A `GetQHYCCD*Frame` call through a buffer it cannot overrun. The call takes no length,
+    /// and QHY sizes its buffer by `GetQHYCCDMemLength`, which can exceed the ROI's frame that
+    /// `buf` holds: a smaller `buf` costs one copy of the frame out of `scratch`.
+    fn read_frame(
+        &self,
+        buf: &mut [u8],
+        read: impl FnOnce(&QhySdk, QhyccdHandle, &mut FrameSize, *mut u8) -> u32,
+    ) -> Result<(u32, u32, u32), String> {
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`).
+        let capacity = unsafe { sdk.api.GetQHYCCDMemLength(handle) } as usize;
+        let mut size = FrameSize::default();
+        let mut scratch = self.scratch.borrow_mut();
+        let res = read_into(buf, capacity, &mut scratch, |out| read(sdk, handle, &mut size, out));
+        Ok((res, size.w, size.h))
+    }
+
     pub fn start_live(&self) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.BeginQHYCCDLive(self.handle) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`).
+        let res = unsafe { sdk.api.BeginQHYCCDLive(handle) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -328,8 +366,9 @@ impl QhyHandle {
     }
 
     pub fn stop_live(&self) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.StopQHYCCDLive(self.handle) };
+        let (sdk, handle) = self.open_sdk()?;
+        // SAFETY: `handle` is open (`open_sdk`).
+        let res = unsafe { sdk.api.StopQHYCCDLive(handle) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -338,22 +377,14 @@ impl QhyHandle {
     }
 
     pub fn get_live_frame(&self, buf: &mut [u8]) -> Result<(u32, u32), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let mut w = 0;
-        let mut h = 0;
-        let mut bpp = 0;
-        let mut channels = 0;
-
-        let res = unsafe {
-            sdk.api.GetQHYCCDLiveFrame(
-                self.handle,
-                &mut w,
-                &mut h,
-                &mut bpp,
-                &mut channels,
-                buf.as_mut_ptr(),
-            )
-        };
+        let (res, w, h) = self.read_frame(buf, |sdk, handle, size, out| {
+            // SAFETY: `handle` is open and `out` holds `GetQHYCCDMemLength` bytes (`read_frame`),
+            // the most the SDK writes; the rest are live fields of `size`.
+            unsafe {
+                let FrameSize { w, h, bpp, channels } = size;
+                sdk.api.GetQHYCCDLiveFrame(handle, w, h, bpp, channels, out)
+            }
+        })?;
 
         if res == QHYCCD_SUCCESS {
             Ok((w, h))
@@ -365,9 +396,10 @@ impl QhyHandle {
     }
 
     pub fn cancel(&self) -> Result<(), String> {
-        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let (sdk, handle) = self.open_sdk()?;
         // CancelQHYCCDExposingAndReadout is safer as it stops both
-        let res = unsafe { sdk.api.CancelQHYCCDExposingAndReadout(self.handle) };
+        // SAFETY: `handle` is open (`open_sdk`).
+        let res = unsafe { sdk.api.CancelQHYCCDExposingAndReadout(handle) };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -388,6 +420,29 @@ impl QhyHandle {
     }
 }
 
+/// What `GetQHYCCD*Frame` reports of the frame it wrote.
+#[derive(Default)]
+struct FrameSize {
+    w: u32,
+    h: u32,
+    bpp: u32,
+    channels: u32,
+}
+
+/// Runs `read` on at least `capacity` bytes and leaves the frame's first `buf.len()` bytes in
+/// `buf`: `buf` itself when it is large enough, else `scratch`, copied over on success only.
+fn read_into(buf: &mut [u8], capacity: usize, scratch: &mut Vec<u8>, read: impl FnOnce(*mut u8) -> u32) -> u32 {
+    if buf.len() >= capacity {
+        return read(buf.as_mut_ptr());
+    }
+    scratch.resize(capacity, 0);
+    let res = read(scratch.as_mut_ptr());
+    if res == QHYCCD_SUCCESS {
+        buf.copy_from_slice(&scratch[..buf.len()]);
+    }
+    res
+}
+
 impl Drop for QhyHandle {
     fn drop(&mut self) {
         let _ = self.close();
@@ -398,6 +453,7 @@ pub fn scan_cameras() -> Option<Vec<String>> {
     let sdk = QhySdk::try_load()?;
     let _calls = device_table_calls();
 
+    // SAFETY: plain-value arguments to an SDK function bound with this signature.
     let count = unsafe { sdk.api.ScanQHYCCD() };
     if count == 0 {
         return Some(Vec::new());
@@ -407,12 +463,10 @@ pub fn scan_cameras() -> Option<Vec<String>> {
     for i in 0..count {
         // `c_char`, not `i8`: it is `u8` on Linux ARM, the Raspberry Pi builds.
         let mut id_buf = [0 as c_char; 64];
+        // SAFETY: `id_buf` holds 64 bytes, room for the id the SDK writes.
         let res = unsafe { sdk.api.GetQHYCCDId(i, id_buf.as_mut_ptr()) };
         if res == QHYCCD_SUCCESS {
-            let id = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
-                .to_string_lossy()
-                .into_owned();
-            cameras.push(id);
+            cameras.push(crate::ffi_safety::fixed_c_str(&id_buf));
         }
     }
 
@@ -519,6 +573,52 @@ mod tests {
         assert!(refused.is_err());
         assert!(!opened);
         assert!(holder.begin_close());
+    }
+
+    /// A frame the SDK writes past the caller's buffer lands in scratch, never beyond `buf`.
+    #[test]
+    fn a_frame_larger_than_the_buffer_is_read_through_scratch() {
+        let write = |len: usize| {
+            move |out: *mut u8| {
+                // SAFETY: `read_into` hands out at least `len` bytes, the capacity asked for.
+                let out = unsafe { std::slice::from_raw_parts_mut(out, len) };
+                for (i, b) in out.iter_mut().enumerate() {
+                    *b = i as u8 + 1;
+                }
+                QHYCCD_SUCCESS
+            }
+        };
+        let mut scratch = Vec::new();
+        let mut buf = [0u8; 4];
+        assert_eq!(read_into(&mut buf, 8, &mut scratch, write(8)), QHYCCD_SUCCESS);
+        assert_eq!(buf, [1, 2, 3, 4]);
+        assert_eq!(scratch.len(), 8);
+
+        let mut scratch = Vec::new();
+        let mut buf = [0u8; 8];
+        read_into(&mut buf, 8, &mut scratch, write(8));
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(scratch.is_empty(), "a buffer that fits is written directly");
+
+        let mut buf = [9u8; 4];
+        read_into(&mut buf, 8, &mut scratch, |_| QHYCCD_READ_DIRECTLY);
+        assert_eq!(buf, [9; 4], "a frame not ready leaves the buffer alone");
+    }
+
+    /// After `close` the handle is the pointer the SDK freed: nothing may reach the SDK with it.
+    #[test]
+    fn a_closed_handle_refuses_every_call_without_the_sdk() {
+        let camera = QhyHandle {
+            handle: std::ptr::null_mut(),
+            lease: DeviceLease::acquire_unique(PROVIDER),
+            scratch: RefCell::default(),
+        };
+        assert!(camera.lease.begin_close(), "closed as `close` would, short of the SDK call");
+        assert!(camera.open_sdk().is_err());
+        assert!(camera.get_param(ControlId::CurTemp).is_err());
+        assert!(camera.get_single_frame(&mut [0; 4]).is_err());
+        assert!(!camera.is_control_available(ControlId::CamColor));
+        assert!(camera.close().is_ok(), "a second close is a no-op");
     }
 
     /// A connect waits out discovery's few seconds with the device.

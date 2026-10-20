@@ -20,7 +20,7 @@ const HEIGHT: usize = 1538;
 /// decode isn't a memset in disguise.
 fn generate_bayer16_raw(width: usize, height: usize) -> Vec<u8> {
     let mut data = vec![0u8; width * height * 2];
-    for (i, chunk) in data.chunks_exact_mut(2).enumerate() {
+    for (i, chunk) in data.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let v = ((i * 37) % 65536) as u16;
         chunk.copy_from_slice(&v.to_le_bytes());
     }

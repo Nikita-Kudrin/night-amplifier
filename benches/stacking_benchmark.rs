@@ -39,7 +39,7 @@ fn sky_frame(seed: usize) -> Frame {
     let mut data = vec![0.0f32; WIDTH * HEIGHT * CHANNELS];
     for (i, v) in data.iter_mut().enumerate() {
         let row = (i % (WIDTH * HEIGHT)) / WIDTH;
-        if row < BORDER_ROWS || row >= HEIGHT - BORDER_ROWS {
+        if !(BORDER_ROWS..HEIGHT - BORDER_ROWS).contains(&row) {
             continue;
         }
         let hash = (i ^ seed.wrapping_mul(0x9E37_79B9)).wrapping_mul(0x2545_F491) >> 16;

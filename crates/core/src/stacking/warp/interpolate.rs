@@ -1,5 +1,7 @@
 use wide::f32x4;
 
+use super::RowBounds;
+
 /// Performs bilinear interpolation on a single channel.
 #[inline]
 pub fn bilinear_interpolate_direct_1ch(data: &[f32], width: usize, sx: f32, sy: f32) -> f32 {
@@ -29,25 +31,28 @@ pub fn bilinear_interpolate_direct_1ch(data: &[f32], width: usize, sx: f32, sy: 
     (corners * weights).reduce_add()
 }
 
+/// Where an output row's first pixel samples the source, and how far each pixel steps.
+#[derive(Clone, Copy)]
+pub struct RowWalk {
+    pub sx: f32,
+    pub sy: f32,
+    pub sx_step: f32,
+    pub sy_step: f32,
+}
+
 /// Specialized RGB row warping with unrolled interpolation.
 #[inline]
 pub fn warp_row_rgb(
-    src_r: &[f32],
-    src_g: &[f32],
-    src_b: &[f32],
-    width: usize,
-    _height: usize,
-    r_row: &mut [f32],
-    g_row: &mut [f32],
-    b_row: &mut [f32],
+    src: [&[f32]; 3],
+    rows: [&mut [f32]; 3],
+    bounds: &RowBounds,
+    walk: RowWalk,
     border_value: f32,
-    sx_start: f32,
-    sy_start: f32,
-    sx_step: f32,
-    sy_step: f32,
-    max_sx: f32,
-    max_sy: f32,
 ) {
+    let [src_r, src_g, src_b] = src;
+    let [r_row, g_row, b_row] = rows;
+    let RowWalk { sx: sx_start, sy: sy_start, sx_step, sy_step } = walk;
+    let RowBounds { width, max_sx, max_sy } = *bounds;
     let row_stride = width;
 
     let (x_start, x_end) =

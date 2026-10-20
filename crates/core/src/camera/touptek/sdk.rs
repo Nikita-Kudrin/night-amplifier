@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+// The generated wrappers mirror the C signatures, argument for argument.
+#![allow(clippy::too_many_arguments)]
 use dlopen2::wrapper::{Container, WrapperApi};
 use std::os::raw::{c_char, c_int, c_short, c_uint, c_ushort, c_void};
 use std::sync::OnceLock;
@@ -130,6 +132,8 @@ impl TouptekSdk {
                 "libtoupcam.so"
             };
 
+            // SAFETY: the `TouptekSdkApi` struct mirrors the SDK header's signatures, and loading
+            // runs only the vendor library's initialisers.
             match unsafe { crate::native_library::load_eagerly::<TouptekSdkApi>(lib_name) } {
                 Ok(api) => {
                     info!("ToupTek SDK ({}) loaded successfully.", lib_name);

@@ -93,7 +93,7 @@ impl IndiProvider {
             }
 
             let mut min_exposure_us = 1.0;
-            let mut max_exposure_us = 3600_000_000.0;
+            let mut max_exposure_us = 3_600_000_000.0;
             if let Some(num) = device.get_number("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE") {
                 min_exposure_us = num.min * 1_000_000.0;
                 max_exposure_us = num.max * 1_000_000.0;

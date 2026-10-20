@@ -359,11 +359,12 @@ mod tests {
 
     #[test]
     fn test_get_render_pipeline_config_respects_toggles() {
-        let mut settings = CaptureSettings::default();
-
         // Test 1: Both enabled
-        settings.background_subtraction = true;
-        settings.auto_stretch = true;
+        let mut settings = CaptureSettings {
+            background_subtraction: true,
+            auto_stretch: true,
+            ..Default::default()
+        };
         let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.background_subtraction);
         assert!(config.auto_stretch);
@@ -385,8 +386,10 @@ mod tests {
 
     #[test]
     fn test_eyepiece_intensity_interpolation() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = true;
+        let mut settings = CaptureSettings {
+            auto_stretch: true,
+            ..Default::default()
+        };
 
         // Base config
         settings.eyepiece.intensity = 0.0;
@@ -445,8 +448,10 @@ mod tests {
     /// range, not just at the endpoints.
     #[test]
     fn eyepiece_intensity_monotonically_raises_the_black_point_factor() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = true;
+        let mut settings = CaptureSettings {
+            auto_stretch: true,
+            ..Default::default()
+        };
 
         let mut previous = f32::MIN;
         for step in 0..=10 {
@@ -468,8 +473,10 @@ mod tests {
     /// near the ceiling must not be pushed out of the solver's supported range.
     #[test]
     fn eyepiece_black_point_factor_stays_in_range() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = true;
+        let mut settings = CaptureSettings {
+            auto_stretch: true,
+            ..Default::default()
+        };
         for step in 0..=10 {
             settings.eyepiece.intensity = step as f32 / 10.0;
             let sigma = get_render_pipeline_config(&settings, &Plugins::none(), false)
@@ -560,8 +567,10 @@ mod tests {
     /// making the background brighter.
     #[test]
     fn a_negative_black_floor_is_inert_without_auto_stretch() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = false;
+        let mut settings = CaptureSettings {
+            auto_stretch: false,
+            ..Default::default()
+        };
         settings.eyepiece.black_floor = -0.09;
         settings.eyepiece.dither = false;
 

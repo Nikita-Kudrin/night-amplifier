@@ -702,8 +702,10 @@ mod tests {
     fn a_comet_frame_that_fails_to_align_keeps_the_comet_on_screen() {
         use crate::capture::context::{CometStacker, StubComet};
 
-        let mut settings = CaptureSettings::default();
-        settings.stacking_type = night_amplifier_core::stacking::StackingType::Comet;
+        let settings = CaptureSettings {
+            stacking_type: night_amplifier_core::stacking::StackingType::Comet,
+            ..Default::default()
+        };
         let stub = StubComet::new(32, 32, 1).answering(vec![Ok(true), Ok(false)]);
         let mut stacker: Option<Box<dyn LiveStacker>> =
             Some(Box::new(CometStacker::from_context(Box::new(stub))));
@@ -730,8 +732,10 @@ mod tests {
     /// session onto single frames instead of retrying the plugin every frame.
     #[test]
     fn a_mode_that_cannot_run_falls_back_to_single_frames() {
-        let mut settings = CaptureSettings::default();
-        settings.stacking_type = night_amplifier_core::stacking::StackingType::Comet;
+        let settings = CaptureSettings {
+            stacking_type: night_amplifier_core::stacking::StackingType::Comet,
+            ..Default::default()
+        };
         let mut stacker = None;
         let mut failed = false;
         let sub = Frame::filled(32, 32, 1, 0.5).unwrap();
@@ -746,11 +750,13 @@ mod tests {
 
     #[test]
     fn test_process_preview_frame_background_subtraction_flag() {
-        let mut settings = CaptureSettings::default();
-        settings.background_subtraction = true;
-        settings.background_extraction_algorithm = BackgroundExtractionAlgorithm::GridBilinear;
+        let settings = CaptureSettings {
+            background_subtraction: true,
+            background_extraction_algorithm: BackgroundExtractionAlgorithm::GridBilinear,
+            ..Default::default()
+        };
 
-        let mut data = vec![0.0f32; 64 * 64 * 1];
+        let mut data = vec![0.0f32; 64 * 64];
         for y in 0..64 {
             for x in 0..64 {
                 data[y * 64 + x] = 0.1 + (x as f32 / 63.0) * 0.4;

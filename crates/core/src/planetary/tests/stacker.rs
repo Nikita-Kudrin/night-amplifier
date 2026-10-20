@@ -232,8 +232,10 @@ fn test_stacking_with_various_offsets() {
 fn test_auto_tracking() {
     // With auto_tracking = true, the stacker should be able to align a frame
     // where the planet has drifted significantly (outside the central ROI).
-    let mut config = PlanetaryConfig::default();
-    config.auto_tracking = true;
+    let mut config = PlanetaryConfig {
+        auto_tracking: true,
+        ..Default::default()
+    };
     config.search_radius = 20; // limit search radius
     config.alignment_roi = Some(AlignmentRoi::new(0, 0, 32, 32)); // arbitrary base ROI size
 

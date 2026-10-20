@@ -152,14 +152,8 @@ mod tests {
 
         for (w, h) in [(37usize, 23usize), (211, 97), (409, 271)] {
             for channels in [1usize, 3, 4] {
-                let mut frame = Frame::zeros(w, h, channels).unwrap();
-                for y in 0..h {
-                    for x in 0..w {
-                        for c in 0..channels {
-                            frame.set_pixel(x, y, c, rand());
-                        }
-                    }
-                }
+                let data = (0..w * h * channels).map(|_| rand()).collect();
+                let frame = Frame::from_f32_vec(data, w, h, channels).unwrap();
 
                 let got = mean_luminance(&frame);
                 let want = sequential_mean_luminance(&frame);

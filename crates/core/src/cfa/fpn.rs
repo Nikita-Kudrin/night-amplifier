@@ -384,8 +384,7 @@ mod tests {
     fn removes_an_injected_row_pattern() {
         let mut frame = noisy_sky(128, 128, 0.20, 0.01);
         let biases = line_offsets(128, 0.04, 0xBEEF_0001);
-        for y in 0..128 {
-            let bias = biases[y];
+        for (y, &bias) in biases.iter().enumerate() {
             for x in 0..128 {
                 frame.set_pixel(x, y, 0, frame.get_pixel(x, y, 0) + bias);
             }
@@ -412,8 +411,7 @@ mod tests {
     fn removes_an_injected_column_pattern() {
         let mut frame = noisy_sky(128, 128, 0.20, 0.01);
         let biases = line_offsets(128, 0.04, 0xBEEF_0002);
-        for x in 0..128 {
-            let bias = biases[x];
+        for (x, &bias) in biases.iter().enumerate() {
             for y in 0..128 {
                 frame.set_pixel(x, y, 0, frame.get_pixel(x, y, 0) + bias);
             }

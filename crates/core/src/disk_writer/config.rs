@@ -100,7 +100,7 @@ pub struct WriteRequest {
 #[derive(Debug)]
 pub enum DiskWriterMessage {
     /// Queue a frame for writing
-    WriteFrame(WriteRequest),
+    WriteFrame(Box<WriteRequest>),
     /// End the current capture session
     EndSession,
     /// Sync everything the group wrote so far to the device, then answer. Queued behind

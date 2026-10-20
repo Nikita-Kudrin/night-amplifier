@@ -11,11 +11,10 @@ pub const MAX_STREAM_EDGE: u32 = 3840;
 /// A resolution the observer picks, as a bounding box: the frame is fitted inside it with
 /// its aspect ratio intact and never upscaled. Serves three settings:
 ///
-/// - **Processing Resolution** (`preview_resolution`): how far the preview pipeline may
-///   bin before it runs. Preview stages walk every sample, so binning first runs them on a
-///   quarter of the data. A setting rather than derived from clients: re-deriving it per
-///   frame moved the tone curve under every viewer (**25.7% shadow lift at the 1% input
-///   point**) when someone else's tab joined.
+/// - **Processing Resolution** (`preview_resolution`): how far the preview pipeline may bin
+///   first, which runs its every-sample stages on a quarter of the data. A setting, not
+///   derived from clients: re-deriving it per frame moved the tone curve under every viewer
+///   (**25.7% shadow lift at the 1% input point**) when someone else's tab joined.
 /// - **Streaming Resolution** (`streaming_resolution`): the one JPEG size every `/` and
 ///   `/eyepiece` client receives.
 /// - **Eyepiece Streaming Resolution** ([`EyepieceStreamResolution`]): the one RGB8+LZ4 size

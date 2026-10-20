@@ -41,7 +41,7 @@ fn production(sky: &[f32]) -> Vec<f64> {
     let output = night_amplifier::render::DisplayOutput::default().with_dither(true);
     let mut plane = Vec::with_capacity(sky.len());
     let mut row_out = vec![0u8; SIDE * 3];
-    for (y, row) in sky.chunks_exact(SIDE).enumerate() {
+    for (y, row) in sky.as_chunks::<SIDE>().0.iter().enumerate() {
         let row_in: Vec<f32> = row.iter().flat_map(|&v| [v, v, v]).collect();
         night_amplifier::render::output::write_row_rgb8(&mut row_out, &row_in, y, output);
         plane.extend(row_out.iter().skip(1).step_by(3).map(|&v| v as f64));

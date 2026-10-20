@@ -137,7 +137,7 @@ fn test_capture_config_validation() {
         supported_bins: vec![1, 2, 4],
         supported_formats: vec![ImageFormat::Raw8, ImageFormat::Raw16],
         min_exposure_us: 100,
-        max_exposure_us: 3600_000_000,
+        max_exposure_us: 3_600_000_000,
         min_gain: 0,
         max_gain: 500,
         unity_gain: 100,

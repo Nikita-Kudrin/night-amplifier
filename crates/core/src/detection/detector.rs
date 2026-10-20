@@ -114,7 +114,7 @@ impl StarDetector {
                             return None;
                         }
 
-                        if self.is_local_maximum(data, width, height, x, y, value, radius) {
+                        if Self::is_local_maximum(data, width, height, x, y, radius) {
                             Some((x, y))
                         } else {
                             None
@@ -125,16 +125,8 @@ impl StarDetector {
             .collect()
     }
 
-    fn is_local_maximum(
-        &self,
-        data: &[f32],
-        width: usize,
-        height: usize,
-        x: usize,
-        y: usize,
-        value: f32,
-        radius: isize,
-    ) -> bool {
+    fn is_local_maximum(data: &[f32], width: usize, height: usize, x: usize, y: usize, radius: isize) -> bool {
+        let value = data[y * width + x];
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 if dx == 0 && dy == 0 {

@@ -64,10 +64,12 @@ pub mod testing {
     use super::*;
 
     pub fn to_ready_frame(frame: &Frame) -> RenderReadyFrame {
-        let mut config = RenderPipelineConfig::default();
-        config.contrast = false;
-        config.auto_stretch = false;
-        config.saturation_boost = false;
+        let config = RenderPipelineConfig {
+            contrast: false,
+            auto_stretch: false,
+            saturation_boost: false,
+            ..Default::default()
+        };
         RenderReadyFrame {
             noise: None,
             linear_frame: Arc::new(frame.clone()),
@@ -85,10 +87,12 @@ pub mod testing {
         black_point: f32,
         scale_lut: Arc<Vec<f32>>,
     ) -> RenderReadyFrame {
-        let mut config = RenderPipelineConfig::default();
-        config.contrast = false;
-        config.auto_stretch = true;
-        config.saturation_boost = false;
+        let config = RenderPipelineConfig {
+            contrast: false,
+            auto_stretch: true,
+            saturation_boost: false,
+            ..Default::default()
+        };
         RenderReadyFrame {
             noise: None,
             linear_frame: Arc::new(frame.clone()),

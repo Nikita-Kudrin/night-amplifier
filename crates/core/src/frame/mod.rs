@@ -238,7 +238,7 @@ impl Frame {
                 let src_plane = &src_data[c * src_area..(c + 1) * src_area];
                 let src_y_start = rect.y + dst_y * factor;
 
-                for dst_x in 0..dst_width {
+                for (dst_x, out) in row_out.iter_mut().enumerate() {
                     let src_x_start = rect.x + dst_x * factor;
                     let mut sum = 0.0f32;
                     for sy in 0..factor {
@@ -247,7 +247,7 @@ impl Frame {
                             sum += src_plane[row_start + src_x_start + sx];
                         }
                     }
-                    row_out[dst_x] = sum * inv_area;
+                    *out = sum * inv_area;
                 }
             });
 
@@ -341,12 +341,10 @@ mod tests {
         for dy in 0..dst_h {
             for dx in 0..dst_w {
                 for c in 0..frame.channels() {
-                    let mut sum = 0.0f32;
-                    for sy in 0..factor {
-                        for sx in 0..factor {
-                            sum += frame.get_pixel(dx * factor + sx, dy * factor + sy, c);
-                        }
-                    }
+                    let sum: f32 = (0..factor)
+                        .flat_map(|sy| (0..factor).map(move |sx| (sx, sy)))
+                        .map(|(sx, sy)| frame.get_pixel(dx * factor + sx, dy * factor + sy, c))
+                        .sum();
                     out.set_pixel(dx, dy, c, sum / (factor * factor) as f32);
                 }
             }

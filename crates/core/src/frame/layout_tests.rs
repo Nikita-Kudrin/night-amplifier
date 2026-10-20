@@ -141,10 +141,12 @@ fn render_to_rgb8_is_interleaved() {
 #[test]
 fn expand_to_rgb8_fused_is_interleaved() {
     let frame = tricolour_frame(W, H);
-    let mut config = crate::render::RenderPipelineConfig::default();
-    config.contrast = false;
-    config.auto_stretch = false;
-    config.saturation_boost = false;
+    let config = crate::render::RenderPipelineConfig {
+        contrast: false,
+        auto_stretch: false,
+        saturation_boost: false,
+        ..Default::default()
+    };
     let ready = crate::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
@@ -265,8 +267,8 @@ fn read_ser_samples(file: &[u8], count: usize, bit_depth: u32) -> Vec<u32> {
         return payload.iter().map(|&b| b as u32).collect();
     }
     payload
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]) as u32)
+        .as_chunks::<2>().0.iter()
+        .map(|c| u16::from_le_bytes(*c) as u32)
         .collect()
 }
 

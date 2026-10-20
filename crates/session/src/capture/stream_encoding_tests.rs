@@ -226,19 +226,19 @@ fn a_repeated_failure_is_reported_once_until_it_changes_or_clears() {
     let mut failures = FailureReports::default();
     let broken = || Err::<(), _>("conversion failed".to_owned());
 
-    assert_eq!(failures.to_report(StreamKind::Jpeg, broken()).as_deref(), Some("conversion failed"));
-    assert_eq!(failures.to_report(StreamKind::Jpeg, broken()), None);
+    assert_eq!(failures.report(StreamKind::Jpeg, broken()).as_deref(), Some("conversion failed"));
+    assert_eq!(failures.report(StreamKind::Jpeg, broken()), None);
     assert_eq!(
-        failures.to_report(StreamKind::Lossless, broken()).as_deref(),
+        failures.report(StreamKind::Lossless, broken()).as_deref(),
         Some("conversion failed"),
         "families share a report"
     );
 
     let other = Err("encoding failed".to_owned());
-    assert_eq!(failures.to_report(StreamKind::Jpeg, other).as_deref(), Some("encoding failed"));
+    assert_eq!(failures.report(StreamKind::Jpeg, other).as_deref(), Some("encoding failed"));
 
-    assert_eq!(failures.to_report(StreamKind::Jpeg, Ok(())), None);
-    assert_eq!(failures.to_report(StreamKind::Jpeg, broken()).as_deref(), Some("conversion failed"));
+    assert_eq!(failures.report(StreamKind::Jpeg, Ok(())), None);
+    assert_eq!(failures.report(StreamKind::Jpeg, broken()).as_deref(), Some("conversion failed"));
 }
 
 /// The quality follows the denoisers on both ways a JPEG leaves the server — the render

@@ -84,7 +84,12 @@ mod tests {
         assert_eq!(refused, Err("refused"));
         assert!(Arc::ptr_eq(&before, &store.snapshot()), "a refusal replaced the snapshot");
 
-        store.try_update(|settings| Ok::<_, ()>(settings.bin = 2)).unwrap();
+        store
+            .try_update(|settings| {
+                settings.bin = 2;
+                Ok::<_, ()>(())
+            })
+            .unwrap();
         assert_eq!(store.snapshot().bin, 2);
         assert_eq!(before.bin, CaptureSettings::default().bin);
     }

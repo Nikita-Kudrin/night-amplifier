@@ -125,7 +125,7 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
             // Chunks are pixel runs, not rows, so the dither's output coordinate
             // has to be recovered from the absolute pixel index.
             let base = chunk_idx * pixels_per_chunk;
-            for (i, out_px) in px_block.chunks_exact_mut(3).enumerate() {
+            for (i, out_px) in px_block.as_chunks_mut::<3>().0.iter_mut().enumerate() {
                 let (mut r, mut g, mut b) = (r_block[i], g_block[i], b_block[i]);
 
                 if apply_contrast {

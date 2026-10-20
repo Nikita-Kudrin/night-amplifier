@@ -161,7 +161,7 @@ impl Default for CameraInfo {
             supported_bins: vec![1],
             supported_formats: vec![ImageFormat::Raw8],
             min_exposure_us: 1,
-            max_exposure_us: 3600_000_000,
+            max_exposure_us: 3_600_000_000,
             min_gain: 0,
             max_gain: 100,
             unity_gain: 0,

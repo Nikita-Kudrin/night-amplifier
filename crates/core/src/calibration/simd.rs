@@ -14,13 +14,11 @@ pub fn sum_f32_simd(values: &[f32]) -> f32 {
         return values.iter().sum();
     }
 
-    let chunks = values.chunks_exact(4);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = values.as_chunks::<4>();
 
     let mut acc = f32x4::ZERO;
-    for chunk in chunks {
-        let v = f32x4::new([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        acc += v;
+    for &chunk in chunks {
+        acc += f32x4::new(chunk);
     }
 
     let simd_sum = acc.reduce_add();

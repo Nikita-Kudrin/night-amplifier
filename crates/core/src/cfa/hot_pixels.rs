@@ -171,6 +171,7 @@ pub fn reject_hot_pixels(cfa: &mut CfaFrame, config: &HotPixelConfig) -> Result<
 /// same cache lines, so the second is served from L1/L2 rather than from DRAM — which is
 /// the whole point of grouping the sites this way. `thresholds` is indexed in
 /// [`CfaPlanes::origins`] order, so this row's site `x0` is at `y0 * step + x0`.
+// The row walk's own inputs, each read in its inner loop; a struct would only rename them.
 #[allow(clippy::too_many_arguments)]
 fn scan_row_into(
     hits: &mut Vec<(usize, f32)>,
@@ -529,23 +530,26 @@ mod tests {
                     continue;
                 }
 
+                // The neighbour mean that replaces (x, y), if it is an isolated hot pixel.
+                let hit = |x: usize, y: usize| {
+                    let at = |xx: usize, yy: usize| data[yy * width + xx];
+                    let centre = at(x, y);
+                    let (nw, n, ne) = (at(x - step, y - step), at(x, y - step), at(x + step, y - step));
+                    let (w, e) = (at(x - step, y), at(x + step, y));
+                    let (sw, s, se) = (at(x - step, y + step), at(x, y + step), at(x + step, y + step));
+                    let brightest = nw.max(n).max(ne).max(w).max(e).max(sw).max(s).max(se);
+                    let above_background = centre - background;
+                    let isolated = centre - brightest > tau
+                        && above_background > 0.0
+                        && brightest - background < config.isolation * above_background;
+                    isolated.then_some((nw + n + ne + w + e + sw + s + se) * 0.125)
+                };
+
                 let mut y = y0 + step;
                 while y + step < height {
                     let mut x = x0 + step;
                     while x + step < width {
-                        let at = |xx: usize, yy: usize| data[yy * width + xx];
-                        let centre = at(x, y);
-                        let (nw, n, ne) = (at(x - step, y - step), at(x, y - step), at(x + step, y - step));
-                        let (w, e) = (at(x - step, y), at(x + step, y));
-                        let (sw, s, se) = (at(x - step, y + step), at(x, y + step), at(x + step, y + step));
-                        let brightest = nw.max(n).max(ne).max(w).max(e).max(sw).max(s).max(se);
-                        let above_background = centre - background;
-                        if centre - brightest > tau
-                            && above_background > 0.0
-                            && brightest - background < config.isolation * above_background
-                        {
-                            hits.push((y * width + x, (nw + n + ne + w + e + sw + s + se) * 0.125));
-                        }
+                        hits.extend(hit(x, y).map(|mean| (y * width + x, mean)));
                         x += step;
                     }
                     y += step;

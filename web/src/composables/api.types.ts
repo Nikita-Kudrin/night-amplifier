@@ -520,23 +520,18 @@ export interface DenoiseSettings {
     /** How far the chroma planes move toward the filtered result, `0..=1`. */
     chroma_strength: number
     /**
-     * How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
+     * How hard the render fights sky grain, `0..=1`: the "Background Grain" control, `0.5` its
+     * middle ([`DEFAULT_BACKGROUND_GRAIN`]). Spent cheapest-first by *scale* reached; on a
+     * 1440p IMX533 stack the 16-32 and 32-64 px bands dominate perceived grain.
      *
-     * Three mechanisms, spent cheapest-first by *scale* reached. On a 1440p IMX533
-     * stack the 16-32 and 32-64 px bands dominate perceived grain.
+     * - **Below the middle**: the finest wavelet level (`LumaDenoiseConfig::thresholds_for`)
+     *   and the tone-curve split (`AutoStretchConfig::grain_split`, `MIN_GRAIN_SPLIT` up to
+     *   `DEFAULT_GRAIN_SPLIT`): brightness for fine speckle, moving 8-128 px noise under 2%.
+     * - **Above the middle**: wavelet levels 5-6, the only reach into 16-64 px: 8-128 px noise
+     *   down 12-15% for 3% of target brightness over six sessions, vs. the curve's 1:1.
      *
-     * - **Below the middle**: wavelet finest scale (`LumaDenoiseConfig::thresholds_for`)
-     *   + tone curve split (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT`
-     *   and `DEFAULT_GRAIN_SPLIT`. Trades brightness for fine speckle: moves 8-128 px
-     *   noise under 2%.
-     * - **Above the middle**: wavelet levels 5-6, the only mechanism reaching 16-64 px.
-     *   Six-session measurement: 8-128 px noise down 12-15% for 3% of target
-     *   brightness, vs. the curve's 1:1.
-     *
-     * Split stops at `DEFAULT_GRAIN_SPLIT`, never `MAX_GRAIN_SPLIT`: reaching 1/4 cost
-     * 38-43% of brightness for 37-39% of grain, the same 1:1 exchange — not a trade a
-     * user control should offer. Coarse levels replace that range. `0.5` is the middle;
-     * see [`DEFAULT_BACKGROUND_GRAIN`].
+     * The split never reaches `MAX_GRAIN_SPLIT`: 1/4 cost 38-43% of brightness for 37-39% of
+     * grain, the same 1:1 exchange, not a trade a user control should offer.
      */
     background_grain: number
     /**
@@ -727,11 +722,10 @@ export type RejectionMethod = (typeof REJECTION_METHOD_VALUES)[number]
  * A resolution the observer picks, as a bounding box: the frame is fitted inside it with
  * its aspect ratio intact and never upscaled. Serves three settings:
  *
- * - **Processing Resolution** (`preview_resolution`): how far the preview pipeline may
- *   bin before it runs. Preview stages walk every sample, so binning first runs them on a
- *   quarter of the data. A setting rather than derived from clients: re-deriving it per
- *   frame moved the tone curve under every viewer (**25.7% shadow lift at the 1% input
- *   point**) when someone else's tab joined.
+ * - **Processing Resolution** (`preview_resolution`): how far the preview pipeline may bin
+ *   first, which runs its every-sample stages on a quarter of the data. A setting, not
+ *   derived from clients: re-deriving it per frame moved the tone curve under every viewer
+ *   (**25.7% shadow lift at the 1% input point**) when someone else's tab joined.
  * - **Streaming Resolution** (`streaming_resolution`): the one JPEG size every `/` and
  *   `/eyepiece` client receives.
  * - **Eyepiece Streaming Resolution** ([`EyepieceStreamResolution`]): the one RGB8+LZ4 size
@@ -1092,23 +1086,18 @@ export interface DenoiseSettingsInput {
     /** How far the chroma planes move toward the filtered result, `0..=1`. */
     chroma_strength?: number
     /**
-     * How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
+     * How hard the render fights sky grain, `0..=1`: the "Background Grain" control, `0.5` its
+     * middle ([`DEFAULT_BACKGROUND_GRAIN`]). Spent cheapest-first by *scale* reached; on a
+     * 1440p IMX533 stack the 16-32 and 32-64 px bands dominate perceived grain.
      *
-     * Three mechanisms, spent cheapest-first by *scale* reached. On a 1440p IMX533
-     * stack the 16-32 and 32-64 px bands dominate perceived grain.
+     * - **Below the middle**: the finest wavelet level (`LumaDenoiseConfig::thresholds_for`)
+     *   and the tone-curve split (`AutoStretchConfig::grain_split`, `MIN_GRAIN_SPLIT` up to
+     *   `DEFAULT_GRAIN_SPLIT`): brightness for fine speckle, moving 8-128 px noise under 2%.
+     * - **Above the middle**: wavelet levels 5-6, the only reach into 16-64 px: 8-128 px noise
+     *   down 12-15% for 3% of target brightness over six sessions, vs. the curve's 1:1.
      *
-     * - **Below the middle**: wavelet finest scale (`LumaDenoiseConfig::thresholds_for`)
-     *   + tone curve split (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT`
-     *   and `DEFAULT_GRAIN_SPLIT`. Trades brightness for fine speckle: moves 8-128 px
-     *   noise under 2%.
-     * - **Above the middle**: wavelet levels 5-6, the only mechanism reaching 16-64 px.
-     *   Six-session measurement: 8-128 px noise down 12-15% for 3% of target
-     *   brightness, vs. the curve's 1:1.
-     *
-     * Split stops at `DEFAULT_GRAIN_SPLIT`, never `MAX_GRAIN_SPLIT`: reaching 1/4 cost
-     * 38-43% of brightness for 37-39% of grain, the same 1:1 exchange — not a trade a
-     * user control should offer. Coarse levels replace that range. `0.5` is the middle;
-     * see [`DEFAULT_BACKGROUND_GRAIN`].
+     * The split never reaches `MAX_GRAIN_SPLIT`: 1/4 cost 38-43% of brightness for 37-39% of
+     * grain, the same 1:1 exchange, not a trade a user control should offer.
      */
     background_grain?: number
     /**

@@ -110,8 +110,8 @@ pub fn write_row_rgb8(row_out: &mut [u8], row_in: &[f32], y: usize, output: Disp
 
     let pedestal = output.pedestal;
     for (x, (out_px, in_px)) in row_out
-        .chunks_exact_mut(3)
-        .zip(row_in.chunks_exact(3))
+        .as_chunks_mut::<3>().0.iter_mut()
+        .zip(row_in.as_chunks::<3>().0)
         .enumerate()
     {
         let d = if output.dither {
@@ -212,7 +212,7 @@ mod tests {
             for y in 0..64 {
                 let mut row_out = vec![0u8; 64 * 3];
                 write_row_rgb8(&mut row_out, &vec![value; 64 * 3], y, output);
-                for (x, px) in row_out.chunks_exact(3).enumerate() {
+                for (x, px) in row_out.as_chunks::<3>().0.iter().enumerate() {
                     tile[y * 64 + x] = px[0];
                 }
             }

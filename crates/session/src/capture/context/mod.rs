@@ -335,9 +335,11 @@ mod tests {
     #[test]
     fn planetary_and_deep_sky_configure_the_stack_alike() {
         for (method, plugins) in ALL_METHODS.into_iter().flat_map(|m| [(m, community()), (m, pro())]) {
-            let mut settings = CaptureSettings::default();
-            settings.rejection_method = method;
-            settings.rejection_sigma = 3.1;
+            let settings = CaptureSettings {
+                rejection_method: method,
+                rejection_sigma: 3.1,
+                ..Default::default()
+            };
 
             let settings = StackSettings::of(&settings, &plugins);
             let mut deep_sky = StackingContext::new(32, 32, 1, &settings).expect("builds");

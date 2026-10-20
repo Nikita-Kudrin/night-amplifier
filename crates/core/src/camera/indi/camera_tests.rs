@@ -163,12 +163,7 @@ async fn serve(driver: Arc<Driver>) -> u16 {
                     }
                     "newSwitchVector CCD_VIDEO_STREAM STREAM_ON" => {
                         streaming.store(true, Ordering::SeqCst);
-                        let (streaming, out) = (Arc::clone(&streaming), out.clone());
-                        tokio::spawn(async move {
-                            while streaming.load(Ordering::SeqCst) && out.send(blob_message()).is_ok() {
-                                tokio::time::sleep(Duration::from_millis(20)).await;
-                            }
-                        });
+                        stream_blobs(Arc::clone(&streaming), out.clone());
                     }
                     "newSwitchVector CCD_VIDEO_STREAM STREAM_OFF" => {
                         streaming.store(false, Ordering::SeqCst)
@@ -179,6 +174,15 @@ async fn serve(driver: Arc<Driver>) -> u16 {
         }
     });
     port
+}
+
+/// A video stream: a BLOB every 20 ms until `streaming` drops or the client goes away.
+fn stream_blobs(streaming: Arc<AtomicBool>, out: mpsc::UnboundedSender<String>) {
+    tokio::spawn(async move {
+        while streaming.load(Ordering::SeqCst) && out.send(blob_message()).is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
 }
 
 async fn camera_on(driver: &Arc<Driver>) -> IndiCamera {

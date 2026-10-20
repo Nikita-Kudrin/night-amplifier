@@ -300,8 +300,10 @@ mod tests {
     /// sky must widen the black point, and asking for a brighter target must narrow it.
     #[test]
     fn a_wider_split_places_the_black_point_wider() {
-        assert!(MIN_GRAIN_SPLIT > 0.0, "the dial must not reach a zero split");
-        assert!(MIN_GRAIN_SPLIT < DEFAULT_GRAIN_SPLIT && DEFAULT_GRAIN_SPLIT < MAX_GRAIN_SPLIT);
+        const {
+            assert!(MIN_GRAIN_SPLIT > 0.0, "the dial must not reach a zero split");
+            assert!(MIN_GRAIN_SPLIT < DEFAULT_GRAIN_SPLIT && DEFAULT_GRAIN_SPLIT < MAX_GRAIN_SPLIT);
+        }
         let gains: Vec<f32> = [MIN_GRAIN_SPLIT, DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT]
             .iter()
             .map(|&s| depth_grain_gain(64, s))
@@ -668,9 +670,9 @@ mod tests {
     #[test]
     fn test_compute_auto_stretch_different_targets() {
         let mut data = vec![0.0f32; 64 * 64 * 3];
-        for i in 0..data.len() {
+        for (i, v) in data.iter_mut().enumerate() {
             let rand = (i % 100) as f32 / 100.0;
-            data[i] = 0.05 + rand * 0.1; // 0.05 to 0.15
+            *v = 0.05 + rand * 0.1; // 0.05 to 0.15
         }
 
         let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();

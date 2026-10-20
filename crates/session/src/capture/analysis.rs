@@ -230,6 +230,7 @@ impl PreviewAnalysis {
     /// measure the sky against a gradient that had already been removed differently.
     ///
     /// Returns whether anything will be reused, for the caller's span.
+    // The inputs `AnalysisKey` is built from, one each: bundled, they would be the key itself.
     #[allow(clippy::too_many_arguments)]
     pub fn begin_frame(
         &mut self,

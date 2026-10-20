@@ -25,7 +25,7 @@ fn noisy_sky(width: usize, height: usize) -> Vec<f32> {
 }
 
 fn levels(rgb: &[f32], pedestal: f32) -> Vec<f32> {
-    rgb.chunks_exact(3)
+    rgb.as_chunks::<3>().0.iter()
         .map(|px| (255.0 * (pedestal + (1.0 - pedestal) * px[1])).round())
         .collect()
 }
@@ -146,9 +146,9 @@ fn planar_and_interleaved_agree() {
     let (w, h) = (37, 23);
     let interleaved = noisy_sky(w, h);
     let mut frame = Frame::zeros(w, h, 3).unwrap();
-    for (i, px) in interleaved.chunks_exact(3).enumerate() {
-        for c in 0..3 {
-            frame.set_pixel(i % w, i / w, c, px[c] * (1.0 + c as f32 * 0.1));
+    for (i, px) in interleaved.as_chunks::<3>().0.iter().enumerate() {
+        for (c, &v) in px.iter().enumerate() {
+            frame.set_pixel(i % w, i / w, c, v * (1.0 + c as f32 * 0.1));
         }
     }
     let mut rgb = vec![0.0f32; w * h * 3];
@@ -274,8 +274,8 @@ fn the_sky_beside_a_dark_foreground_is_darkened() {
     assert!(kept < shadow.gain + 0.1, "the open sky kept {kept:.2} of its level (gain {:.2})", shadow.gain);
 }
 
-/// >= 25 % identical samples (zeros where the black point clamped an obstruction) make the
-/// 5th-25th percentile spread zero; the fallback returned the median of *all* samples, 7 %
+/// At >= 25 % identical samples (zeros where the black point clamped an obstruction) the
+/// 5th-25th percentile spread is zero; the fallback returned the median of *all* samples, 7 %
 /// under the sky at 30 % zeros and nothing from 50 %.
 #[test]
 fn a_zero_peak_falls_through_to_the_sky() {

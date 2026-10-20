@@ -415,17 +415,8 @@ impl PlanetaryStacker {
                         .zip(b_block.chunks_mut(width))
                         .enumerate()
                     {
-                        let y = y_start + row;
-                        for x in 0..width {
-                            let Some(tap) =
-                                BilinearTap::at(x as f32 - dx, y as f32 - dy, width, height)
-                            else {
-                                continue;
-                            };
-                            r_row[x] = tap.sample(src_r);
-                            g_row[x] = tap.sample(src_g);
-                            b_row[x] = tap.sample(src_b);
-                        }
+                        let shift = RowShift { y: y_start + row, dx, dy, width, height };
+                        shift.rgb([src_r, src_g, src_b], [r_row, g_row, b_row]);
                     }
                 });
             return Ok(out);
@@ -439,14 +430,7 @@ impl PlanetaryStacker {
                 .for_each(|(block, rows)| {
                     let y_start = block * chunk_rows;
                     for (row, out_row) in rows.chunks_mut(width).enumerate() {
-                        let y = y_start + row;
-                        for x in 0..width {
-                            if let Some(tap) =
-                                BilinearTap::at(x as f32 - dx, y as f32 - dy, width, height)
-                            {
-                                out_row[x] = tap.sample(src);
-                            }
-                        }
+                        RowShift { y: y_start + row, dx, dy, width, height }.plane(src, out_row);
                     }
                 });
         }
@@ -487,6 +471,42 @@ impl PlanetaryStacker {
             max_quality,
             mean_quality,
             max_offset,
+        }
+    }
+}
+
+/// One output row of [`PlanetaryStacker::apply_offset`]; a pixel whose source falls
+/// outside the frame keeps its zero.
+struct RowShift {
+    y: usize,
+    dx: f32,
+    dy: f32,
+    width: usize,
+    height: usize,
+}
+
+impl RowShift {
+    fn tap(&self, x: usize) -> Option<BilinearTap> {
+        BilinearTap::at(x as f32 - self.dx, self.y as f32 - self.dy, self.width, self.height)
+    }
+
+    fn plane(&self, src: &[f32], out: &mut [f32]) {
+        for (x, o) in out.iter_mut().enumerate() {
+            if let Some(tap) = self.tap(x) {
+                *o = tap.sample(src);
+            }
+        }
+    }
+
+    /// One tap serves all three planes.
+    fn rgb(&self, src: [&[f32]; 3], out: [&mut [f32]; 3]) {
+        let [r, g, b] = out;
+        for (x, ((r, g), b)) in r.iter_mut().zip(g.iter_mut()).zip(b.iter_mut()).enumerate() {
+            if let Some(tap) = self.tap(x) {
+                *r = tap.sample(src[0]);
+                *g = tap.sample(src[1]);
+                *b = tap.sample(src[2]);
+            }
         }
     }
 }
