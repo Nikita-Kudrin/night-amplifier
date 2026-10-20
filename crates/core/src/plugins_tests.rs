@@ -32,6 +32,8 @@ fn community_has_nothing_in_any_slot() {
     assert!(plugins.push_to_solver().is_none());
     assert!(plugins.registered().is_empty());
     assert!(!plugins.ships_rejection());
+    assert!(!plugins.ships_background());
+    assert!(!plugins.ships_saturation());
 }
 
 /// Nothing in this test binary activates the process licence, so a set that follows it

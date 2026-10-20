@@ -16,7 +16,7 @@ pub use ai_compute::{
     AiComputePreference, AiComputeReport, BenchmarkProgress, BenchmarkState, ComputeRung,
     RungReport,
 };
-pub use settings::{DenoiseSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL};
+pub use settings::{DenoiseSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL, DEFAULT_LUMA_STRENGTH};
 
 use crate::plugins::Plugins;
 

@@ -137,6 +137,18 @@ impl Plugins {
         self.0.rejection.is_some()
     }
 
+    /// Whether the build ships RBF background extraction, licence aside — what a session
+    /// asks for by default ([`crate::background::BackgroundExtractionAlgorithm::best_available`]).
+    pub fn ships_background(&self) -> bool {
+        self.0.background.is_some()
+    }
+
+    /// Whether the build ships Shadow Saturation Boost, licence aside — whether a session
+    /// starts with it on. Community's API refuses it, so its default cannot be on.
+    pub fn ships_saturation(&self) -> bool {
+        self.0.saturation.is_some()
+    }
+
     /// The filled slots by name, licence aside, for the startup report.
     pub fn registered(&self) -> Vec<&'static str> {
         let s = &self.0;

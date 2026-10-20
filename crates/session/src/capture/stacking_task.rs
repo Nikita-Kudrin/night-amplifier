@@ -644,8 +644,8 @@ mod tests {
         let ctx = drifted_stack(128, DEEP);
         let (_, coverage) = ctx.snapshot().unwrap();
         let coverage = coverage.as_ref();
-        let off = CaptureSettings::default();
-        let on = CaptureSettings { auto_crop: true, ..CaptureSettings::default() };
+        let off = CaptureSettings { auto_crop: false, ..CaptureSettings::default() };
+        let on = CaptureSettings::default();
         let mut crop = StackCrop::new();
 
         for depth in 2..40 {

@@ -72,7 +72,7 @@ slew costs one extra frame before the new stack begins.
 
 The stack keeps the first frame's framing, so drift, field rotation on an alt-az mount or a bumped
 tripod leave a border that fewer frames reached: noisier than the rest, with seams where each
-frame's edge falls. **Settings → Stacking → Auto Crop** (Deep Sky, off by default) cuts the stack
+frame's edge falls. **Settings → Stacking → Auto Crop** (Deep Sky, on by default) cuts the stack
 to the largest rectangle that nearly every frame covers. It starts at 20 frames, the first depth
 at which one bumped frame is outvoted by the rest; until then the stack is shown whole. The cut
 applies to the live view, both eyepiece views and the saved FITS and PNG. The FITS records where
@@ -90,6 +90,11 @@ moon, the horizon and uncorrected vignetting lay over the sky, including a glow 
 one edge or a corner. The galaxy, nebula or cluster you are looking at is kept out of the
 background model: anything that brightens *inside* the frame is treated as a target, anything
 that brightens *towards an edge* as glow. The whole gradient is removed in every stretch mode.
+
+**Algorithm** picks how the sky samples are joined: Grid, or RBF (Pro), a smooth spline with no
+seams between samples. Pro starts on RBF; if the licence lapses, the picture falls back to Grid
+until it is renewed, and your choice is kept. Pro also starts with **Shadow Saturation Boost**
+on, at 10 %.
 
 With Pro and plate solving installed, the stack is also plate solved once, in the background,
 after its first few frames: every catalogued object in the field is then protected by its

@@ -7,7 +7,7 @@
 //! Split out of `pipeline.rs` once it grew too large to read "what should this
 //! stage be configured as" and "run a frame through the stack" as one thing.
 
-use night_amplifier_core::background::BackgroundConfig;
+use night_amplifier_core::background::{BackgroundConfig, BackgroundExtractionAlgorithm};
 use night_amplifier_core::camera::{CameraInfo, CameraResult, RawFrame};
 use night_amplifier_core::cfa::{CfaFrame, CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
 use night_amplifier_core::debayer::DebayerAlgorithm;
@@ -97,6 +97,17 @@ pub fn correct_and_demosaic(
 /// extractor masks the target itself, so every mode subtracts the whole gradient.
 pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
     BackgroundConfig::default().with_algorithm(settings.background_extraction_algorithm)
+}
+
+/// The algorithm a frame runs: the observer's, or Grid while RBF has no licensed plugin
+/// (Community reading a Pro file, a lapsed licence). Unresolved, every frame's estimate
+/// failed and the gradient stayed; the saved choice is left alone, as `resolve_rejection`
+/// leaves the rejection method, so a renewed licence gets RBF back on the next frame.
+fn resolve_background_algorithm(settings: &CaptureSettings, plugins: &Plugins) -> BackgroundExtractionAlgorithm {
+    match settings.background_extraction_algorithm {
+        BackgroundExtractionAlgorithm::Rbf if plugins.background().is_none() => BackgroundExtractionAlgorithm::GridBilinear,
+        algorithm => algorithm,
+    }
 }
 
 /// The sky level the black floor's percentage is quoted against.
@@ -237,7 +248,9 @@ pub fn get_render_pipeline_config(
     // Set configuration first, then explicit toggle last to override the config's auto-enable
     let mut config = RenderPipelineConfig::new()
         .with_plugins(plugins.clone())
-        .with_background_config(get_background_config(settings))
+        .with_background_config(
+            get_background_config(settings).with_algorithm(resolve_background_algorithm(settings, plugins)),
+        )
         .with_background_subtraction(settings.background_subtraction);
 
     if settings.stacking_type == night_amplifier_core::stacking::StackingType::DeepSky
@@ -264,7 +277,9 @@ pub fn get_render_pipeline_config(
             .with_stretch_config(stretch_config)
             .with_auto_stretch(settings.auto_stretch)
             .with_saturation_config(saturation_config)
-            .with_saturation_boost(settings.saturation_boost)
+            // Gated on the plugin, not just the setting: a boost that cannot run still
+            // kept the contrast out of the scale LUT, a separate pass for nothing.
+            .with_saturation_boost(settings.saturation_boost && plugins.saturation().is_some())
             .with_contrast(settings.auto_stretch);
 
         // The 8-bit conversion is not a pipeline stage; the encoders apply it
@@ -355,6 +370,46 @@ mod tests {
              puts an 0.08 sky at {actual} — the darker-sky slider is calibrated against \
              a sky level the render no longer produces"
         );
+    }
+
+    /// A Pro choice reaches the render only with a licensed plugin to run it; without
+    /// one the frame runs what Community runs, and the saved choice is not touched.
+    #[test]
+    fn pro_stages_reach_the_render_only_with_a_plugin_to_run_them() {
+        use night_amplifier_core::background::{BackgroundAlgorithmPlugin, BackgroundModel};
+        use night_amplifier_core::render::stretch::{SaturationBoostConfig, SaturationPlugin};
+        use std::sync::Arc;
+
+        struct Rbf;
+        impl BackgroundAlgorithmPlugin for Rbf {
+            fn estimate_rbf(&self, _: &Frame, _: &BackgroundConfig) -> night_amplifier_core::error::Result<BackgroundModel> {
+                unreachable!("only configured here")
+            }
+        }
+        struct Boost;
+        impl SaturationPlugin for Boost {
+            fn apply_boost(&self, _: &mut Frame, _: &SaturationBoostConfig) -> night_amplifier_core::error::Result<()> {
+                Ok(())
+            }
+            fn apply_boost_slice(&self, _: &mut [f32], _: &SaturationBoostConfig) {}
+        }
+
+        let settings = CaptureSettings {
+            background_extraction_algorithm: BackgroundExtractionAlgorithm::Rbf,
+            saturation_boost: true,
+            ..Default::default()
+        };
+        let pro = Plugins::none()
+            .with_background(Arc::new(Rbf))
+            .with_saturation(Arc::new(Boost))
+            .always_licensed();
+        for (plugins, licensed) in [(pro, true), (Plugins::none(), false)] {
+            let config = get_render_pipeline_config(&settings, &plugins, false);
+            let expected = if licensed { BackgroundExtractionAlgorithm::Rbf } else { BackgroundExtractionAlgorithm::GridBilinear };
+            assert_eq!(config.background_config.algorithm, expected, "{plugins:?}");
+            assert_eq!(config.saturation_boost, licensed, "{plugins:?}");
+        }
+        assert_eq!(settings.background_extraction_algorithm, BackgroundExtractionAlgorithm::Rbf);
     }
 
     #[test]

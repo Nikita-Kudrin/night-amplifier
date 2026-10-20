@@ -215,6 +215,32 @@ fn bench_frame_to_rgb8(c: &mut Criterion, frames: &TestFrames) {
         })
     });
 
+    // The shipped settings end to end: the stretch, the contrast fused into its LUT (or not,
+    // with a boost that cannot run — 12.7 -> 20.7 ms a real IMX533 frame, x86 20-core) and
+    // the black floor's darkening, which every other case here leaves off. Community, x86
+    // 20-core: 17.6 ms/call on this synthetic frame.
+    let mut shipped_imx533 = create_test_frame(3008, 3008, 3);
+    let shipped = night_amplifier::session::capture::pipeline::process_preview_frame(
+        &mut shipped_imx533,
+        &night_amplifier::session::state::CaptureSettings::default(),
+        &night_amplifier::plugins::Plugins::installed(),
+    )
+    .unwrap();
+    let shipped_imx533 = night_amplifier::render::display::RenderReadyFrame {
+        noise: None,
+        linear_frame: std::sync::Arc::new(shipped_imx533),
+        pipeline_config: shipped.pipeline_config,
+        stretch_result: shipped.stretch_result,
+    };
+    const SHIPPED_REPS: usize = 8;
+    group_conv.bench_function(format!("imx533_shipped_defaults_to_native_stream_x{SHIPPED_REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..SHIPPED_REPS {
+                black_box(frame_to_rgb8_downsampled(black_box(&shipped_imx533), native_w, native_h).unwrap());
+            }
+        })
+    });
+
     // Already ~138 ms on its own — clears the floor without repeating.
     group_conv.bench_function("8k_to_4k", |b| {
         b.iter(|| {

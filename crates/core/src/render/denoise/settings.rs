@@ -25,8 +25,8 @@ pub struct DenoiseSettings {
     pub enabled: bool,
     /// Guided-filter smoothing of the chroma planes, against luminance as the
     /// guide. Removes colour mottle; the eye resolves little chroma detail, so
-    /// this is the cheap half with almost nothing to lose.
-    #[serde(default = "default_chroma_denoise")]
+    /// this is the cheap half with almost nothing to lose. Off by default.
+    #[serde(default)]
     pub chroma: bool,
     /// How far the chroma planes move toward the filtered result, `0..=1`.
     #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
@@ -45,13 +45,14 @@ pub struct DenoiseSettings {
     /// grain, the same 1:1 exchange, not a trade a user control should offer.
     #[serde(default = "default_background_grain", deserialize_with = "nullable_f32")]
     pub background_grain: f32,
-    /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
-    /// tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
+    /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is the tuned
+    /// value and the ceiling, [`DEFAULT_LUMA_STRENGTH`] the default; `0.0` is the wavelet's
+    /// genuine off switch.
     ///
     /// Note what this can and cannot reach: it leaves the finest level and the coarse
     /// pair alone, so it is the "the target still looks too noisy" control, not the "the
     /// sky still looks grainy" one — that is the Background Grain dial.
-    #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
+    #[serde(default = "default_luma_strength", deserialize_with = "nullable_f32")]
     pub luma_strength: f32,
     /// How much the wavelet raises the target's own structure, `0..=1`. The "Detail"
     /// control; `0` renders exactly as before it existed.
@@ -105,21 +106,25 @@ pub fn finite_or(value: f32, fallback: f32) -> f32 {
 /// middle, and fine (1-4 px) sky noise at 0.51/0.50 vs. 0.24/0.31 — the middle is a tuned trade, not a reproduction of anything.
 pub const DEFAULT_BACKGROUND_GRAIN: f32 = 0.5;
 
-/// The Detail control's default, not an off switch: stars injected on every test target
-/// stay within the plugin's guard here, where the top of the dial leaves a faint ring. See
-/// the Pro repo's `plugins::denoise::detail`.
-pub const DEFAULT_DETAIL: f32 = 0.5;
+/// The Structure strength default: half the tuned thresholds, keeping more of the target's
+/// mid-scale texture than the full-strength filter.
+pub const DEFAULT_LUMA_STRENGTH: f32 = 0.5;
+
+/// The Detail control's default, not an off switch: a quarter of the dial, well inside the
+/// plugin's guard for stars injected on every test target, where the top of the dial leaves
+/// a faint ring. See the Pro repo's `plugins::denoise::detail`.
+pub const DEFAULT_DETAIL: f32 = 0.25;
 
 fn default_denoise_enabled() -> bool {
     true
 }
 
-fn default_chroma_denoise() -> bool {
-    true
-}
-
 fn default_denoise_strength() -> f32 {
     1.0
+}
+
+fn default_luma_strength() -> f32 {
+    DEFAULT_LUMA_STRENGTH
 }
 
 fn default_background_grain() -> f32 {
@@ -134,10 +139,10 @@ impl Default for DenoiseSettings {
     fn default() -> Self {
         Self {
             enabled: default_denoise_enabled(),
-            chroma: default_chroma_denoise(),
+            chroma: false,
             chroma_strength: default_denoise_strength(),
             background_grain: default_background_grain(),
-            luma_strength: default_denoise_strength(),
+            luma_strength: default_luma_strength(),
             detail: default_detail(),
             ai: false,
             ai_compute: AiComputePreference::Auto,
@@ -159,7 +164,7 @@ impl DenoiseSettings {
             chroma_strength: finite_or(self.chroma_strength, 1.0).clamp(0.0, 1.0),
             background_grain: finite_or(self.background_grain, DEFAULT_BACKGROUND_GRAIN)
                 .clamp(0.0, 1.0),
-            luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
+            luma_strength: finite_or(self.luma_strength, DEFAULT_LUMA_STRENGTH).clamp(0.0, 1.0),
             detail: finite_or(self.detail, DEFAULT_DETAIL).clamp(0.0, 1.0),
             ai: self.ai,
             ai_compute: self.ai_compute,
@@ -239,8 +244,8 @@ mod tests {
 
         assert_eq!(read(serde_json::json!({})), DenoiseSettings::default());
         assert_eq!(
-            read(serde_json::json!({ "chroma": false })),
-            DenoiseSettings { chroma: false, ..Default::default() },
+            read(serde_json::json!({ "chroma": true })),
+            DenoiseSettings { chroma: true, ..Default::default() },
             "one key present must not zero the rest"
         );
 

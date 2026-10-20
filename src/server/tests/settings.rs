@@ -288,27 +288,27 @@ async fn test_update_settings_raw_frame_saving() {
     assert!(!per_mode(&json, "stacking"));
 }
 
-/// `auto_crop` is off until asked for, takes a request on its own, and a request that does
-/// not name it leaves it where it was.
+/// `auto_crop` is on by default, takes a request on its own, and a request that does not
+/// name it leaves it where it was.
 #[tokio::test]
 async fn test_update_settings_auto_crop() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
     let (_, json) = get_json(&app, "/api/settings").await;
-    assert_eq!(json["data"]["auto_crop"], json!(false));
-
-    let (status, json) = post_json(&app, "/api/settings", json!({ "auto_crop": true })).await;
-    assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["auto_crop"], json!(true));
-    assert!(state.settings.snapshot().auto_crop);
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "auto_crop": false })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["auto_crop"], json!(false));
+    assert!(!state.settings.snapshot().auto_crop);
 
     post_json(&app, "/api/settings", json!({ "wanderer_mode": true })).await;
     let (_, json) = get_json(&app, "/api/settings").await;
-    assert_eq!(json["data"]["auto_crop"], json!(true), "an unrelated request switched it off");
+    assert_eq!(json["data"]["auto_crop"], json!(false), "an unrelated request switched it on");
 
-    let (_, json) = post_json(&app, "/api/settings", json!({ "auto_crop": false })).await;
-    assert_eq!(json["data"]["auto_crop"], json!(false));
+    let (_, json) = post_json(&app, "/api/settings", json!({ "auto_crop": true })).await;
+    assert_eq!(json["data"]["auto_crop"], json!(true));
 }
 
 #[tokio::test]
@@ -792,7 +792,7 @@ async fn test_an_overflowing_eyepiece_value_does_not_arrive_as_infinity() {
     assert_eq!(status, StatusCode::OK, "{json}");
     let read = |key: &str| json["data"]["eyepiece"][key].as_f64().unwrap_or(f64::NAN);
     assert_eq!(read("screen_width"), 140.0, "{json}");
-    assert!((read("black_floor") - 0.04).abs() < 1e-6, "{json}");
+    assert!((read("black_floor") + 0.03).abs() < 1e-6, "{json}");
     assert_eq!(read("screen_height"), 80.0, "a finite value is the observer's: {json}");
 }
 
@@ -826,6 +826,19 @@ async fn seed_managed_settings(app: &axum::Router) {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// A client that sends back the value the server reported must not be refused: Community
+/// has no saturation plugin, so its shipped default cannot be a value its own API rejects.
+#[tokio::test]
+async fn test_echoing_the_reported_saturation_boost_is_accepted() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (_, json) = get_json(&app, "/api/settings").await;
+    let reported = json["data"]["saturation_boost"].clone();
+    let (status, json) = post_json(&app, "/api/settings", json!({ "saturation_boost": reported })).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
 }
 
 #[tokio::test]

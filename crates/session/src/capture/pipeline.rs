@@ -774,4 +774,71 @@ mod tests {
         let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.background_subtraction);
     }
+
+    /// Left-to-right spread of a mono frame's mean column values.
+    fn gradient_span(frame: &Frame) -> f32 {
+        let (w, h) = (frame.width(), frame.height());
+        let column = |x: usize| (0..h).map(|y| frame.get_pixel(x, y, 0)).sum::<f32>() / h as f32;
+        (column(w - 1) - column(0)).abs()
+    }
+
+    /// Pro's default is RBF, keyed on the build; a lapsed licence answers `None` from the
+    /// background slot, as Community does. The gradient must still come out (Grid), as an
+    /// unlicensed sigma clip still stacks as a mean, rather than every frame failing.
+    #[test]
+    fn an_rbf_request_without_a_usable_plugin_still_removes_the_gradient() {
+        let mut data = vec![0.0f32; 64 * 64];
+        for y in 0..64 {
+            for x in 0..64 {
+                data[y * 64 + x] = 0.1 + (x as f32 / 63.0) * 0.4;
+            }
+        }
+        let frame = Frame::from_f32_vec(data, 64, 64, 1).unwrap();
+        let render = |algorithm| {
+            let settings = CaptureSettings {
+                auto_stretch: false,
+                background_subtraction: true,
+                background_extraction_algorithm: algorithm,
+                ..Default::default()
+            };
+            let mut out = frame.clone();
+            process_preview_frame(&mut out, &settings, &Plugins::none()).unwrap();
+            gradient_span(&out)
+        };
+
+        let grid = render(BackgroundExtractionAlgorithm::GridBilinear);
+        let rbf = render(BackgroundExtractionAlgorithm::Rbf);
+        assert!(grid < 0.05, "grid left {grid}");
+        assert!(rbf <= grid + 1e-3, "an unlicensed RBF left the gradient: {rbf} against grid's {grid}");
+    }
+
+    /// The shipped settings in a build without the saturation plugin must render as one
+    /// that has none to ask for: the contrast S-curve fused into the scale LUT, not a
+    /// separate per-pixel pass kept apart for a boost that never runs.
+    #[test]
+    fn shipped_settings_without_the_saturation_plugin_fuse_the_contrast() {
+        let mut seed = 12345u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut frame = Frame::filled(64, 64, 3, 0.0).unwrap();
+        for c in 0..3 {
+            for y in 0..64 {
+                for x in 0..64 {
+                    frame.set_pixel(x, y, c, 0.1 + 0.02 * noise());
+                }
+            }
+        }
+
+        let settings = CaptureSettings::default();
+        assert!(settings.auto_stretch, "the shipped stretch is on");
+        let render = process_preview_frame(&mut frame, &settings, &Plugins::none()).unwrap();
+        assert!(render.stretch_result.is_some(), "the stretch was prepared");
+        assert!(
+            !render.pipeline_config.saturation_boost,
+            "Community asks the encoders for a saturation boost it has no plugin for"
+        );
+        assert!(!render.pipeline_config.contrast, "the contrast was not fused into the LUT");
+    }
 }

@@ -13,7 +13,7 @@ use serial_test::serial;
 
 use crate::integration::instruments::{
     expected_grain_ratio, load_sub, measure_real_session, measure_sky_and_target, render,
-    session_files,
+    session_files, GiveBack,
 };
 
 /// The managed fixture set, which CI has: 35 IMX533 subs of M27 on a 250 mm Dobsonian.
@@ -163,7 +163,7 @@ fn a_real_session_gets_calmer_with_depth() {
     let files = managed_session(FIXTURE_SET);
     // The tone curve's half only: the filters' half is the Pro repo's
     // (`denoise_depth_tests`), since without the plugin it renders no filters at all.
-    measure_real_session(FIXTURE_SET, &files, &[1, 2, 4, 8, 16, 32], &[false], &load_sub);
+    measure_real_session(FIXTURE_SET, &files, &[1, 2, 4, 8, 16, 32], &[false], GiveBack::Banded, &load_sub);
 }
 
 /// The same past the depth the gain stops at, which the 35-sub set cannot reach.
@@ -176,7 +176,7 @@ fn a_real_session_gets_calmer_with_depth() {
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn a_deep_session_gets_calmer_with_depth() {
     let files = managed_session(DEEP_SET);
-    measure_real_session(DEEP_SET, &files, &[1, 2, 4, 8, 16, 32, 64, 106], &[false], &load_sub);
+    measure_real_session(DEEP_SET, &files, &[1, 2, 4, 8, 16, 32, 64, 106], &[false], GiveBack::Banded, &load_sub);
 }
 
 /// Other targets and tones than M27: a faint emission nebula and two galaxies, IMX533,
@@ -187,7 +187,9 @@ fn a_deep_session_gets_calmer_with_depth() {
 fn a_faint_nebula_session_gets_calmer_with_depth() {
     const SET: &str = "ic-59-ghost-of-cassiopeia-nebula";
     let files = managed_session(SET);
-    measure_real_session(SET, &files, &[1, 2, 4, 8, 15], &[false], &load_sub);
+    // Too faint for the 2-level band: 5 levels at peak at the shipped tone, 3 given back by
+    // 8 subs (3-4 and none at Black level 30 %). Held to its peak so it cannot fade out.
+    measure_real_session(SET, &files, &[1, 2, 4, 8, 15], &[false], GiveBack::Faint { min_peak: 4.0 }, &load_sub);
 }
 
 #[test]
@@ -196,7 +198,7 @@ fn a_faint_nebula_session_gets_calmer_with_depth() {
 fn a_galaxy_session_gets_calmer_with_depth() {
     for set in ["m33-triangulum-galaxy-imx533", "m101-pinwheel-galaxy-imx533"] {
         let files = managed_session(set);
-        measure_real_session(set, &files, &[1, 2, 4, 8, 16, 32], &[false], &load_sub);
+        measure_real_session(set, &files, &[1, 2, 4, 8, 16, 32], &[false], GiveBack::Banded, &load_sub);
     }
 }
 

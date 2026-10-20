@@ -102,6 +102,7 @@ fn asking_for_the_network() -> CaptureSettings {
     };
     settings.eyepiece.dither = false;
     settings.eyepiece.black_floor = 0.0;
+    settings.saturation_boost = false;
     settings
 }
 

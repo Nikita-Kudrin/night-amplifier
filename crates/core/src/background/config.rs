@@ -16,6 +16,20 @@ pub enum BackgroundExtractionAlgorithm {
     Rbf,
 }
 
+impl BackgroundExtractionAlgorithm {
+    /// What a session asks for by default: RBF in a build that ships the background plugin,
+    /// Grid in Community. Keyed on the build, not the licence, as
+    /// [`crate::stacking::RejectionMethod::best_available`] is: a frame without a licensed
+    /// plugin runs Grid (the session's `resolve_background_algorithm`), the choice kept.
+    pub fn best_available() -> Self {
+        if crate::plugins::Plugins::installed().ships_background() {
+            Self::Rbf
+        } else {
+            Self::GridBilinear
+        }
+    }
+}
+
 impl std::fmt::Display for BackgroundExtractionAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
