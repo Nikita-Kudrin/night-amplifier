@@ -5,12 +5,14 @@ use tracing::{debug, info};
 use night_amplifier_core::cfa::CfaPipeline;
 use night_amplifier_core::cfa::SensorCorrectionSettings;
 use night_amplifier_core::debayer::DebayerAlgorithm;
-use night_amplifier_core::frame::Frame;
-use crate::state::{AppState, CameraRole, StackingType};
+use night_amplifier_core::camera::{CameraInfo, CameraResult, RawFrame};
+use night_amplifier_core::frame::{Frame, NoiseField};
+use crate::state::{AppState, CameraRole, CaptureSettings, StackingType};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
 use super::field_solve;
+use super::frame_gate::RejectionReason;
 use super::context::{LiveStacker, StackingCarryover};
 use super::stack_crop::{self, StackCrop};
 use super::wanderer::Wanderer;
@@ -67,14 +69,7 @@ pub fn run_stacking_task(
     let mut wanderer = Wanderer::default();
     let mut stack_crop = StackCrop::new();
 
-    // The raw-CFA stage, rebuilt only when what it is derived from moves: a stage
-    // may own precomputed state, so it must not be reconstructed per frame. The
-    // key carries `stacking_type` as well as the correction settings because the
-    // FPN stage is gated on it — switching to Planetary has to drop that stage
-    // even though no sensor setting changed.
-    let mut cfa_stage_key: Option<(SensorCorrectionSettings, StackingType)> = None;
-    let mut cfa_pipeline = CfaPipeline::new();
-    let mut debayer = DebayerAlgorithm::Bilinear;
+    let mut cfa_stage = CfaStage::default();
 
     while let Ok(msg) = stacking_rx.recv() {
         // One per message taken, before any work on it: the reported depth is what the
@@ -88,29 +83,11 @@ pub fn run_stacking_task(
             camera_info,
         } = msg;
 
-        let stage_key = (settings.sensor_correction.clone(), settings.stacking_type);
-        if cfa_stage_key.as_ref() != Some(&stage_key) {
-            cfa_stage_key = Some(stage_key);
-            cfa_pipeline = pipeline::build_cfa_pipeline(&settings);
-            debayer = pipeline::debayer_algorithm(&settings);
-            info!(
-                stages = ?cfa_pipeline.stage_names(),
-                ?debayer,
-                stacking_type = ?settings.stacking_type,
-                "Raw-CFA stage configured"
-            );
-        }
-
         // Decode, correct on the mosaic, then debayer — all in the stacking task
         // so the camera thread stays free to start the next exposure.
         let frame = {
             let _span = tracing::info_span!("frame_conversion").entered();
-            match pipeline::convert_captured_frame(
-                &raw_frame,
-                &camera_info.info,
-                &cfa_pipeline,
-                debayer,
-            ) {
+            match cfa_stage.for_settings(&settings).convert(&raw_frame, &camera_info.info) {
                 Ok(f) => Arc::new(f),
                 Err(e) => {
                     tracing::warn!(error = %e, "Frame conversion failed");
@@ -155,13 +132,7 @@ pub fn run_stacking_task(
         }
 
         // Process frame through stacking pipeline
-        let registration_succeeded;
-        let mut showing_stack;
-        let stack_reset;
-        let mut rejected_because;
-        let mut stack_depth;
-        let noise;
-        let mut display_frame = if stacking_enabled && !stacking_failed {
+        let mut step = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,
                 stacking_type = ?settings.stacking_type,
@@ -187,13 +158,7 @@ pub fn run_stacking_task(
                 &mut stacking_failed,
                 want_display,
             );
-            registration_succeeded = outcome.frame_added;
-            showing_stack = outcome.showing_stack;
-            stack_reset = outcome.stack_reset;
-            rejected_because = outcome.rejected_because();
-            stack_depth = outcome.stack_depth;
-            noise = outcome.noise;
-            outcome.display_frame.map(Arc::new)
+            FrameStep::from(outcome)
         } else {
             debug!(
                 stacking = settings.stacking,
@@ -201,18 +166,12 @@ pub fn run_stacking_task(
                 stacking_failed = stacking_failed,
                 "Stacking disabled or failed, using raw frame"
             );
-            registration_succeeded = false;
-            showing_stack = false;
-            stack_reset = false;
-            rejected_because = None;
-            stack_depth = 0;
-            noise = None;
-            Some(Arc::clone(&frame))
+            FrameStep::raw(&frame)
         };
 
         // The stack restarted on a sharper reference, so the integration the
         // counters describe no longer exists.
-        if stack_reset {
+        if step.stack_reset {
             state.reset_counters();
             state.field_solve.reset();
         }
@@ -224,78 +183,35 @@ pub fn run_stacking_task(
         if wanderer.confirms_movement(
             settings.wanderer_mode,
             stacking_enabled,
-            registration_succeeded,
-            rejected_because,
+            step.registration_succeeded,
+            step.rejected_because,
         ) {
             info!(
-                reason = rejected_because.map(|r| r.describe()).unwrap_or("registration failed"),
+                reason = step.rejected_because.map(|r| r.describe()).unwrap_or("registration failed"),
                 "Wanderer mode: movement confirmed, resetting stack"
             );
             stacker = None;
             state.reset_counters();
-            // Always displayed, even when the compute above was skipped: the stack this
-            // frame was measured against no longer exists, so the view must stop showing
-            // it. The raw sub is a handle clone, not a copy.
-            display_frame = Some(Arc::clone(&frame));
-            showing_stack = false;
-            stack_depth = 0;
-            // The stack this frame failed against no longer exists, so the
-            // verdict against it describes nothing the user can act on. Wanderer
-            // treats a failed registration as the *signal*, not as a fault.
-            rejected_because = None;
+            step.show_raw_after_restart(&frame);
         }
 
+        let FrameStep {
+            registration_succeeded,
+            showing_stack,
+            rejected_because,
+            stack_depth,
+            noise,
+            display_frame,
+            ..
+        } = step;
         // Whether *this* frame joined the stack. Deriving it from the context's
         // frame count instead would report every frame after the first as
         // stacked, leaving the UI's rejection counter pinned at zero.
         let was_stacked = stacking_enabled && registration_succeeded;
 
-        // Background protection's one plate solve of this stack (Pro). Deep-sky stacks
-        // only: a planetary or comet stack is not registered on the stars.
-        if let (true, Some(stack)) = (
-            showing_stack
-                && settings.background_subtraction
-                && settings.stacking_type == StackingType::DeepSky,
-            display_frame.as_ref(),
-        ) {
-            field_solve::offer(&state, &rt, stack, stack_depth as usize);
-        }
+        offer_solves(&state, &rt, &settings, showing_stack.then_some(stack_depth), display_frame.as_ref());
 
-        // Trigger plate solving asynchronously. Gated up front: without the Push-To
-        // plugin the solve is a no-op, and spawning it would keep a second handle on
-        // the frame alive long enough to make the render task's `Arc::try_unwrap` fail
-        // and copy instead. Skipped along with the display copy on an iteration that
-        // made none — the solve wants the stack, not a single sub, and `solve_frame` is
-        // rate-limited by `MIN_SOLVE_ATTEMPT_INTERVAL` anyway. Declines outright while a
-        // guide camera is connected: that camera is the solve source then, and offers
-        // frames far more often than an imaging sub arrives.
-        if let (true, Some(frame_to_solve)) = (
-            solving::plate_solve_available(&state, solving::SolveSource::Main),
-            display_frame.as_ref(),
-        ) {
-            solving::offer_plate_solve(
-                &state,
-                &rt,
-                Arc::clone(frame_to_solve),
-                solving::SolveSource::Main,
-            );
-        }
-
-        // Update frame counters. The reason rides on `frame_captured`, never on
-        // `frame_rejected` — that one feeds the capture-abort burst detector and
-        // is for a camera that failed to deliver a frame at all.
-        //
-        // Spanned for the same reason as the render task's `publish_state`. Lock-free
-        // since the counters became atomics; it once was an async lock reached by
-        // `rt.block_on`, part of 8.7 ms of `stacking_iteration` self time with no name.
-        {
-            let _span = tracing::info_span!("publish_state").entered();
-            state.frame_captured(
-                was_stacked,
-                settings.stacking,
-                rejected_because.map(|reason| reason.describe()),
-            );
-        }
+        publish_counts(&state, was_stacked, settings.stacking, rejected_because);
 
         // Release our handle on the captured frame before handing the display
         // frame downstream. On the raw-fallback paths the two are the same
@@ -325,25 +241,9 @@ pub fn run_stacking_task(
             crop,
             star_fwhm: stacker.as_deref().and_then(|stacker| stacker.star_fwhm()),
         };
-        // Publish the count *before* the message, undone on arms that didn't send.
-        // `try_send` makes the frame visible instantly, so counting after leaves a
-        // window where the receiver wakes, runs `taken()` against zero, saturates,
-        // and the sender's `sent()` lands on an already-empty channel — permanently
-        // one above truth: `want_display` is `pending() == 0`, so the stacking task
-        // would stop building display frames and the live view would freeze for the
-        // rest of the session. Over-counting here costs at most one skipped display
-        // copy; under-counting costs the session.
-        render_depth.sent();
-        match render_tx.try_send(render_msg) {
-            Ok(()) => {}
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                render_depth.taken();
-                debug!("Render channel disconnected, stopping stacking task");
-                break;
-            }
-            // Full: the frame is dropped, so give back the slot we just claimed. The
-            // depth still reflects the messages the render task really has.
-            Err(mpsc::TrySendError::Full(_)) => render_depth.taken(),
+        if !send_to_render(&render_tx, &render_depth, render_msg) {
+            debug!("Render channel disconnected, stopping stacking task");
+            break;
         }
         telemetry_metrics::record_pipeline_queue_depth(
             "stacking_to_render",
@@ -361,6 +261,174 @@ pub fn run_stacking_task(
     state.resume.park_stack(stacker.map(|stacker| StackingCarryover { stacker }));
 
     debug!("Stacking task ended");
+}
+
+/// Updates the frame counters. The reason rides on `frame_captured`, never on
+/// `frame_rejected` — that one feeds the capture-abort burst detector and is for a
+/// camera that failed to deliver a frame at all.
+///
+/// Spanned for the same reason as the render task's `publish_state`. Lock-free since the
+/// counters became atomics; it once was an async lock reached by `rt.block_on`, part of
+/// 8.7 ms of `stacking_iteration` self time with no name.
+fn publish_counts(state: &AppState, was_stacked: bool, stacking: bool, rejected_because: Option<RejectionReason>) {
+    let _span = tracing::info_span!("publish_state").entered();
+    state.frame_captured(was_stacked, stacking, rejected_because.map(|reason| reason.describe()));
+}
+
+/// What one frame did to the stack, as the rest of the iteration reads it.
+struct FrameStep {
+    registration_succeeded: bool,
+    showing_stack: bool,
+    stack_reset: bool,
+    rejected_because: Option<RejectionReason>,
+    stack_depth: u32,
+    noise: Option<NoiseField>,
+    display_frame: Option<Arc<Frame>>,
+}
+
+impl From<pipeline::StackingOutcome> for FrameStep {
+    fn from(outcome: pipeline::StackingOutcome) -> Self {
+        Self {
+            registration_succeeded: outcome.frame_added,
+            showing_stack: outcome.showing_stack,
+            stack_reset: outcome.stack_reset,
+            rejected_because: outcome.rejected_because(),
+            stack_depth: outcome.stack_depth,
+            noise: outcome.noise,
+            display_frame: outcome.display_frame.map(Arc::new),
+        }
+    }
+}
+
+impl FrameStep {
+    /// Stacking off or failed: the sub itself is shown.
+    fn raw(frame: &Arc<Frame>) -> Self {
+        Self {
+            registration_succeeded: false,
+            showing_stack: false,
+            stack_reset: false,
+            rejected_because: None,
+            stack_depth: 0,
+            noise: None,
+            display_frame: Some(Arc::clone(frame)),
+        }
+    }
+
+    /// After Wanderer's restart. Always displayed, even when the compute was skipped: the
+    /// stack this frame was measured against no longer exists, so the view must stop
+    /// showing it (the raw sub is a handle clone, not a copy), and the verdict against it
+    /// describes nothing the user can act on — Wanderer treats a failed registration as
+    /// the *signal*, not as a fault.
+    fn show_raw_after_restart(&mut self, frame: &Arc<Frame>) {
+        self.display_frame = Some(Arc::clone(frame));
+        self.showing_stack = false;
+        self.stack_depth = 0;
+        self.rejected_because = None;
+    }
+}
+
+/// The raw-CFA stage, rebuilt only when what it is derived from moves: a stage may own
+/// precomputed state, so it must not be reconstructed per frame. The key carries
+/// `stacking_type` as well as the correction settings because the FPN stage is gated on
+/// it — switching to Planetary has to drop that stage even though no sensor setting changed.
+struct CfaStage {
+    key: Option<(SensorCorrectionSettings, StackingType)>,
+    pipeline: CfaPipeline,
+    debayer: DebayerAlgorithm,
+}
+
+impl Default for CfaStage {
+    fn default() -> Self {
+        Self { key: None, pipeline: CfaPipeline::new(), debayer: DebayerAlgorithm::Bilinear }
+    }
+}
+
+impl CfaStage {
+    fn for_settings(&mut self, settings: &CaptureSettings) -> &Self {
+        let key = (settings.sensor_correction.clone(), settings.stacking_type);
+        if self.key.as_ref() == Some(&key) {
+            return self;
+        }
+        self.key = Some(key);
+        self.pipeline = pipeline::build_cfa_pipeline(settings);
+        self.debayer = pipeline::debayer_algorithm(settings);
+        info!(
+            stages = ?self.pipeline.stage_names(),
+            debayer = ?self.debayer,
+            stacking_type = ?settings.stacking_type,
+            "Raw-CFA stage configured"
+        );
+        self
+    }
+
+    fn convert(&self, raw: &RawFrame, info: &CameraInfo) -> CameraResult<Frame> {
+        pipeline::convert_captured_frame(raw, info, &self.pipeline, self.debayer)
+    }
+}
+
+/// Hands this iteration's display frame to the plate solves that want it. `showing_stack`
+/// is the stack's depth when the frame is the stack.
+fn offer_solves(
+    state: &Arc<AppState>,
+    rt: &tokio::runtime::Handle,
+    settings: &CaptureSettings,
+    showing_stack: Option<u32>,
+    display_frame: Option<&Arc<Frame>>,
+) {
+    // Background protection's one plate solve of this stack (Pro). Deep-sky stacks
+    // only: a planetary or comet stack is not registered on the stars.
+    if let (Some(stack_depth), Some(stack)) = (showing_stack, display_frame) {
+        if settings.background_subtraction && settings.stacking_type == StackingType::DeepSky {
+            field_solve::offer(state, rt, stack, stack_depth as usize);
+        }
+    }
+
+    // Trigger plate solving asynchronously. Gated up front: without the Push-To
+    // plugin the solve is a no-op, and spawning it would keep a second handle on
+    // the frame alive long enough to make the render task's `Arc::try_unwrap` fail
+    // and copy instead. Skipped along with the display copy on an iteration that
+    // made none — the solve wants the stack, not a single sub, and `solve_frame` is
+    // rate-limited by `MIN_SOLVE_ATTEMPT_INTERVAL` anyway. Declines outright while a
+    // guide camera is connected: that camera is the solve source then, and offers
+    // frames far more often than an imaging sub arrives.
+    if let (true, Some(frame_to_solve)) = (
+        solving::plate_solve_available(state, solving::SolveSource::Main),
+        display_frame,
+    ) {
+        solving::offer_plate_solve(
+            state,
+            rt,
+            Arc::clone(frame_to_solve),
+            solving::SolveSource::Main,
+        );
+    }
+}
+
+/// Offers a display frame without blocking; dropped if the render task is busy. `false`
+/// once the render task is gone.
+fn send_to_render(render_tx: &mpsc::SyncSender<StackedFrame>, render_depth: &QueueDepth, render_msg: StackedFrame) -> bool {
+    // Publish the count *before* the message, undone on arms that didn't send.
+    // `try_send` makes the frame visible instantly, so counting after leaves a
+    // window where the receiver wakes, runs `taken()` against zero, saturates,
+    // and the sender's `sent()` lands on an already-empty channel — permanently
+    // one above truth: `want_display` is `pending() == 0`, so the stacking task
+    // would stop building display frames and the live view would freeze for the
+    // rest of the session. Over-counting here costs at most one skipped display
+    // copy; under-counting costs the session.
+    render_depth.sent();
+    match render_tx.try_send(render_msg) {
+        Ok(()) => true,
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            render_depth.taken();
+            false
+        }
+        // Full: the frame is dropped, so give back the slot we just claimed. The
+        // depth still reflects the messages the render task really has.
+        Err(mpsc::TrySendError::Full(_)) => {
+            render_depth.taken();
+            true
+        }
+    }
 }
 
 /// Where the stack-reset detector starts: whether stacking counts as already on, and

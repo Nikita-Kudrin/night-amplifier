@@ -212,9 +212,7 @@ fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
         }
         _ => {
             // Bayer or unknown: emit the green channel as greyscale.
-            for i in 0..pixels {
-                bytes.push(to_u8(gp[i]));
-            }
+            bytes.extend(gp[..pixels].iter().map(|&v| to_u8(v)));
         }
     }
 
@@ -256,8 +254,8 @@ fn encode_16bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
             }
         }
         _ => {
-            for i in 0..pixels {
-                bytes.extend_from_slice(&to_u16(gp[i]).to_le_bytes());
+            for &v in &gp[..pixels] {
+                bytes.extend_from_slice(&to_u16(v).to_le_bytes());
             }
         }
     }

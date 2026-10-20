@@ -755,11 +755,13 @@ fn test_camera_info(
 fn connect_seeds_profile_for_new_camera() {
     use crate::state::CaptureSettings;
 
-    let mut settings = CaptureSettings::default();
-    settings.exposure_us = 123_456;
-    settings.gain = 77;
-    settings.cooler_enabled = true;
-    settings.target_temp_c = Some(-5.0);
+    let mut settings = CaptureSettings {
+        exposure_us: 123_456,
+        gain: 77,
+        cooler_enabled: true,
+        target_temp_c: Some(-5.0),
+        ..Default::default()
+    };
 
     let key = "PlayerOne/Neptune-C II".to_string();
     let info = test_camera_info(true, true, true);
@@ -788,9 +790,11 @@ fn connect_seeds_profile_for_new_camera() {
 fn connect_loads_existing_profile() {
     use crate::state::{CameraCaptureProfile, CaptureSettings};
 
-    let mut settings = CaptureSettings::default();
-    settings.exposure_us = 1;
-    settings.gain = 0;
+    let mut settings = CaptureSettings {
+        exposure_us: 1,
+        gain: 0,
+        ..Default::default()
+    };
 
     let key = "PlayerOne/2600MC".to_string();
     settings.camera_profiles.insert(
@@ -824,10 +828,12 @@ fn connect_loads_existing_profile() {
 fn connect_clamps_cooler_for_uncooled_camera() {
     use crate::state::CaptureSettings;
 
-    let mut settings = CaptureSettings::default();
-    settings.cooler_enabled = true;
-    settings.target_temp_c = Some(-10.0);
-    settings.gain = 150;
+    let mut settings = CaptureSettings {
+        cooler_enabled: true,
+        target_temp_c: Some(-10.0),
+        gain: 150,
+        ..Default::default()
+    };
 
     let key = "PlayerOne/Neptune-C II".to_string();
     let info = test_camera_info(false, true, false);
@@ -896,9 +902,11 @@ fn connect_clamps_sensor_mode_for_camera_without_modes() {
     use night_amplifier_core::camera::DualSamplingMode;
     use crate::state::CaptureSettings;
 
-    let mut settings = CaptureSettings::default();
-    settings.sensor_mode_override = Some(DualSamplingMode::LowReadoutNoise);
-    settings.gain = 150;
+    let mut settings = CaptureSettings {
+        sensor_mode_override: Some(DualSamplingMode::LowReadoutNoise),
+        gain: 150,
+        ..Default::default()
+    };
 
     let key = "PlayerOne/Neptune-C II".to_string();
     let info = test_camera_info(false, false, false);
@@ -1191,8 +1199,7 @@ async fn target_change_mid_precool_restarts_ramp() {
             let mut guard = state.slot(CameraRole::Main).handle.lock().unwrap();
             guard
                 .as_mut()
-                .map(|cam| cam.status().ok().map(|s| s.cooler_on))
-                .flatten()
+                .and_then(|cam| cam.status().ok().map(|s| s.cooler_on))
                 .unwrap_or(false)
         };
         // We can't directly read mock's target_temp_c without the Arc handle,

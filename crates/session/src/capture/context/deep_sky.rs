@@ -441,10 +441,12 @@ mod tests {
                 (WeightingPreset::Nebulae, 1.8),
                 (WeightingPreset::Disabled, 3.2),
             ] {
-                let mut settings = CaptureSettings::default();
-                settings.rejection_method = method;
-                settings.weighting_preset = preset;
-                settings.rejection_sigma = sigma;
+                let settings = CaptureSettings {
+                    rejection_method: method,
+                    weighting_preset: preset,
+                    rejection_sigma: sigma,
+                    ..Default::default()
+                };
                 let settings = StackSettings::of(&settings, &night_amplifier_core::plugins::Plugins::none());
 
                 let mut at_start =

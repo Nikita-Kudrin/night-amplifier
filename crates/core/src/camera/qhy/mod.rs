@@ -342,20 +342,14 @@ impl Camera for QhyCamera {
     }
 }
 
-
-#[allow(clippy::too_many_arguments)]
+/// `config`'s exposure, gain, offset, bin and bit depth, read out over `window`.
 fn apply_capture_config(
     camera: &QhyHandle,
-    exposure_us: u64,
-    gain: i32,
-    offset: i32,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-    bin: u32,
-    bits: u32,
+    config: &CaptureConfig,
+    (x, y, w, h): (u32, u32, u32, u32),
 ) -> CameraResult<()> {
+    let (exposure_us, gain, offset) = (config.exposure_us, config.gain, config.offset);
+    let (bin, bits) = (config.bin as u32, bit_depth(config));
     catch_ffi_panic("QHY::set_exposure", || {
         camera
             .set_param(ControlId::Exposure, exposure_us as f64)
@@ -437,19 +431,7 @@ impl SdkExposure for QhyExposure<'_> {
     }
 
     fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
-        let (x, y, w, h) = frame_window(config, self.info);
-        apply_capture_config(
-            self.camera,
-            config.exposure_us,
-            config.gain,
-            config.offset,
-            x,
-            y,
-            w,
-            h,
-            config.bin as u32,
-            bit_depth(config),
-        )
+        apply_capture_config(self.camera, config, frame_window(config, self.info))
     }
 
     fn start(&mut self, acquisition: Acquisition) -> CameraResult<()> {

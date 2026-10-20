@@ -237,12 +237,14 @@ async fn the_saved_png_of_a_cropped_stack_is_what_the_live_view_streams() {
     let coverage = NoiseField::coverage_only(coverage, cells, cells, 3, 256, 256).unwrap();
     let crop = CropRect { x: 16, y: 0, width: 240, height: 256 };
 
-    let mut settings = CaptureSettings::default();
-    settings.preview_resolution = Resolution::Native;
-    settings.auto_crop = true;
-    settings.background_subtraction = true;
-    settings.auto_stretch = true;
-    settings.saturation_boost = true;
+    let mut settings = CaptureSettings {
+        preview_resolution: Resolution::Native,
+        auto_crop: true,
+        background_subtraction: true,
+        auto_stretch: true,
+        saturation_boost: true,
+        ..Default::default()
+    };
     settings.eyepiece.intensity = 0.7;
     settings.eyepiece.black_floor = -0.03;
     settings.eyepiece.dither = true;

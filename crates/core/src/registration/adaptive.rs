@@ -199,19 +199,16 @@ impl AdaptiveRegistration {
 
     /// A rung's fit made into a result: diagnosed as fitted, then refined and measured.
     ///
-    /// The diagnostics judge the rung's own fit, not the refit: the refit locks onto one
-    /// image of each star, so a multi-image sub that the rung fits loosely would read as
-    /// clean and slip past `FrameGate` (one did, and lit the sky around every star in the
-    /// stack). The rung fitted from at most `max_stars`; every star detected pins the
-    /// refit down further.
+    /// The diagnostics judge the rung's own fit, not the refit: the refit locks onto one image
+    /// of each star, so a loosely fitted multi-image sub would pass `FrameGate` as clean (one
+    /// did, and lit the sky around every star in the stack). The rung fitted from at most
+    /// `max_stars`; every star detected pins the refit down further.
     ///
-    /// The refit and the support are each run on the full lists and on the
-    /// clutter-suppressed ones, and the better-supported refit with its stronger support
-    /// stands. Each list fails a different real sub: a nebula's noise maxima outnumber a
-    /// thin sub's stars inside the refit's radius and drag it off (and inflate the
-    /// expected coincidences: Cat's Eye true fits at −3 to −15 on full lists, −9 to −22
-    /// suppressed), while M42's fat stars leave the suppressed lists few pairs. A
-    /// coincidence is weak on both.
+    /// Refit and support run on both the full and the clutter-suppressed lists, and the
+    /// better-supported refit stands. Each list fails a real sub: a nebula's noise maxima drag
+    /// a thin sub's refit off on full lists (Cat's Eye true fits: −3 to −15 full, −9 to −22
+    /// suppressed), and M42's fat stars leave suppressed lists few pairs. A coincidence is
+    /// weak on both.
     fn finish(
         &self,
         (ref_stars, tgt_stars): (&[Star], &[Star]),

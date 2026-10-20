@@ -549,10 +549,10 @@ mod tests {
         model.subtract_from(&mut frame);
         let background_at = |x: usize, y: usize, c: usize| 1.0 + 0.001 - frame.get_pixel(x, y, c);
 
-        for c in 0..3 {
+        for (c, plane) in grid.iter().enumerate() {
             for (jy, &y) in nodes_y.iter().enumerate() {
                 for (ix, &x) in nodes_x.iter().enumerate() {
-                    let want = grid[c][jy * grid_cols + ix];
+                    let want = plane[jy * grid_cols + ix];
                     let got = background_at(x, y, c);
                     assert!(
                         (got - want).abs() < 1e-5,

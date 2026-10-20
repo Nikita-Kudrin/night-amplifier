@@ -2,10 +2,14 @@
 name = "night_amplifier_session"
 version = "0.0.0-dev"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Night Amplifier Contributors"]
 description = "Night Amplifier's application layer: capture sessions, camera lifecycle, settings"
 license-file = "../../LICENSE"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 night_amplifier_core = { workspace = true }

@@ -1,4 +1,4 @@
-use std::os::raw::{c_char, c_int, c_long};
+use std::os::raw::{c_int, c_long};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -6,7 +6,7 @@ pub mod ffi_types;
 pub mod sdk;
 pub mod shim;
 
-use crate::ffi_safety::catch_ffi_panic;
+use crate::ffi_safety::{catch_ffi_panic, fixed_c_str};
 use shim::{
     enumerate_devices, get_camera_property, get_camera_property_ex, parse_fourcc_bayer,
     SvbonyHandle,
@@ -76,8 +76,8 @@ impl CameraProvider for SvbonyProvider {
             .iter()
             .map(|dev| {
                 crate::camera::DeviceIdentity::new(
-                    c_char_array_to_string(&dev.FriendlyName),
-                    crate::camera::identity::normalize_serial(&c_char_array_to_string(
+                    fixed_c_str(&dev.FriendlyName),
+                    crate::camera::identity::normalize_serial(&fixed_c_str(
                         &dev.CameraSN,
                     )),
                 )
@@ -449,17 +449,11 @@ impl SvbonyExposure<'_> {
     }
 }
 
-fn c_char_array_to_string(arr: &[c_char]) -> String {
-    let len = arr.iter().position(|&c| c == 0).unwrap_or(arr.len());
-    let bytes: Vec<u8> = arr[..len].iter().map(|&c| c as u8).collect();
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
 fn build_camera_info(dev: &SVB_CAMERA_INFO, index: i32) -> Option<CameraInfo> {
     let prop = get_camera_property(dev.CameraID)?;
     let prop_ex = get_camera_property_ex(dev.CameraID);
 
-    let name = c_char_array_to_string(&dev.FriendlyName);
+    let name = fixed_c_str(&dev.FriendlyName);
 
     let is_color = prop.IsColorCam != 0;
     let bayer_pattern = if is_color {
@@ -537,6 +531,6 @@ fn build_camera_info(dev: &SVB_CAMERA_INFO, index: i32) -> Option<CameraInfo> {
         hcg_gain: 100,
         sensor_modes: Vec::new(),
         has_dew_heater: false,
-        serial: crate::camera::identity::normalize_serial(&c_char_array_to_string(&dev.CameraSN)),
+        serial: crate::camera::identity::normalize_serial(&fixed_c_str(&dev.CameraSN)),
     })
 }

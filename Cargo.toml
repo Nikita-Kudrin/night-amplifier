@@ -2,6 +2,7 @@
 name = "night_amplifier"
 version = "0.0.0-dev"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Night Amplifier Contributors"]
 description = "Professional-grade EAA (Electronically Assisted Astronomy) live stacking engine"
 license-file = "LICENSE"
@@ -20,6 +21,17 @@ path = "src/main.rs"
 members = ["crates/core", "crates/session"]
 # A bare `cargo build`/`cargo test` at the root covers every crate, as before the split.
 default-members = [".", "crates/core", "crates/session"]
+
+# The toolchain `rust-toolchain.toml` pins, so the newest API in use is no older than it.
+[workspace.package]
+rust-version = "1.99"
+
+# Clippy's defaults plus AGENTS.md's size, nesting and `// SAFETY:` rules (thresholds in
+# clippy.toml); CI runs clippy with `-D warnings`.
+[workspace.lints.clippy]
+too_many_lines = "warn"
+excessive_nesting = "warn"
+undocumented_unsafe_blocks = "warn"
 
 [workspace.dependencies]
 night_amplifier_core = { path = "crates/core" }
@@ -122,6 +134,9 @@ api-schema = [
     "night_amplifier_core/api-schema",
     "night_amplifier_session/api-schema",
 ]
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 night_amplifier_core = { workspace = true, features = ["test-support"] }

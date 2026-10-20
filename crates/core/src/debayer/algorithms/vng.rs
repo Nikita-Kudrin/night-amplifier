@@ -29,6 +29,24 @@ const DIRECTIONS: [(isize, isize); 8] = [
     (-1, -1), // NW
 ];
 
+/// The Bayer plane VNG reads, with its size and pattern: what every per-pixel step needs.
+#[derive(Clone, Copy)]
+struct Mosaic<'a> {
+    data: &'a [f32],
+    width: usize,
+    height: usize,
+    pattern: CfaPattern,
+}
+
+impl Mosaic<'_> {
+    fn bilinear_at(self, x: usize, y: usize) -> (f32, f32, f32) {
+        bilinear_at(self.data, self.width, self.height, x, y, self.pattern)
+    }
+}
+
+/// Colour sums over the low-gradient neighbours, and how many there were.
+type Samples = (f32, f32, f32, usize);
+
 /// Perform VNG debayering on a single-channel Bayer frame
 ///
 /// Uses SIMD-optimized gradient computation for interior pixels.
@@ -36,6 +54,7 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
     let width = frame.width();
     let height = frame.height();
     let input = frame.data();
+    let mosaic = Mosaic { data: input, width, height, pattern };
 
     let mut output = Frame::zeros(width, height, 3)?;
     let (r_plane, g_plane, b_plane) = output.planes_mut();
@@ -73,13 +92,13 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
             // SIMD batch processing
             let mut x = interior_start;
             while x < simd_end {
-                process_4_pixels_simd(input, width, height, x, y, pattern, r_row, g_row, b_row);
+                process_4_pixels_simd(mosaic, x, y, r_row, g_row, b_row);
                 x += 4;
             }
 
             // Handle remaining interior pixels (0-3 pixels)
             while x < interior_end {
-                let (r, g, b) = vng_at(input, width, height, x, y, pattern);
+                let (r, g, b) = vng_at(mosaic, x, y);
                 r_row[x] = r;
                 g_row[x] = g;
                 b_row[x] = b;
@@ -101,22 +120,18 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
 /// Process 4 consecutive pixels using SIMD gradient computation
 #[inline]
 fn process_4_pixels_simd(
-    data: &[f32],
-    width: usize,
-    height: usize,
+    mosaic: Mosaic,
     x_start: usize,
     y: usize,
-    pattern: CfaPattern,
     r_row: &mut [f32],
     g_row: &mut [f32],
     b_row: &mut [f32],
 ) {
     // Compute gradients for all 4 pixels using SIMD
-    let gradients = compute_gradients_simd_4(data, width, x_start, y);
+    let gradients = compute_gradients_simd_4(mosaic.data, mosaic.width, x_start, y);
 
     // Process each pixel with its SIMD-computed gradients
-    for i in 0..4 {
-        let x = x_start + i;
+    for (i, x) in (x_start..x_start + 4).enumerate() {
         let pixel_gradients = [
             gradients[0][i],
             gradients[1][i],
@@ -128,7 +143,7 @@ fn process_4_pixels_simd(
             gradients[7][i],
         ];
 
-        let (r, g, b) = vng_at_with_gradients(data, width, height, x, y, pattern, &pixel_gradients);
+        let (r, g, b) = vng_at_with_gradients(mosaic, x, y, &pixel_gradients);
         r_row[x] = r;
         g_row[x] = g;
         b_row[x] = b;
@@ -227,64 +242,19 @@ fn compute_gradients_simd_4(data: &[f32], width: usize, x_start: usize, y: usize
 /// in batches of 4 using SIMD, then this function handles the rest of the
 /// VNG algorithm for each pixel.
 #[inline]
-fn vng_at_with_gradients(
-    data: &[f32],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    pattern: CfaPattern,
-    gradients: &[f32; 8],
-) -> (f32, f32, f32) {
-    let color = pattern.color_at(x, y);
-    let xi = x as isize;
-    let yi = y as isize;
-
+fn vng_at_with_gradients(mosaic: Mosaic, x: usize, y: usize, gradients: &[f32; 8]) -> (f32, f32, f32) {
     let threshold = compute_threshold(gradients);
-
-    let (r_sum, g_sum, b_sum, count) =
-        accumulate_low_gradient_samples(data, width, height, xi, yi, pattern, gradients, threshold);
-
-    let this = data[y * width + x];
-
-    if count == 0 {
-        return bilinear_at(data, width, height, x, y, pattern);
+    let samples = accumulate_low_gradient_samples(mosaic, x as isize, y as isize, gradients, threshold);
+    if samples.3 == 0 {
+        return mosaic.bilinear_at(x, y);
     }
-
-    combine_with_actual(
-        data, width, height, x, y, pattern, color, this, r_sum, g_sum, b_sum, count,
-    )
+    combine_with_actual(mosaic, x, y, samples)
 }
 
 /// VNG interpolation at a single pixel (scalar fallback)
-fn vng_at(
-    data: &[f32],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    pattern: CfaPattern,
-) -> (f32, f32, f32) {
-    let color = pattern.color_at(x, y);
-    let xi = x as isize;
-    let yi = y as isize;
-
-    let gradients = compute_gradients(data, width, height, xi, yi);
-    let threshold = compute_threshold(&gradients);
-
-    let (r_sum, g_sum, b_sum, count) = accumulate_low_gradient_samples(
-        data, width, height, xi, yi, pattern, &gradients, threshold,
-    );
-
-    let this = data[y * width + x];
-
-    if count == 0 {
-        return bilinear_at(data, width, height, x, y, pattern);
-    }
-
-    combine_with_actual(
-        data, width, height, x, y, pattern, color, this, r_sum, g_sum, b_sum, count,
-    )
+fn vng_at(mosaic: Mosaic, x: usize, y: usize) -> (f32, f32, f32) {
+    let gradients = compute_gradients(mosaic.data, mosaic.width, mosaic.height, x as isize, y as isize);
+    vng_at_with_gradients(mosaic, x, y, &gradients)
 }
 
 /// Compute gradients in 8 directions
@@ -341,15 +311,13 @@ fn compute_threshold(gradients: &[f32; 8]) -> f32 {
 
 /// Accumulate color contributions from directions with low gradients
 fn accumulate_low_gradient_samples(
-    data: &[f32],
-    width: usize,
-    height: usize,
+    mosaic: Mosaic,
     xi: isize,
     yi: isize,
-    pattern: CfaPattern,
     gradients: &[f32; 8],
     threshold: f32,
-) -> (f32, f32, f32, usize) {
+) -> Samples {
+    let Mosaic { data, width, height, pattern } = mosaic;
     let mut r_sum = 0.0f32;
     let mut g_sum = 0.0f32;
     let mut b_sum = 0.0f32;
@@ -377,35 +345,23 @@ fn accumulate_low_gradient_samples(
 }
 
 /// Combine actual pixel value with interpolated values
-#[allow(clippy::too_many_arguments)]
-fn combine_with_actual(
-    data: &[f32],
-    width: usize,
-    height: usize,
-    x: usize,
-    y: usize,
-    pattern: CfaPattern,
-    color: usize,
-    this: f32,
-    r_sum: f32,
-    g_sum: f32,
-    b_sum: f32,
-    count: usize,
-) -> (f32, f32, f32) {
+fn combine_with_actual(mosaic: Mosaic, x: usize, y: usize, samples: Samples) -> (f32, f32, f32) {
+    let (r_sum, g_sum, b_sum, count) = samples;
+    let this = mosaic.data[y * mosaic.width + x];
     let count_f = count as f32;
 
-    match color {
+    match mosaic.pattern.color_at(x, y) {
         0 => {
             // Red pixel
             let g = if g_sum > 0.0 {
                 g_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).1
+                mosaic.bilinear_at(x, y).1
             };
             let b = if b_sum > 0.0 {
                 b_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).2
+                mosaic.bilinear_at(x, y).2
             };
             (this, g, b)
         }
@@ -414,12 +370,12 @@ fn combine_with_actual(
             let r = if r_sum > 0.0 {
                 r_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).0
+                mosaic.bilinear_at(x, y).0
             };
             let b = if b_sum > 0.0 {
                 b_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).2
+                mosaic.bilinear_at(x, y).2
             };
             (r, this, b)
         }
@@ -428,12 +384,12 @@ fn combine_with_actual(
             let r = if r_sum > 0.0 {
                 r_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).0
+                mosaic.bilinear_at(x, y).0
             };
             let g = if g_sum > 0.0 {
                 g_sum / count_f
             } else {
-                bilinear_at(data, width, height, x, y, pattern).1
+                mosaic.bilinear_at(x, y).1
             };
             (r, g, this)
         }

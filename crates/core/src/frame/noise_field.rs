@@ -258,7 +258,7 @@ impl NoiseField {
     /// partial cell at its far edge keeps its value.
     pub fn cropped(&self, rect: &crate::stacking::CropRect) -> Result<Self> {
         rect.check(self.source_width, self.source_height)?;
-        if rect.x % NOISE_REDUCTION != 0 || rect.y % NOISE_REDUCTION != 0 {
+        if !rect.x.is_multiple_of(NOISE_REDUCTION) || !rect.y.is_multiple_of(NOISE_REDUCTION) {
             return Err(StackError::InvalidConfiguration(format!(
                 "crop origin ({}, {}) is not on the {NOISE_REDUCTION} px cell grid",
                 rect.x, rect.y
@@ -276,7 +276,7 @@ impl NoiseField {
         let variance = self
             .variance
             .as_deref()
-            .map(|v| v.chunks_exact(plane).flat_map(|p| cut(p)).collect());
+            .map(|v| v.chunks_exact(plane).flat_map(&cut).collect());
         Self::validated(variance, cut(&self.coverage), width, height, self.channels, rect.width, rect.height)
     }
 
@@ -330,20 +330,19 @@ impl NoiseField {
 
         let variance = self.variance.as_ref().map(|_| {
             let mut variance = vec![f32::NAN; width * height * self.channels];
-            for (channel, plane) in variance.chunks_exact_mut(width * height).enumerate() {
-                for cy in 0..height {
-                    // The output pixels this cell covers, and the source pixel its centre
-                    // corresponds to.
-                    let (oy0, oy1) = cell_span(cy, height, target_height);
-                    let src_y = self.source_pixel(oy0, oy1, target_height, self.source_height);
-                    let ry = axis_mean(row_scale, oy0, oy1);
-                    for cx in 0..width {
-                        let (ox0, ox1) = cell_span(cx, width, target_width);
-                        let src_x = self.source_pixel(ox0, ox1, target_width, self.source_width);
-                        let rx = axis_mean(column_scale, ox0, ox1);
-                        let v = self.sample(channel, src_x, src_y);
-                        plane[cy * width + cx] = if v.is_finite() { v * rx * ry } else { f32::NAN };
-                    }
+            for (row, out) in variance.chunks_exact_mut(width).enumerate() {
+                let (channel, cy) = (row / height, row % height);
+                // The output pixels this cell covers, and the source pixel its centre
+                // corresponds to.
+                let (oy0, oy1) = cell_span(cy, height, target_height);
+                let src_y = self.source_pixel(oy0, oy1, target_height, self.source_height);
+                let ry = axis_mean(row_scale, oy0, oy1);
+                for (cx, out) in out.iter_mut().enumerate() {
+                    let (ox0, ox1) = cell_span(cx, width, target_width);
+                    let src_x = self.source_pixel(ox0, ox1, target_width, self.source_width);
+                    let rx = axis_mean(column_scale, ox0, ox1);
+                    let v = self.sample(channel, src_x, src_y);
+                    *out = if v.is_finite() { v * rx * ry } else { f32::NAN };
                 }
             }
             variance

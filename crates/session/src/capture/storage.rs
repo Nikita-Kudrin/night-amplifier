@@ -315,6 +315,138 @@ pub fn should_stop_on_errors(state: &AppState) -> bool {
     state.stats.failing() && state.stats.counts().stacked == 0
 }
 
+/// Fully renders a stacked frame for PNG export: the exact RGB8 bytes a live
+/// viewer would see, via `process_preview_frame_with_analysis` +
+/// `frame_to_rgb8_downsampled` (the render task's own calls) rather than
+/// `RenderPipeline::process` directly, which skips denoise/pedestal-dither (those
+/// live only in the streaming encoders, AGENTS.md's *Spatial denoising*) — the
+/// direct path once silently dropped noise reduction. `pub` so Pro can test that
+/// regression directly. `coverage`: without it a thin border saved grainier than
+/// observed live (5.7% of bytes differed over a thinly covered quarter).
+pub fn render_stacked_png(
+    mut frame: Frame,
+    settings: &CaptureSettings,
+    plugins: &Plugins,
+    stack_depth: u32,
+    coverage: Option<night_amplifier_core::frame::NoiseField>,
+) -> night_amplifier_core::error::Result<(Vec<u8>, u32, u32)> {
+    use super::analysis::{AnalysisContext, PreviewAnalysis};
+    use super::pipeline::process_preview_frame_with_analysis;
+    use night_amplifier_core::error::StackError;
+    use night_amplifier_core::render::display::frame_to_rgb8_downsampled;
+    use night_amplifier_core::render::display::RenderReadyFrame;
+
+    // The depth is part of the render, not bookkeeping: the stretch spends it on how
+    // calm the sky is (`render::autostretch::depth_grain_gain`), so an export that left
+    // it at the default would tone-curve the same stack differently from the live view.
+    let rendered = process_preview_frame_with_analysis(
+        &mut frame,
+        settings,
+        plugins,
+        AnalysisContext {
+            showing_stack: true,
+            stack_depth,
+        },
+        &mut PreviewAnalysis::new(),
+    )?;
+    let ready_frame = RenderReadyFrame {
+        linear_frame: Arc::new(frame),
+        pipeline_config: rendered.pipeline_config,
+        stretch_result: rendered.stretch_result,
+        noise: coverage.map(Arc::new),
+    };
+
+    frame_to_rgb8_downsampled(&ready_frame, u32::MAX, u32::MAX)
+        .map_err(StackError::InvalidConfiguration)
+}
+
+/// Save stacked result if stacking was enabled and we have frames.
+///
+/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`]. `crop` is
+/// where `auto_crop` already cut the frame from the stack (see `capture::stack_crop`), which
+/// the FITS records as its subframe origin.
+pub fn save_stacked_result(
+    state: &AppState,
+    last_processed_frame: Option<Frame>,
+    stack_depth: u32,
+    coverage: Option<night_amplifier_core::frame::NoiseField>,
+    crop: Option<night_amplifier_core::stacking::CropRect>,
+    camera_info: &ConnectedCameraInfo,
+) {
+    use night_amplifier_core::fits::FitsMetadata;
+    use chrono::Utc;
+
+    let settings = state.settings.snapshot();
+    if !settings.saves_stacked_image() {
+        return;
+    }
+
+    let stacked_count = state.stats.counts().stacked;
+
+    if stacked_count == 0 {
+        return;
+    }
+
+    if let Some(stacked_frame) = last_processed_frame {
+        let mut fits_frame = stacked_frame.clone();
+
+        // Apply background subtraction to FITS if enabled
+        if settings.background_subtraction {
+            use super::pipeline::get_render_pipeline_config;
+            use night_amplifier_core::render::RenderPipeline;
+
+            let pipeline_config = get_render_pipeline_config(&settings, &state.plugins, true);
+            let pipeline = RenderPipeline::new(pipeline_config);
+            if let Err(e) = pipeline.process(&mut fits_frame) {
+                warn!(error = %e, "Failed to apply background subtraction to FITS");
+            }
+        }
+
+        let mut metadata = FitsMetadata::new()
+            .with_exposure_us(settings.exposure_us)
+            .with_gain(settings.gain)
+            .with_camera(&camera_info.info.name)
+            .with_stacked_frames(stacked_count)
+            .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+        if let Some(rect) = crop {
+            metadata = metadata.with_subframe_origin(rect.x, rect.y);
+        }
+
+        if camera_info.info.has_cooler {
+            if let Some(set_temp) = settings.target_temp_c {
+                metadata = metadata.with_set_temp(set_temp);
+            }
+            if let Some(status) = state.get_camera_status(&camera_info.info.name) {
+                metadata = metadata.with_temperature(status.temperature_c);
+            }
+        }
+
+        if let Err(e) = state
+            .disk_writer
+            .queue_stacked_frame(Arc::new(fits_frame), metadata)
+        {
+            // The capture's one irreplaceable output: a writer that stopped responding gave
+            // it up, and the observer must hear it rather than find it missing tomorrow.
+            warn!(error = %e, "Failed to queue stacked FITS frame for saving");
+            state.send_error(format!("The stack was not saved: {e}"));
+        }
+
+        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {
+            Ok((rgb8, width, height)) => {
+                if let Err(e) = state.disk_writer.queue_stacked_png(
+                    Arc::new(rgb8),
+                    width,
+                    height,
+                    stacked_count,
+                ) {
+                    warn!(error = %e, "Failed to queue stretched PNG for saving");
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to process frame for PNG output"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,9 +724,11 @@ mod tests {
     /// target background.
     #[test]
     fn render_stacked_png_applies_the_stretch() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = true;
-        settings.background_subtraction = false;
+        let settings = CaptureSettings {
+            auto_stretch: true,
+            background_subtraction: false,
+            ..Default::default()
+        };
 
         // A perfectly uniform frame makes the black-point solver degenerate (median
         // equals every pixel, sigma is ~0), so black-point subtraction alone nearly
@@ -671,8 +805,10 @@ mod tests {
     /// to stay: 12.2 levels measured, against 34.6 with removal off.
     #[test]
     fn render_stacked_png_removes_the_background_gradient() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = false;
+        let mut settings = CaptureSettings {
+            auto_stretch: false,
+            ..Default::default()
+        };
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
@@ -710,10 +846,12 @@ mod tests {
         let cover = (0..cells * cells).map(|i| if i % cells < cells / 4 { 0.5 } else { 1.0 }).collect();
         let coverage = night_amplifier_core::frame::NoiseField::coverage_only(cover, cells, cells, 3, 256, 256).unwrap();
 
-        let mut settings = CaptureSettings::default();
-        settings.background_subtraction = true;
-        settings.auto_stretch = true;
-        settings.saturation_boost = true;
+        let mut settings = CaptureSettings {
+            background_subtraction: true,
+            auto_stretch: true,
+            saturation_boost: true,
+            ..Default::default()
+        };
         settings.eyepiece.intensity = 0.7;
         settings.eyepiece.black_floor = -0.03;
         settings.eyepiece.dither = true;
@@ -758,8 +896,10 @@ mod tests {
     /// disagreed with the stack by a frame or by a reset.
     #[test]
     fn the_saved_png_is_tone_curved_by_the_depth_it_is_given() {
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = true;
+        let mut settings = CaptureSettings {
+            auto_stretch: true,
+            ..Default::default()
+        };
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
@@ -770,137 +910,5 @@ mod tests {
             shallow != deep,
             "the same stack rendered identically at 1 and 64 frames — the export is not              passing its depth to the stretch"
         );
-    }
-}
-
-/// Fully renders a stacked frame for PNG export: the exact RGB8 bytes a live
-/// viewer would see, via `process_preview_frame_with_analysis` +
-/// `frame_to_rgb8_downsampled` (the render task's own calls) rather than
-/// `RenderPipeline::process` directly, which skips denoise/pedestal-dither (those
-/// live only in the streaming encoders, AGENTS.md's *Spatial denoising*) — the
-/// direct path once silently dropped noise reduction. `pub` so Pro can test that
-/// regression directly. `coverage`: without it a thin border saved grainier than
-/// observed live (5.7% of bytes differed over a thinly covered quarter).
-pub fn render_stacked_png(
-    mut frame: Frame,
-    settings: &CaptureSettings,
-    plugins: &Plugins,
-    stack_depth: u32,
-    coverage: Option<night_amplifier_core::frame::NoiseField>,
-) -> night_amplifier_core::error::Result<(Vec<u8>, u32, u32)> {
-    use super::analysis::{AnalysisContext, PreviewAnalysis};
-    use super::pipeline::process_preview_frame_with_analysis;
-    use night_amplifier_core::error::StackError;
-    use night_amplifier_core::render::display::frame_to_rgb8_downsampled;
-    use night_amplifier_core::render::display::RenderReadyFrame;
-
-    // The depth is part of the render, not bookkeeping: the stretch spends it on how
-    // calm the sky is (`render::autostretch::depth_grain_gain`), so an export that left
-    // it at the default would tone-curve the same stack differently from the live view.
-    let rendered = process_preview_frame_with_analysis(
-        &mut frame,
-        settings,
-        plugins,
-        AnalysisContext {
-            showing_stack: true,
-            stack_depth,
-        },
-        &mut PreviewAnalysis::new(),
-    )?;
-    let ready_frame = RenderReadyFrame {
-        linear_frame: Arc::new(frame),
-        pipeline_config: rendered.pipeline_config,
-        stretch_result: rendered.stretch_result,
-        noise: coverage.map(Arc::new),
-    };
-
-    frame_to_rgb8_downsampled(&ready_frame, u32::MAX, u32::MAX)
-        .map_err(StackError::InvalidConfiguration)
-}
-
-/// Save stacked result if stacking was enabled and we have frames.
-///
-/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`]. `crop` is
-/// where `auto_crop` already cut the frame from the stack (see `capture::stack_crop`), which
-/// the FITS records as its subframe origin.
-pub fn save_stacked_result(
-    state: &AppState,
-    last_processed_frame: Option<Frame>,
-    stack_depth: u32,
-    coverage: Option<night_amplifier_core::frame::NoiseField>,
-    crop: Option<night_amplifier_core::stacking::CropRect>,
-    camera_info: &ConnectedCameraInfo,
-) {
-    use night_amplifier_core::fits::FitsMetadata;
-    use chrono::Utc;
-
-    let settings = state.settings.snapshot();
-    if !settings.saves_stacked_image() {
-        return;
-    }
-
-    let stacked_count = state.stats.counts().stacked;
-
-    if stacked_count == 0 {
-        return;
-    }
-
-    if let Some(stacked_frame) = last_processed_frame {
-        let mut fits_frame = stacked_frame.clone();
-
-        // Apply background subtraction to FITS if enabled
-        if settings.background_subtraction {
-            use super::pipeline::get_render_pipeline_config;
-            use night_amplifier_core::render::RenderPipeline;
-
-            let pipeline_config = get_render_pipeline_config(&settings, &state.plugins, true);
-            let pipeline = RenderPipeline::new(pipeline_config);
-            if let Err(e) = pipeline.process(&mut fits_frame) {
-                warn!(error = %e, "Failed to apply background subtraction to FITS");
-            }
-        }
-
-        let mut metadata = FitsMetadata::new()
-            .with_exposure_us(settings.exposure_us)
-            .with_gain(settings.gain)
-            .with_camera(&camera_info.info.name)
-            .with_stacked_frames(stacked_count)
-            .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
-        if let Some(rect) = crop {
-            metadata = metadata.with_subframe_origin(rect.x, rect.y);
-        }
-
-        if camera_info.info.has_cooler {
-            if let Some(set_temp) = settings.target_temp_c {
-                metadata = metadata.with_set_temp(set_temp);
-            }
-            if let Some(status) = state.get_camera_status(&camera_info.info.name) {
-                metadata = metadata.with_temperature(status.temperature_c);
-            }
-        }
-
-        if let Err(e) = state
-            .disk_writer
-            .queue_stacked_frame(Arc::new(fits_frame), metadata)
-        {
-            // The capture's one irreplaceable output: a writer that stopped responding gave
-            // it up, and the observer must hear it rather than find it missing tomorrow.
-            warn!(error = %e, "Failed to queue stacked FITS frame for saving");
-            state.send_error(format!("The stack was not saved: {e}"));
-        }
-
-        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {
-            Ok((rgb8, width, height)) => {
-                if let Err(e) = state.disk_writer.queue_stacked_png(
-                    Arc::new(rgb8),
-                    width,
-                    height,
-                    stacked_count,
-                ) {
-                    warn!(error = %e, "Failed to queue stretched PNG for saving");
-                }
-            }
-            Err(e) => warn!(error = %e, "Failed to process frame for PNG output"),
-        }
     }
 }

@@ -53,6 +53,55 @@ impl FrameNumbers {
     }
 }
 
+/// What a failed capture means for the capture loop.
+enum AfterFailure {
+    /// Try the next frame.
+    Next,
+    /// Stop the capture; the handle is still good.
+    Stop,
+    /// The handle is gone or stalled for good: recovery takes it from here.
+    Fault,
+}
+
+fn after_failure(
+    e: CameraError,
+    camera: &dyn Camera,
+    stalls: &mut StallTracker,
+    state: &Arc<AppState>,
+    stacking: bool,
+) -> AfterFailure {
+    if let CameraError::Cancelled = e {
+        debug!("Capture cancelled (likely due to settings update), starting next frame");
+        camera.cancel_token().store(false, std::sync::atomic::Ordering::SeqCst);
+        return AfterFailure::Next;
+    }
+
+    // Hard disconnect errors invalidate the handle — don't return it. No
+    // message to the user here: recovery decides whether they need one.
+    if e.is_sdk_disconnected() {
+        error!(error = %e, "Camera disconnected during capture");
+        return AfterFailure::Fault;
+    }
+
+    if let CameraError::ExposureTimeout(budget) = e {
+        let verdict = handle_stall(stalls, StallSite::Main, state, &camera.info().name, budget);
+        if let StallVerdict::Escalate(_) = verdict {
+            return AfterFailure::Fault;
+        }
+        state.frame_rejected(stacking, format!("Frame stalled after {budget:?}"));
+        return AfterFailure::Next;
+    }
+
+    warn!(error = %e, "Frame capture failed");
+    state.frame_rejected(stacking, format!("Capture failed: {}", e));
+    if storage::should_stop_on_errors(state) {
+        error!("Too many capture failures, stopping");
+        state.send_error("Too many capture failures, stopping".to_string());
+        return AfterFailure::Stop;
+    }
+    AfterFailure::Next
+}
+
 /// Camera capture loop running on a dedicated OS thread.
 ///
 /// Acquires frames from the camera and sends them (as `Arc<Frame>`) to the
@@ -126,49 +175,14 @@ pub(crate) fn run_capture_task(
 
         let raw_frame = match capture_result {
             Ok(f) => f,
-            Err(e) => {
-                if let night_amplifier_core::camera::CameraError::Cancelled = e {
-                    debug!(
-                        "Capture cancelled (likely due to settings update), starting next frame"
-                    );
-                    camera
-                        .cancel_token()
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                    continue;
-                }
-
-                // Hard disconnect errors invalidate the handle — don't return it. No
-                // message to the user here: recovery decides whether they need one.
-                if e.is_sdk_disconnected() {
-                    error!(error = %e, "Camera disconnected during capture");
+            Err(e) => match after_failure(e, camera.as_ref(), &mut stalls, &state, settings.stacking) {
+                AfterFailure::Next => continue,
+                AfterFailure::Stop => break,
+                AfterFailure::Fault => {
                     camera_ok = false;
                     break;
                 }
-
-                if let night_amplifier_core::camera::CameraError::ExposureTimeout(budget) = e {
-                    if let StallVerdict::Escalate(_) = handle_stall(
-                        &mut stalls,
-                        StallSite::Main,
-                        &state,
-                        &camera.info().name,
-                        budget,
-                    ) {
-                        camera_ok = false;
-                        break;
-                    }
-                    state.frame_rejected(settings.stacking, format!("Frame stalled after {budget:?}"));
-                    continue;
-                }
-
-                warn!(error = %e, "Frame capture failed");
-                state.frame_rejected(settings.stacking, format!("Capture failed: {}", e));
-                if storage::should_stop_on_errors(&state) {
-                    error!("Too many capture failures, stopping");
-                    state.send_error("Too many capture failures, stopping".to_string());
-                    break;
-                }
-                continue;
-            }
+            },
         };
 
         stalls.frame_delivered();

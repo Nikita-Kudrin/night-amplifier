@@ -39,6 +39,25 @@ fn log_rescan(count: i32) {
     }
 }
 
+/// A `POAConfigValue` the SDK wrote over a zeroed one, so every byte is initialised. Built only
+/// where that holds, never from a value set field by field: `boolValue` leaves 4 of a Linux
+/// `long`'s 8 bytes unset, and reading `intValue` there would be undefined behaviour.
+#[derive(Clone, Copy)]
+struct SdkValue(POAConfigValue);
+
+impl SdkValue {
+    /// `intValue`, widened: C `long` is 32 bits on Windows.
+    fn long(self) -> i64 {
+        // SAFETY: every byte is initialised (see the type), and a `c_long` is valid for any bits.
+        crate::ffi_safety::from_sdk_long(unsafe { self.0.intValue })
+    }
+
+    fn float(self) -> f64 {
+        // SAFETY: as in `long`; an `f64` is valid for any bits.
+        unsafe { self.0.floatValue }
+    }
+}
+
 pub struct CameraDescription {
     properties: POACameraProperties,
 }
@@ -50,12 +69,15 @@ impl CameraDescription {
 
     pub fn open(&self) -> Result<Camera, String> {
         let sdk = PlayerOneSdk::try_load().ok_or("SDK not loaded")?;
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POAOpenCamera(self.properties.cameraID) };
         if err != POAErrors::POA_OK {
             return Err(poa_err("POAOpenCamera", err));
         }
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POAInitCamera(self.properties.cameraID) };
         if err != POAErrors::POA_OK {
+            // SAFETY: plain-value arguments to an SDK function bound with this signature.
             unsafe {
                 sdk.api.POACloseCamera(self.properties.cameraID);
             }
@@ -79,11 +101,13 @@ impl Camera {
         let Some(sdk) = PlayerOneSdk::try_load() else {
             return vec![];
         };
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let count = unsafe { sdk.api.POAGetCameraCount() };
         log_rescan(count);
         let mut cameras = Vec::new();
         for i in 0..count {
             let mut props = POACameraProperties::default();
+            // SAFETY: `props` is a live local the SDK writes during the call.
             if unsafe { sdk.api.POAGetCameraProperties(i, &mut props) } == POAErrors::POA_OK {
                 cameras.push(CameraDescription { properties: props });
             }
@@ -95,16 +119,17 @@ impl Camera {
         self.id
     }
 
-    fn get_config(&self, conf_id: POAConfig) -> Result<(POAConfigValue, bool), String> {
+    fn get_config(&self, conf_id: POAConfig) -> Result<(SdkValue, bool), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
         let mut val = POAConfigValue::default();
         let mut is_auto = POABool::POA_FALSE;
+        // SAFETY: `val`, `is_auto` are live locals the SDK writes during the call.
         let err = unsafe {
             sdk.api
                 .POAGetConfig(self.id, conf_id, &mut val, &mut is_auto)
         };
         if err == POAErrors::POA_OK {
-            Ok((val, is_auto == POABool::POA_TRUE))
+            Ok((SdkValue(val), is_auto == POABool::POA_TRUE))
         } else {
             Err(poa_err("POAGetConfig", err))
         }
@@ -122,6 +147,7 @@ impl Camera {
         } else {
             POABool::POA_FALSE
         };
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POASetConfig(self.id, conf_id, val, auto_val) };
         if err == POAErrors::POA_OK {
             Ok(())
@@ -132,39 +158,41 @@ impl Camera {
 
     pub fn temperature(&self) -> Result<f32, String> {
         self.get_config(POAConfig::POA_TEMPERATURE)
-            .map(|(v, _)| unsafe { v.floatValue } as f32)
+            .map(|(v, _)| v.float() as f32)
     }
 
-    // `intValue` is a C `long`, 32 bits on Windows: widened with `i64::from` here, narrowed
-    // with `to_sdk_long` below.
+    // `intValue` is a C `long`, 32 bits on Windows: widened by `SdkValue::long`, narrowed with
+    // `to_sdk_long` below.
     pub fn gain(&self) -> Result<(i64, bool), String> {
         self.get_config(POAConfig::POA_GAIN)
-            .map(|(v, auto)| (i64::from(unsafe { v.intValue }), auto))
+            .map(|(v, auto)| (v.long(), auto))
     }
 
     pub fn offset(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_OFFSET)
-            .map(|(v, _)| i64::from(unsafe { v.intValue }))
+            .map(|(v, _)| v.long())
     }
 
     pub fn exposure(&self) -> Result<(i64, bool), String> {
         self.get_config(POAConfig::POA_EXPOSURE)
-            .map(|(v, auto)| (i64::from(unsafe { v.intValue }), auto))
+            .map(|(v, auto)| (v.long(), auto))
     }
 
     pub fn cooler_power(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_COOLER_POWER)
-            .map(|(v, _)| i64::from(unsafe { v.intValue }))
+            .map(|(v, _)| v.long())
     }
 
     pub fn cooler(&self) -> Result<bool, String> {
         self.get_config(POAConfig::POA_COOLER)
-            .map(|(v, _)| unsafe { v.boolValue } == POABool::POA_TRUE)
+            // SAFETY: `POA_COOLER` is a `POA_VALUE_BOOL` config, so the SDK wrote `boolValue`,
+            // 0 or 1, both `POABool` variants.
+            .map(|(v, _)| unsafe { v.0.boolValue } == POABool::POA_TRUE)
     }
 
     pub fn dew_heater_power(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_HEATER_POWER)
-            .map(|(v, _)| i64::from(unsafe { v.intValue }))
+            .map(|(v, _)| v.long())
     }
 
     pub fn is_config_supported(&self, conf_id: POAConfig) -> bool {
@@ -237,6 +265,7 @@ impl Camera {
 
     pub fn set_bin(&mut self, bin: u32) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POASetImageBin(self.id, bin as i32) };
         if err == POAErrors::POA_OK {
             Ok(())
@@ -247,6 +276,7 @@ impl Camera {
 
     pub fn set_image_format(&mut self, format: POAImgFormat) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POASetImageFormat(self.id, format) };
         if err == POAErrors::POA_OK {
             Ok(())
@@ -255,8 +285,9 @@ impl Camera {
         }
     }
 
-    pub fn set_roi(&mut self, roi: &crate::camera::playerone::capture::ROI) -> Result<(), String> {
+    pub fn set_roi(&mut self, roi: &crate::camera::playerone::capture::Roi) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe {
             sdk.api
                 .POASetImageStartPos(self.id, roi.start_x as i32, roi.start_y as i32)
@@ -265,6 +296,7 @@ impl Camera {
             return Err(poa_err("POASetImageStartPos", err));
         }
 
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe {
             sdk.api
                 .POASetImageSize(self.id, roi.width as i32, roi.height as i32)
@@ -283,6 +315,7 @@ impl Camera {
         } else {
             POABool::POA_FALSE
         };
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POAStartExposure(self.id, flag) };
         if err == POAErrors::POA_OK {
             Ok(())
@@ -293,6 +326,7 @@ impl Camera {
 
     pub fn stop_exposure(&mut self) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
+        // SAFETY: plain-value arguments to an SDK function bound with this signature.
         let err = unsafe { sdk.api.POAStopExposure(self.id) };
         if err == POAErrors::POA_OK {
             Ok(())
@@ -304,6 +338,7 @@ impl Camera {
     pub fn is_image_ready(&self) -> Result<bool, String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
         let mut ready = POABool::POA_FALSE;
+        // SAFETY: `ready` is a live local the SDK writes during the call.
         let err = unsafe { sdk.api.POAImageReady(self.id, &mut ready) };
         if err == POAErrors::POA_OK {
             Ok(ready == POABool::POA_TRUE)
@@ -315,6 +350,7 @@ impl Camera {
     pub fn get_image_data(&self, buf: &mut [u8], timeout_ms: Option<i32>) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
         let timeout = timeout_ms.unwrap_or(-1);
+        // SAFETY: `buf` is valid for the `buf.len()` bytes the SDK is told it may write.
         let err = unsafe {
             sdk.api
                 .POAGetImageData(self.id, buf.as_mut_ptr(), buf.len() as c_long, timeout)
@@ -331,6 +367,7 @@ impl Camera {
     pub fn dropped_images_count(&self) -> Option<Result<i32, String>> {
         let get = PlayerOneSdk::try_load()?.dropped_images_count?;
         let mut count = 0;
+        // SAFETY: `count` is a live local the SDK writes during the call.
         let err = unsafe { get(self.id, &mut count) };
         Some(if err == POAErrors::POA_OK {
             Ok(count)
@@ -344,10 +381,11 @@ impl Camera {
     pub fn usb_bandwidth_range(&self) -> Option<Result<(i64, i64), String>> {
         let get = PlayerOneSdk::try_load()?.config_attributes?;
         let mut attributes = POAConfigAttributes::default();
+        // SAFETY: `attributes` is a live local the SDK writes during the call.
         let err = unsafe { get(self.id, POAConfig::POA_USB_BANDWIDTH_LIMIT, &mut attributes) };
         Some(if err == POAErrors::POA_OK {
-            let (min, max) = unsafe { (attributes.minValue.intValue, attributes.maxValue.intValue) };
-            Ok((i64::from(min), i64::from(max)))
+            // Zeroed by `default` before the SDK wrote it, as `SdkValue` needs.
+            Ok((SdkValue(attributes.minValue).long(), SdkValue(attributes.maxValue).long()))
         } else {
             Err(poa_err("POAGetConfigAttributesByConfigID", err))
         })
@@ -355,7 +393,7 @@ impl Camera {
 
     pub fn usb_bandwidth_limit(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_USB_BANDWIDTH_LIMIT)
-            .map(|(v, _)| i64::from(unsafe { v.intValue }))
+            .map(|(v, _)| v.long())
     }
 
     pub fn set_usb_bandwidth_limit(&mut self, percent: i64) -> Result<(), String> {
@@ -378,6 +416,7 @@ impl Drop for Camera {
             return;
         }
         if let Some(sdk) = PlayerOneSdk::try_load() {
+            // SAFETY: plain-value arguments to an SDK function bound with this signature.
             unsafe {
                 sdk.api.POACloseCamera(self.id);
             }

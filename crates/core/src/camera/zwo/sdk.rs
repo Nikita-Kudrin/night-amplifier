@@ -95,6 +95,8 @@ impl ZwoSdk {
                 "libASICamera2.so"
             };
 
+            // SAFETY: the `ZwoSdkApi` struct mirrors the SDK header's signatures, and loading runs
+            // only the vendor library's initialisers.
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
                     info!("ZWO SDK ({}) loaded successfully.", lib_name);

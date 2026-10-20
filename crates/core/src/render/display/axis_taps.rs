@@ -24,7 +24,10 @@ use std::sync::{Arc, Mutex};
 /// both families and both cameras.
 const CACHED_AXES: usize = 16;
 
-static CACHE: Mutex<Vec<((usize, usize), Arc<AxisTaps>)>> = Mutex::new(Vec::new());
+/// `(source_len, target_len)` and the taps built for it.
+type CacheEntry = ((usize, usize), Arc<AxisTaps>);
+
+static CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
 
 pub(super) struct AxisTaps {
     taps: usize,

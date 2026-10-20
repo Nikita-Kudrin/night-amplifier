@@ -156,7 +156,7 @@ pub(super) fn encode_watched(
 
     [(StreamKind::Lossless, lossless), (StreamKind::Jpeg, jpeg)]
         .into_iter()
-        .filter_map(|(kind, result)| failures.to_report(kind, result))
+        .filter_map(|(kind, result)| failures.report(kind, result))
         .collect()
 }
 
@@ -232,7 +232,7 @@ pub(super) struct FailureReports {
 
 impl FailureReports {
     /// The error worth reporting for `kind` now: `None` on success or a repeat.
-    pub(super) fn to_report(&mut self, kind: StreamKind, result: Result<(), String>) -> Option<String> {
+    pub(super) fn report(&mut self, kind: StreamKind, result: Result<(), String>) -> Option<String> {
         let last = &mut self.last[kind as usize];
         match result {
             Ok(()) => {

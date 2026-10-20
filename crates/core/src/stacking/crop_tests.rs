@@ -102,18 +102,7 @@ fn the_rectangle_found_is_the_largest_there_is() {
         let (cw, ch) = (1 + (next() % 9) as usize, 1 + (next() % 9) as usize);
         let cells: Vec<f32> = (0..cw * ch).map(|_| if next() % 4 == 0 { 0.3 } else { 1.0 }).collect();
         let good = |x: usize, y: usize| cells[y * cw + x] >= PICK_COVERAGE;
-        let mut best = 0;
-        for y0 in 0..ch {
-            for x0 in 0..cw {
-                for y1 in y0 + 1..=ch {
-                    for x1 in x0 + 1..=cw {
-                        if (y0..y1).all(|y| (x0..x1).all(|x| good(x, y))) {
-                            best = best.max((x1 - x0) * (y1 - y0));
-                        }
-                    }
-                }
-            }
-        }
+        let best = brute_force_largest(cw, ch, good);
         let f = field(cells.clone(), cw, ch, cw * NOISE_REDUCTION, ch * NOISE_REDUCTION);
         let found = largest_covered(&f, PICK_COVERAGE).map_or(0, |r| r.area() / (NOISE_REDUCTION * NOISE_REDUCTION));
         assert_eq!(found, best, "{cw}x{ch} mask {cells:?}");
@@ -121,6 +110,21 @@ fn the_rectangle_found_is_the_largest_there_is() {
             assert!(min_coverage(&f, &rect).unwrap() >= PICK_COVERAGE, "{rect:?} holds a thin cell");
         }
     }
+}
+
+/// Area of the largest all-`good` rectangle, by trying every one.
+fn brute_force_largest(cw: usize, ch: usize, good: impl Fn(usize, usize) -> bool) -> usize {
+    let mut best = 0;
+    for (y0, x0) in (0..ch).flat_map(|y0| (0..cw).map(move |x0| (y0, x0))) {
+        for y1 in y0 + 1..=ch {
+            for x1 in x0 + 1..=cw {
+                if (y0..y1).all(|y| (x0..x1).all(|x| good(x, y))) {
+                    best = best.max((x1 - x0) * (y1 - y0));
+                }
+            }
+        }
+    }
+    best
 }
 
 // ---------------------------------------------------------------------------

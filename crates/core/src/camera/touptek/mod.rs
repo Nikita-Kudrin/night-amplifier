@@ -8,7 +8,7 @@ pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
+use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle, WaitError};
 
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
@@ -329,11 +329,12 @@ impl SdkExposure for TouptekExposure<'_> {
             }) {
                 Ok(Ok(frame)) => {
                     return Poll::Ready {
-                        width: frame.width as u32,
-                        height: frame.height as u32,
+                        width: frame.width,
+                        height: frame.height,
                     }
                 }
-                Ok(Err(_)) => return Poll::Pending,
+                Ok(Err(WaitError::NotReady(_))) => return Poll::Pending,
+                Ok(Err(WaitError::Refused(e))) => CameraError::ExposureFailed(e),
                 Err(e) => CameraError::ExposureFailed(e.to_string()),
             }
         };
@@ -382,6 +383,8 @@ fn build_camera_info_from_device(dev: &ToupcamDeviceV2, id: i32) -> Option<Camer
         return None;
     }
 
+    // SAFETY: non-null (checked above), and it points into the SDK's model table, which lives as
+    // long as the library.
     let model = unsafe { &*dev.model };
     let name = tchar_to_string(&dev.displayname);
     let flag = model.flag;

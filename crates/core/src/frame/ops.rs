@@ -8,7 +8,7 @@ use rayon::prelude::*;
 /// only means anything while both round identically.
 #[inline(always)]
 pub fn sample_to_u8(value: f32) -> u8 {
-    (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
+    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 /// Canonical normalised-f32 → 16-bit sample conversion. Truncates, unlike
@@ -144,7 +144,7 @@ impl Frame {
                 .zip(g.par_chunks(pixels_per_chunk))
                 .zip(b.par_chunks(pixels_per_chunk))
                 .for_each(|(((px_block, r_block), g_block), b_block)| {
-                    for (i, px) in px_block.chunks_exact_mut(3).enumerate() {
+                    for (i, px) in px_block.as_chunks_mut::<3>().0.iter_mut().enumerate() {
                         px[0] = convert(r_block[i]);
                         px[1] = convert(g_block[i]);
                         px[2] = convert(b_block[i]);

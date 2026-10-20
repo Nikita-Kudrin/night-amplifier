@@ -124,7 +124,7 @@ impl Regions {
 }
 
 fn green(rgb8: &[u8]) -> Vec<f64> {
-    rgb8.chunks_exact(3).map(|p| p[1] as f64).collect()
+    rgb8.as_chunks::<3>().0.iter().map(|p| p[1] as f64).collect()
 }
 
 fn median(values: &mut [f64]) -> f64 {

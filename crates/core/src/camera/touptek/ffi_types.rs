@@ -126,7 +126,7 @@ fn decode(units: &[TChar]) -> String {
 
 #[cfg(not(windows))]
 fn decode(units: &[TChar]) -> String {
-    let bytes: Vec<u8> = units.iter().map(|&unit| unit as u8).collect();
+    let bytes: Vec<u8> = units.iter().map(|unit| unit.to_ne_bytes()[0]).collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 

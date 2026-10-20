@@ -32,6 +32,7 @@ pub struct BackgroundModel {
 }
 
 impl BackgroundModel {
+    // One argument per model field: a parameter struct would be `BackgroundModel` again.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         grid_values: Vec<Vec<f32>>,
@@ -63,6 +64,7 @@ impl BackgroundModel {
     ///
     /// When `nodes_x` and `nodes_y` are present, `subtract_from()` uses a scanline
     /// delta-stepping inner loop instead of per-pixel weight lookups.
+    // As `new`, plus the node coordinates.
     #[allow(clippy::too_many_arguments)]
     pub fn with_node_coords(
         grid_values: Vec<Vec<f32>>,
@@ -425,8 +427,8 @@ impl BackgroundModel {
                 .par_chunks_mut(width)
                 .enumerate()
                 .for_each(|(y, row)| {
-                    for x in 0..width {
-                        row[x] = self.get_background(x, y, c);
+                    for (x, out) in row.iter_mut().enumerate() {
+                        *out = self.get_background(x, y, c);
                     }
                 });
         }

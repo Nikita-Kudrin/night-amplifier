@@ -213,6 +213,7 @@ pub struct _POACameraProperties {
     #[doc = "< reserved, the size of reserved has changed from 256 to 248 since V3.3.0"]
     pub reserved: [::std::os::raw::c_char; 248usize],
 }
+// bindgen's layout checks: a mismatch indexes past a one-element array.
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of _POACameraProperties"][::std::mem::size_of::<_POACameraProperties>() - 992usize];
@@ -261,6 +262,8 @@ const _: () = {
 impl Default for _POACameraProperties {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: all-zero is valid for every field: integers, floats, `char` arrays and enums with
+        // a variant at 0.
         unsafe {
             ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
             s.assume_init()
@@ -278,6 +281,7 @@ pub union _POAConfigValue {
     #[doc = "< POABool"]
     pub boolValue: POABool,
 }
+// bindgen's layout checks: a mismatch indexes past a one-element array.
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of _POAConfigValue"][::std::mem::size_of::<_POAConfigValue>() - 8usize];
@@ -292,6 +296,8 @@ const _: () = {
 impl Default for _POAConfigValue {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: all-zero is valid for every field: integers, floats, `char` arrays and enums with
+        // a variant at 0.
         unsafe {
             ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
             s.assume_init()
@@ -325,6 +331,7 @@ pub struct _POAConfigAttributes {
     #[doc = "< reserved"]
     pub reserved: [::std::os::raw::c_char; 64usize],
 }
+// bindgen's layout checks: a mismatch indexes past a one-element array.
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of _POAConfigAttributes"][::std::mem::size_of::<_POAConfigAttributes>() - 304usize];
@@ -355,6 +362,8 @@ const _: () = {
 impl Default for _POAConfigAttributes {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: all-zero is valid for every field: integers, floats, `char` arrays and enums with
+        // a variant at 0.
         unsafe {
             ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
             s.assume_init()
@@ -370,6 +379,7 @@ pub struct _POASensorModeInfo {
     #[doc = "< sensor mode description, may be useful for tooltip"]
     pub desc: [::std::os::raw::c_char; 128usize],
 }
+// bindgen's layout checks: a mismatch indexes past a one-element array.
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of _POASensorModeInfo"][::std::mem::size_of::<_POASensorModeInfo>() - 192usize];
@@ -382,6 +392,8 @@ const _: () = {
 impl Default for _POASensorModeInfo {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        // SAFETY: all-zero is valid for every field: integers, floats, `char` arrays and enums with
+        // a variant at 0.
         unsafe {
             ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
             s.assume_init()

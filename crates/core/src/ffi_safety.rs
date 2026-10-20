@@ -176,9 +176,37 @@ where
     T::try_from(value).map_err(|_| format!("{name} {value} does not fit the camera SDK's `long`"))
 }
 
+/// An SDK `long` as `i64`: a widening on Windows, where C `long` is 32 bits.
+// A no-op on 64-bit Unix, which clippy would flag on the platform CI lints.
+#[allow(clippy::useless_conversion)]
+pub fn from_sdk_long(value: std::os::raw::c_long) -> i64 {
+    i64::from(value)
+}
+
+/// A string an SDK wrote into a fixed `char` array, up to its NUL or the array's end: an
+/// SDK that fills the whole array leaves no terminator, and `CStr::from_ptr` would read on.
+pub fn fixed_c_str(chars: &[std::os::raw::c_char]) -> String {
+    let bytes: Vec<u8> = chars.iter().take_while(|&&c| c != 0).map(|c| c.to_ne_bytes()[0]).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chars(s: &[u8]) -> Vec<std::os::raw::c_char> {
+        s.iter().map(|&b| std::os::raw::c_char::from_ne_bytes([b])).collect()
+    }
+
+    #[test]
+    fn a_fixed_c_str_stops_at_its_nul() {
+        assert_eq!(fixed_c_str(&chars(b"ASI2600MC\0junk")), "ASI2600MC");
+    }
+
+    #[test]
+    fn a_fixed_c_str_without_a_nul_stops_at_the_array_end() {
+        assert_eq!(fixed_c_str(&chars(b"FULL")), "FULL");
+    }
 
     /// `i32` stands in for Windows' 32-bit `long`, whatever the host.
     #[test]

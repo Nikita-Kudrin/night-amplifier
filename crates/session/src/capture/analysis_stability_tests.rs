@@ -43,6 +43,12 @@ impl Scene {
         let mut signal = vec![0.0f32; plane * 3];
         let mut in_patch = vec![false; plane];
         let mut near_star = vec![false; plane];
+        // Grey light: the same amount on all three planes at pixel `i`.
+        let add = |signal: &mut [f32], i: usize, v: f32| {
+            for c in 0..3 {
+                signal[c * plane + i] += v;
+            }
+        };
 
         for y in 0..SIZE {
             for x in 0..SIZE {
@@ -68,9 +74,7 @@ impl Scene {
                 for y in y0..y0 + PATCH_SIDE {
                     for x in x0..x0 + PATCH_SIDE {
                         in_patch[y * SIZE + x] = true;
-                        for c in 0..3 {
-                            signal[c * plane + y * SIZE + x] += PATCH;
-                        }
+                        add(&mut signal, y * SIZE + x, PATCH);
                     }
                 }
             }
@@ -84,9 +88,7 @@ impl Scene {
                         let d2 = ((x as f32 - sx as f32).powi(2) + (y as f32 - sy as f32).powi(2))
                             / (2.0 * 1.5f32.powi(2));
                         near_star[y * SIZE + x] = true;
-                        for c in 0..3 {
-                            signal[c * plane + y * SIZE + x] += peak * (-d2).exp();
-                        }
+                        add(&mut signal, y * SIZE + x, peak * (-d2).exp());
                     }
                 }
             }
@@ -282,7 +284,7 @@ fn an_exposure_change_is_followed_at_once() {
     let seen = live_view(40, |i| if i < CHANGE { 1.0 } else { 2.0 });
     let settled = &seen[CHANGE + 5..];
     let settled_mean = |f: &dyn Fn(&Seen) -> f64| {
-        settled.iter().map(|s| f(s)).sum::<f64>() / settled.len() as f64
+        settled.iter().map(f).sum::<f64>() / settled.len() as f64
     };
     let first = seen[CHANGE];
     for c in 0..3 {

@@ -95,8 +95,11 @@ struct FakeField {
     calls: AtomicUsize,
     cancels: AtomicUsize,
     /// What the last call was handed: the camera, the focal length, the frame's channels.
-    seen: Mutex<Option<(Option<String>, Option<f32>, usize)>>,
+    seen: Mutex<Option<SeenCall>>,
 }
+
+/// The camera, the focal length, the frame's channels.
+type SeenCall = (Option<String>, Option<f32>, usize);
 
 #[async_trait]
 impl FieldObjectsPlugin for FakeField {

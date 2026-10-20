@@ -68,9 +68,13 @@ pub type SdkVersion = unsafe extern "C" fn() -> *const c_char;
 
 /// The SDK's own version, if it says. Field logs need it to tell an SDK fix from a bug.
 fn sdk_version(lib_name: &str) -> Option<String> {
+    // SAFETY: `SdkVersion` is the symbol's C signature, and the SDK stays loaded: this runs only
+    // from `try_load`'s `Ok(api)` arm, whose `api` holds it until it moves into the static.
     let version = unsafe { crate::native_library::optional_symbol_lazy::<SdkVersion>(lib_name, "POAGetSDKVersion") }?;
     let text = crate::ffi_safety::catch_ffi_panic("PlayerOne::sdk_version", || {
+        // SAFETY: no arguments, through the signature it was looked up with.
         let ptr = unsafe { version() };
+        // SAFETY: non-null, and `POAGetSDKVersion` returns the SDK's own NUL-terminated string.
         (!ptr.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
     });
     text.ok().flatten()
@@ -96,11 +100,15 @@ impl PlayerOneSdk {
                 "libPlayerOneCamera.so"
             };
 
+            // SAFETY: the `PlayerOneSdkApi` struct mirrors the SDK header's signatures, and loading
+            // runs only the vendor library's initialisers.
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
                     let version = sdk_version(lib_name).unwrap_or_else(|| "unknown".to_string());
                     info!(version = %version, "PlayerOne SDK ({}) loaded successfully.", lib_name);
                     use crate::native_library::optional_symbol_lazy;
+                    // SAFETY: both types are the symbols' C signatures, and the SDK stays loaded:
+                    // `api` holds it here, then the static it moves into.
                     let (dropped_images_count, config_attributes) = unsafe {
                         (
                             optional_symbol_lazy::<DroppedImagesCount>(

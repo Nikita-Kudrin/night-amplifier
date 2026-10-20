@@ -42,7 +42,7 @@ fn test_rgb8_lz4_encode_decode_roundtrip() {
     assert_eq!(decompressed[2], 0); // B
 
     // Pixel (1,1) offset = (1*4 + 1) * 3 = 15
-    let offset_1_1 = (1 * 4 + 1) * 3;
+    let offset_1_1 = (4 + 1) * 3;
     assert_eq!(decompressed[offset_1_1], 0); // R
                                              // G should be ~128 (0.5 * 255 + 0.5 = 128)
     assert!((decompressed[offset_1_1 + 1] as i32 - 128).abs() <= 1);

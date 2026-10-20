@@ -43,19 +43,16 @@ pub fn compute_alignment(
         return (rx - fx, ry - fy, 0.0);
     }
 
-    let (best_dx, best_dy, best_corr) = search_best_correlation(
-        &frame_lum,
-        &ref_roi,
-        ref_mean,
-        ref_std,
+    let matcher = RoiMatcher {
+        frame_lum: &frame_lum,
         width,
         height,
-        roi_x,
-        roi_y,
-        roi_w,
-        roi_h,
-        search_radius,
-    );
+        ref_roi: &ref_roi,
+        ref_mean,
+        ref_std,
+        roi: clamped_roi,
+    };
+    let (best_dx, best_dy, best_corr) = matcher.search(search_radius);
     let best_corr = best_corr.max(0.0); // Ensure it's not f32::MIN if no matches found
 
     // If correlation is poor, fallback to centroid
@@ -69,10 +66,7 @@ pub fn compute_alignment(
         && best_dx.abs() < search_radius as i32
         && best_dy.abs() < search_radius as i32
     {
-        let (sub_dx, sub_dy) = subpixel_refine(
-            &frame_lum, &ref_roi, ref_mean, ref_std, width, height, roi_x, roi_y, roi_w, roi_h,
-            best_dx, best_dy,
-        );
+        let (sub_dx, sub_dy) = matcher.subpixel_refine(best_dx, best_dy);
         // Negate to match centroid convention (dx = rx - fx)
         return (
             -(best_dx as f32 + sub_dx),
@@ -122,47 +116,62 @@ fn clamp_roi(roi: &AlignmentRoi, width: usize, height: usize) -> (usize, usize, 
     (roi_x, roi_y, roi_w, roi_h)
 }
 
-/// Searches for the best correlation within the search radius.
-fn search_best_correlation(
-    frame_lum: &[f32],
-    ref_roi: &[f32],
-    ref_mean: f32,
-    ref_std: f32,
+/// The reference ROI, correlated against shifted windows of one frame.
+struct RoiMatcher<'a> {
+    frame_lum: &'a [f32],
     width: usize,
     height: usize,
-    roi_x: usize,
-    roi_y: usize,
-    roi_w: usize,
-    roi_h: usize,
-    search_radius: usize,
-) -> (i32, i32, f32) {
-    let mut best_corr = f32::MIN;
-    let mut best_dx = 0i32;
-    let mut best_dy = 0i32;
-    let search = search_radius as i32;
+    ref_roi: &'a [f32],
+    ref_mean: f32,
+    ref_std: f32,
+    /// `(x, y, w, h)` of the reference window, already clamped to the frame.
+    roi: (usize, usize, usize, usize),
+}
 
-    for dy in -search..=search {
-        for dx in -search..=search {
-            let shifted_x = (roi_x as i32 + dx).max(0) as usize;
-            let shifted_y = (roi_y as i32 + dy).max(0) as usize;
+impl RoiMatcher<'_> {
+    /// NCC against the window shifted by `(dx, dy)`; `None` off the frame or on a flat window.
+    fn ncc_at(&self, dx: i32, dy: i32) -> Option<f32> {
+        let (roi_x, roi_y, roi_w, roi_h) = self.roi;
+        let shifted_x = (roi_x as i32 + dx).max(0) as usize;
+        let shifted_y = (roi_y as i32 + dy).max(0) as usize;
+        if shifted_x + roi_w > self.width || shifted_y + roi_h > self.height {
+            return None;
+        }
+        let frame_roi = extract_roi(self.frame_lum, self.width, shifted_x, shifted_y, roi_w, roi_h);
+        compute_ncc(self.ref_roi, &frame_roi, self.ref_mean, self.ref_std)
+    }
 
-            if shifted_x + roi_w > width || shifted_y + roi_h > height {
-                continue;
-            }
-
-            let frame_roi = extract_roi(frame_lum, width, shifted_x, shifted_y, roi_w, roi_h);
-
-            if let Some(ncc) = compute_ncc(ref_roi, &frame_roi, ref_mean, ref_std) {
-                if ncc > best_corr {
-                    best_corr = ncc;
-                    best_dx = dx;
-                    best_dy = dy;
+    /// Searches for the best correlation within the search radius.
+    fn search(&self, search_radius: usize) -> (i32, i32, f32) {
+        let mut best = (0i32, 0i32, f32::MIN);
+        let search = search_radius as i32;
+        for dy in -search..=search {
+            for dx in -search..=search {
+                match self.ncc_at(dx, dy) {
+                    Some(ncc) if ncc > best.2 => best = (dx, dy, ncc),
+                    _ => {}
                 }
             }
         }
+        best
     }
 
-    (best_dx, best_dy, best_corr)
+    /// Subpixel refinement using parabolic interpolation.
+    fn subpixel_refine(&self, best_dx: i32, best_dy: i32) -> (f32, f32) {
+        let mut corr_grid = [[0.0f32; 3]; 3];
+        for (iy, dy) in (-1..=1).enumerate() {
+            for (ix, dx) in (-1..=1).enumerate() {
+                if let Some(ncc) = self.ncc_at(best_dx + dx, best_dy + dy) {
+                    corr_grid[iy][ix] = ncc;
+                }
+            }
+        }
+
+        let sub_x = parabolic_fit(corr_grid[1][0], corr_grid[1][1], corr_grid[1][2]);
+        let sub_y = parabolic_fit(corr_grid[0][1], corr_grid[1][1], corr_grid[2][1]);
+
+        (sub_x.clamp(-0.5, 0.5), sub_y.clamp(-0.5, 0.5))
+    }
 }
 
 /// Computes normalized cross-correlation between two ROIs.
@@ -199,46 +208,6 @@ fn extract_roi(
         }
     }
     roi
-}
-
-/// Subpixel refinement using parabolic interpolation.
-fn subpixel_refine(
-    frame_lum: &[f32],
-    ref_roi: &[f32],
-    ref_mean: f32,
-    ref_std: f32,
-    width: usize,
-    height: usize,
-    roi_x: usize,
-    roi_y: usize,
-    roi_w: usize,
-    roi_h: usize,
-    best_dx: i32,
-    best_dy: i32,
-) -> (f32, f32) {
-    let mut corr_grid = [[0.0f32; 3]; 3];
-
-    for (iy, dy_offset) in [-1i32, 0, 1].iter().enumerate() {
-        for (ix, dx_offset) in [-1i32, 0, 1].iter().enumerate() {
-            let dx = best_dx + dx_offset;
-            let dy = best_dy + dy_offset;
-
-            let shifted_x = (roi_x as i32 + dx).max(0) as usize;
-            let shifted_y = (roi_y as i32 + dy).max(0) as usize;
-
-            if shifted_x + roi_w <= width && shifted_y + roi_h <= height {
-                let frame_roi = extract_roi(frame_lum, width, shifted_x, shifted_y, roi_w, roi_h);
-                if let Some(ncc) = compute_ncc(ref_roi, &frame_roi, ref_mean, ref_std) {
-                    corr_grid[iy][ix] = ncc;
-                }
-            }
-        }
-    }
-
-    let sub_x = parabolic_fit(corr_grid[1][0], corr_grid[1][1], corr_grid[1][2]);
-    let sub_y = parabolic_fit(corr_grid[0][1], corr_grid[1][1], corr_grid[2][1]);
-
-    (sub_x.clamp(-0.5, 0.5), sub_y.clamp(-0.5, 0.5))
 }
 
 /// Fits a parabola to three samples and returns the subpixel offset.

@@ -54,7 +54,7 @@ fn test_camera_info_response_from_info() {
         has_cooler: true,
         bit_depth: 14,
         min_exposure_us: 50,
-        max_exposure_us: 7200_000_000,
+        max_exposure_us: 7_200_000_000,
         min_gain: 0,
         max_gain: 600,
         ..Default::default()
@@ -72,7 +72,7 @@ fn test_camera_info_response_from_info() {
     assert!(response.has_cooler);
     assert_eq!(response.bit_depth, 14);
     assert_eq!(response.min_exposure_us, 50);
-    assert_eq!(response.max_exposure_us, 7200_000_000);
+    assert_eq!(response.max_exposure_us, 7_200_000_000);
     assert_eq!(response.min_gain, 0);
     assert_eq!(response.max_gain, 600);
 }

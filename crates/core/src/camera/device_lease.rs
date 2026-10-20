@@ -182,6 +182,12 @@ impl DeviceLease {
         true
     }
 
+    /// Whether [`Self::begin_close`] has run on this lease, authorized or not: its handle must
+    /// not reach the SDK again. One atomic load, so a shim may ask on every call.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
     pub fn provider(&self) -> &'static str {
         self.provider
     }
@@ -206,6 +212,19 @@ mod tests {
             !lease.begin_close(),
             "second close on the same lease must be refused"
         );
+    }
+
+    #[test]
+    fn a_lease_reads_closed_from_its_first_close_on() {
+        let lease = DeviceLease::acquire_unique("test-is-closed");
+        assert!(!lease.is_closed());
+        assert!(lease.begin_close());
+        assert!(lease.is_closed());
+
+        let stale = DeviceLease::acquire("test-is-closed-superseded", 0);
+        let _fresh = DeviceLease::acquire("test-is-closed-superseded", 0);
+        assert!(!stale.begin_close());
+        assert!(stale.is_closed(), "a refused close still retires the handle");
     }
 
     #[test]

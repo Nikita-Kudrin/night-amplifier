@@ -91,13 +91,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn an_eagerly_loaded_library_is_callable() {
+        // SAFETY: libm is the C runtime's own, and `LibmApi` is `cos`'s signature.
         let libm = unsafe { load_eagerly::<LibmApi>("libm.so.6") }.expect("libm loads");
+        // SAFETY: a plain value, to libm's `cos`.
         assert_eq!(unsafe { libm.cos(0.0) }, 1.0);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_library_is_reported_as_missing() {
+        // SAFETY: the file does not exist, so nothing loads.
         let error = unsafe { load_eagerly::<LibmApi>("libnot-a-vendor-sdk.so") }
             .err()
             .expect("no such library");
@@ -107,9 +110,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn an_optional_symbol_is_found_only_when_present() {
+        // SAFETY: `cos` has this signature, and libm stays loaded as part of the C runtime.
         let cos = unsafe { optional_symbol::<unsafe extern "C" fn(f64) -> f64>("libm.so.6", "cos") }
             .expect("libm exports cos");
+        // SAFETY: a plain value, through `cos`'s own signature.
         assert_eq!(unsafe { cos(0.0) }, 1.0);
+        // SAFETY: libm has no such symbol, so the lookup fails and nothing is called.
         let absent = unsafe { optional_symbol::<unsafe extern "C" fn(bool)>("libm.so.6", "EnableQHYCCDMessage") };
         assert!(absent.is_none());
     }

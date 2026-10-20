@@ -1,10 +1,12 @@
 fn to_ready_frame(
     frame: &night_amplifier::frame::Frame,
 ) -> night_amplifier::render::display::RenderReadyFrame {
-    let mut config = night_amplifier::render::RenderPipelineConfig::default();
-    config.contrast = false;
-    config.auto_stretch = false;
-    config.saturation_boost = false;
+    let config = night_amplifier::render::RenderPipelineConfig {
+        contrast: false,
+        auto_stretch: false,
+        saturation_boost: false,
+        ..Default::default()
+    };
     night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
@@ -489,7 +491,7 @@ fn probe_jpeg_encoding_candidates() {
                 .data()
                 .iter()
                 .flat_map(|&v| {
-                    let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                    let val = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
                     [val, val, val]
                 })
                 .collect()

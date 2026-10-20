@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+// The generated wrappers mirror the C signatures, argument for argument.
+#![allow(clippy::too_many_arguments)]
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar};
 use std::sync::OnceLock;
 use tracing::{info, warn};
@@ -126,10 +128,6 @@ pub struct SvbonySdk {
     pub api: Container<SvbonyApi>,
 }
 
-// Ensure the Container can be shared safely across threads.
-unsafe impl Send for SvbonySdk {}
-unsafe impl Sync for SvbonySdk {}
-
 static SDK: OnceLock<Option<SvbonySdk>> = OnceLock::new();
 
 impl SvbonySdk {
@@ -138,6 +136,8 @@ impl SvbonySdk {
             crate::native_library::preload_libusb();
             let mut failures = Vec::new();
             for &name in library_candidates(std::env::consts::OS) {
+                // SAFETY: the `SvbonyApi` struct mirrors the SDK header's signatures, and loading
+                // runs only the vendor library's initialisers.
                 match unsafe { crate::native_library::load_eagerly::<SvbonyApi>(name) } {
                     Ok(container) => {
                         info!("SVBony SDK ({}) loaded successfully.", name);
@@ -175,22 +175,6 @@ fn library_candidates(os: &str) -> &'static [&'static str] {
         "windows" => &["SVBCameraSDK.dll", "SVBony.dll"],
         "macos" => &["libSVBCameraSDK.dylib", "libSVBony.dylib"],
         _ => &["libSVBCameraSDK.so", "libSVBony.so"],
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::library_candidates;
-
-    #[test]
-    fn every_platform_tries_the_sdk_file_name_first() {
-        for (os, sdk_file) in [
-            ("linux", "libSVBCameraSDK.so"),
-            ("macos", "libSVBCameraSDK.dylib"),
-            ("windows", "SVBCameraSDK.dll"),
-        ] {
-            assert_eq!(library_candidates(os)[0], sdk_file);
-        }
     }
 }
 
@@ -235,4 +219,20 @@ pub fn check_error(code: c_int, context: &str) -> Result<(), String> {
         return Err(crate::camera::device_lost::mark(detail));
     }
     Err(detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::library_candidates;
+
+    #[test]
+    fn every_platform_tries_the_sdk_file_name_first() {
+        for (os, sdk_file) in [
+            ("linux", "libSVBCameraSDK.so"),
+            ("macos", "libSVBCameraSDK.dylib"),
+            ("windows", "SVBCameraSDK.dll"),
+        ] {
+            assert_eq!(library_candidates(os)[0], sdk_file);
+        }
+    }
 }

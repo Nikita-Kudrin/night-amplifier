@@ -14,7 +14,7 @@ mod cache;
 mod interpolate;
 
 pub(crate) use cache::InverseTransformCache;
-use interpolate::{bilinear_interpolate_direct_1ch, warp_row_rgb};
+use interpolate::{bilinear_interpolate_direct_1ch, warp_row_rgb, RowWalk};
 
 /// Smallest frame a bilinear warp can sample from.
 ///
@@ -98,18 +98,8 @@ fn warp_planes(
             .zip(b_plane.par_chunks_mut(width))
             .enumerate()
             .for_each(|(dy, ((r_row, g_row), b_row))| {
-                warp_row_rgb_planar(
-                    &bounds,
-                    &inv_cache,
-                    dy,
-                    src_r,
-                    src_g,
-                    src_b,
-                    r_row,
-                    g_row,
-                    b_row,
-                    border_value,
-                );
+                let (src, rows) = ([src_r, src_g, src_b], [r_row, g_row, b_row]);
+                warp_row_rgb_planar(&bounds, &inv_cache, dy, src, rows, border_value);
             });
         return Ok(());
     }
@@ -135,7 +125,6 @@ fn warp_planes(
 /// could not be guarded once.
 struct RowBounds {
     width: usize,
-    height: usize,
     max_sx: f32,
     max_sy: f32,
 }
@@ -147,7 +136,6 @@ impl RowBounds {
         debug_assert!(width >= MIN_WARP_EXTENT && height >= MIN_WARP_EXTENT);
         Self {
             width,
-            height,
             max_sx: (width - MIN_WARP_EXTENT) as f32,
             max_sy: (height - MIN_WARP_EXTENT) as f32,
         }
@@ -159,35 +147,14 @@ fn warp_row_rgb_planar(
     bounds: &RowBounds,
     inv_cache: &InverseTransformCache,
     dy: usize,
-    src_r: &[f32],
-    src_g: &[f32],
-    src_b: &[f32],
-    r_row: &mut [f32],
-    g_row: &mut [f32],
-    b_row: &mut [f32],
+    src: [&[f32]; 3],
+    rows: [&mut [f32]; 3],
     border_value: f32,
 ) {
     // Get starting source coordinates and step values for incremental computation
     let (sx, sy) = inv_cache.inverse_transform_point(0.0, dy as f32);
     let (sx_step, sy_step) = inv_cache.x_step();
-
-    warp_row_rgb(
-        src_r,
-        src_g,
-        src_b,
-        bounds.width,
-        bounds.height,
-        r_row,
-        g_row,
-        b_row,
-        border_value,
-        sx,
-        sy,
-        sx_step,
-        sy_step,
-        bounds.max_sx,
-        bounds.max_sy,
-    );
+    warp_row_rgb(src, rows, bounds, RowWalk { sx, sy, sx_step, sy_step }, border_value);
 }
 
 #[inline]
@@ -311,7 +278,7 @@ mod tests {
         assert_eq!(warped.height(), 64);
 
         let center_val = warped.get_pixel(32, 32, 0);
-        assert!(center_val >= 0.0 && center_val <= 1.0);
+        assert!((0.0..=1.0).contains(&center_val));
     }
 
     #[test]

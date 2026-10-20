@@ -5,17 +5,18 @@ use opentelemetry::trace::TracerProvider as _;
 #[cfg(feature = "telemetry")]
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
+/// The tracing layer and the provider its tracer came from.
+#[cfg(feature = "telemetry")]
+pub type TelemetryLayer<S> = (
+    tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>,
+    SdkTracerProvider,
+);
+
 /// Create an OpenTelemetry tracing layer for use with tracing-subscriber.
 #[cfg(feature = "telemetry")]
 pub fn create_telemetry_layer<S>(
     config: &TelemetryConfig,
-) -> std::result::Result<
-    Option<(
-        tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>,
-        SdkTracerProvider,
-    )>,
-    TelemetryError,
->
+) -> std::result::Result<Option<TelemetryLayer<S>>, TelemetryError>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {

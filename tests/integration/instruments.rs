@@ -1,38 +1,22 @@
 //! The measurement instruments, shared by both repos.
 //!
 //! **Nothing in this file may name `crate::`.** Pro's integration tests pull it in with
-//! `#[path = "../../night-amplifier/tests/integration/instruments.rs"] mod instruments;`
-//! the way they already pull in `common.rs`, and that only works while the module is
-//! reachable from either crate's root. Fixture discovery therefore arrives as a
-//! parameter rather than by calling `common` — the instruments do not need to know how
-//! the frames got onto the disk.
+//! `#[path = "../../night-amplifier/tests/integration/instruments.rs"] mod instruments;`, as
+//! they do `common.rs`, which works only while it is reachable from either crate's root. So
+//! fixture discovery arrives as a parameter instead of through `common`.
 //!
-//! Ten instruments, and each exists because a single number misled a real fix:
+//! Ten instruments, each because a single number misled a real fix (each one's doc says how):
 //!
-//! 1. **Octave-band sky noise** ([`octave_bands`]). One global grain figure misled three
-//!    consecutive changes; an observer reads grain at 8-128 px and the bands either side
-//!    of that move independently.
-//! 2. **The star radial profile** ([`radial_excess`]). The only thing that catches
-//!    ringing. A dip at r=5-9 or a halo at r=13-25 is a defect however good the grain is.
-//! 3. **Centre against edge** ([`centre_and_edge`]). A whole-frame number averages the
-//!    stack's border into its middle and shows almost nothing, which is precisely the
-//!    difference a per-pixel noise map is meant to remove.
-//! 4. **Line coherence** ([`line_coherence`]). A 1440-px row is 40 degrees long at this
-//!    eyepiece and the eye integrates along it, so residual banding outranks grain as the
-//!    visible defect at an amplitude far below the grain floor. No RMS can see it.
-//! 5. **Lattice lines** ([`lattice_lines`]). A repeating dither tile is a set of spectral
-//!    lines; a change of tile has to be shown to remove them, not to move them.
-//! 6. **Block-mean error** ([`block_mean_error`]). A dither's whole effect is a per-pixel
-//!    difference, so only local means can say whether an encoder kept what it carried.
-//! 7. **Target structure** ([`object_structure`]). Local contrast moves a target's texture,
-//!    not its brightness, and a median at three radii cannot see texture at all.
-//! 8. **Star response** ([`star_response`]). A star *on* the target rings where an
-//!    isolated one does not, and the radial profile only finds isolated stars.
-//! 9. **Target signal and noise** ([`signal_and_noise`]). Instrument 7 counts the grain
-//!    riding on a target as structure; two half-stacks tell them apart.
-//! 10. **Star size** ([`half_flux_radius`]). `compute_median_fwhm` counts pixels above half
-//!     maximum and read 2.3 px on subs whose stars hold half their flux inside 3.7; a
-//!     misaligned or doubled sub only shows as width in the stack, corners first.
+//! 1. Octave-band sky noise ([`octave_band_sigma`]): one grain figure misled three changes.
+//! 2. The star radial profile ([`radial_excess`]): the only one that catches ringing.
+//! 3. Centre against edge ([`centre_and_edge`]): a whole frame averages the border away.
+//! 4. Line coherence ([`line_coherence`]): banding far below the grain floor, which no RMS sees.
+//! 5. Lattice lines ([`lattice_lines`]): a dither tile's spectral lines, removed, not moved.
+//! 6. Block-mean error ([`block_mean_error`]): whether an encoder kept what a dither carried.
+//! 7. Target structure ([`object_structure`]): texture, which a median at three radii misses.
+//! 8. Star response ([`star_response`]): a star on the target rings where an isolated one doesn't.
+//! 9. Target signal and noise ([`signal_and_noise`]): 7's structure told apart from grain on it.
+//! 10. Star size ([`half_flux_radius`]): FWHM read 2.3 px on stars holding half their flux in 3.7.
 
 #![allow(dead_code)]
 
@@ -144,8 +128,10 @@ pub struct Replay {
 impl Replay {
     /// A deep-sky stacking session at the shipped settings, with the installed plugins.
     pub fn open(dir: &Path) -> Self {
-        let mut settings = night_amplifier::session::state::CaptureSettings::default();
-        settings.stacking = true;
+        let settings = night_amplifier::session::state::CaptureSettings {
+            stacking: true,
+            ..Default::default()
+        };
         Self::with_settings(dir, settings)
     }
 
@@ -520,7 +506,9 @@ fn mad_sigma(values: &[f64]) -> f64 {
 /// Sky noise split into octaves, as robust sigma in output levels per band.
 ///
 /// Band `k` is `blur(edge[k]) - blur(edge[k+1])`, so it holds the detail between those
-/// two scales and nothing else. The eye's grain sits in the last four bands.
+/// two scales and nothing else. The eye's grain sits in the last four bands. One global
+/// grain figure misled three consecutive changes: an observer reads grain at 8-128 px, and
+/// the bands either side of that move independently.
 pub fn octave_band_sigma(plane: &[f64], w: usize, h: usize) -> [f64; 7] {
     let blurs: Vec<Vec<f64>> = OCTAVE_EDGES
         .iter()
@@ -1588,8 +1576,8 @@ fn read_cached_stack(path: &Path) -> Option<(night_amplifier::Frame, u32)> {
         return None;
     }
     let data: Vec<f32> = bytes[16..]
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>().0.iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect();
     Some((night_amplifier::Frame::from_f32_vec(data, w, h, c).ok()?, depth))
 }
@@ -1766,8 +1754,11 @@ pub fn measure_sky_and_target(rgb8: &[u8], width: usize, sky: (usize, usize, usi
     }
 }
 
+/// `(x, y, width, height)` in pixels.
+pub type PixelBox = (usize, usize, usize, usize);
+
 /// Darkest and brightest 96 px block of the green channel, by median.
-pub fn locate_boxes(rgb8: &[u8], w: usize, h: usize) -> ((usize, usize, usize, usize), (usize, usize, usize, usize)) {
+pub fn locate_boxes(rgb8: &[u8], w: usize, h: usize) -> (PixelBox, PixelBox) {
     const B: usize = 96;
     let mut darkest = (f64::MAX, (0, 0, B, B));
     let mut brightest = (f64::MIN, (0, 0, B, B));
@@ -1815,9 +1806,11 @@ pub fn measure_real_session(
     }
 }
 
+type StreamBox = fn() -> (u32, u32);
+
 /// The stream sizes a real session is measured at: 1440p, which the filters were tuned on,
 /// and the default Native (up to `MAX_STREAM_EDGE`), where every processed pixel is shown.
-const STREAM_BOXES: [(&str, fn() -> (u32, u32)); 2] = [
+const STREAM_BOXES: [(&str, StreamBox); 2] = [
     ("1440p", || night_amplifier::session::state::Resolution::Qhd1440.bounding_box()),
     ("Native", || night_amplifier::session::state::Resolution::Native.bounding_box()),
 ];
@@ -1971,6 +1964,10 @@ pub struct StarSize {
 }
 
 /// [`half_flux_radii`] at the frame's own [`measurable_stars`], summarised by zone.
+///
+/// `compute_median_fwhm` counts pixels above half maximum and read 2.3 px on subs whose stars
+/// hold half their flux inside 3.7; a misaligned or doubled sub shows only as width in the
+/// stack, corners first.
 pub fn half_flux_radius(frame: &Frame) -> StarSize {
     let at = measurable_stars(frame);
     let radii = half_flux_radii(frame, &at);

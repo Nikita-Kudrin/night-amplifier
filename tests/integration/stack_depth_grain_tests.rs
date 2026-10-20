@@ -76,9 +76,11 @@ fn synthetic_sky(sigma: f32) -> night_amplifier::Frame {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn a_deeper_stack_is_rendered_calmer_and_brighter_in_step() {
-    let mut settings = night_amplifier::session::state::CaptureSettings::default();
-    settings.auto_stretch = true;
-    settings.background_subtraction = false;
+    let settings = night_amplifier::session::state::CaptureSettings {
+        auto_stretch: true,
+        background_subtraction: false,
+        ..Default::default()
+    };
 
     const SIGMA_1: f32 = 0.004;
     let sky = (0, 0, 256, 256);

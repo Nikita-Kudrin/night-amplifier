@@ -376,16 +376,13 @@ mod tests {
                 let x_end = if gx == grid_size - 1 { width } else { x_start + block_w };
                 let y_end = if gy == grid_size - 1 { height } else { y_start + block_h };
 
-                let mut med = [0.0f32; 3];
-                for (c, m) in med.iter_mut().enumerate() {
-                    let mut vals = Vec::new();
-                    for y in y_start..y_end {
-                        for x in x_start..x_end {
-                            vals.push(frame.get_pixel(x, y, c));
-                        }
-                    }
-                    *m = fast_median(&mut vals);
-                }
+                let med: [f32; 3] = std::array::from_fn(|c| {
+                    let mut vals: Vec<f32> = (y_start..y_end)
+                        .flat_map(|y| (x_start..x_end).map(move |x| (x, y)))
+                        .map(|(x, y)| frame.get_pixel(x, y, c))
+                        .collect();
+                    fast_median(&mut vals)
+                });
 
                 if med[0] > 0.0 || med[1] > 0.0 || med[2] > 0.0 {
                     for c in 0..3 {

@@ -346,7 +346,7 @@ impl DiskWriterHandle {
             }
         }
 
-        let message = DiskWriterMessage::WriteFrame(request);
+        let message = DiskWriterMessage::WriteFrame(Box::new(request));
         let sent = match mode {
             Enqueue::TurnAwayWhenFull => self.sender.try_send(message).map_err(|e| match e {
                 mpsc::TrySendError::Full(_) => DiskWriterError::QueueFull,

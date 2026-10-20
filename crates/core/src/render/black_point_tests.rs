@@ -16,7 +16,7 @@ fn test_black_point_config_defaults() {
 
 #[test]
 fn test_calculate_black_point_formula() {
-    let data = vec![0.2f32; 64 * 64 * 1];
+    let data = vec![0.2f32; 64 * 64];
     let frame = Frame::from_f32_vec(data, 64, 64, 1).unwrap();
     let stats = ChannelStats::new(0.2, 0.01, 0.0, 1.0);
 
@@ -32,7 +32,7 @@ fn test_calculate_black_point_formula() {
 
 #[test]
 fn test_calculate_black_point_clamps_to_zero() {
-    let data = vec![0.01f32; 64 * 64 * 1];
+    let data = vec![0.01f32; 64 * 64];
     let frame = Frame::from_f32_vec(data, 64, 64, 1).unwrap();
     let stats = ChannelStats::new(0.01, 0.02 / MAD_TO_SIGMA, 0.0, 1.0);
 

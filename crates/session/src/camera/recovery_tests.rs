@@ -1486,6 +1486,20 @@ async fn the_guide_camera_syncs_its_frames_on_a_disconnect_and_on_a_device_loss(
     let dir = guide_dir().unwrap();
 
     let before_loss = saved_by_guide();
+    // Recovery reopens the camera while the lost loop's sync is still out, and a restart
+    // that overtakes a sync drops its verdict by design (`StorageSync`). Under disk load
+    // that fsync took 0.4-0.6 s and lost the race, so the reopen's install waits for it.
+    let syncing = Arc::clone(&state);
+    *catalog.camera.on_dew_heater.lock().unwrap() = Some(Box::new(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let done = || {
+            let verdict = syncing.storage_sync.status(CameraRole::Guide).state;
+            matches!(verdict, StorageSyncState::Synced | StorageSyncState::Failed)
+        };
+        while !done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }));
     drain(&mut events);
     catalog.camera.lost.store(1, Ordering::SeqCst);
     let after_loss = storage_verdict(&mut events, CameraRole::Guide).await;

@@ -44,26 +44,25 @@ fn warp_identity_benchmark(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    for size in [2048].iter() {
-        let frame = generate_frame(*size, *size);
-        let transform = AffineTransform::identity();
+    let size = 2048;
+    let frame = generate_frame(size, size);
+    let transform = AffineTransform::identity();
 
-        group.throughput(Throughput::Elements((REPS * size * size) as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
-            &(&frame, &transform),
-            |b, (frame, transform)| {
-                b.iter(|| {
-                    for _ in 0..REPS {
-                        black_box(
-                            warp_frame(black_box(frame), black_box(transform), 0.0)
-                                .expect("Warp failed"),
-                        );
-                    }
-                })
-            },
-        );
-    }
+    group.throughput(Throughput::Elements((REPS * size * size) as u64));
+    group.bench_with_input(
+        BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
+        &(&frame, &transform),
+        |b, (frame, transform)| {
+            b.iter(|| {
+                for _ in 0..REPS {
+                    black_box(
+                        warp_frame(black_box(frame), black_box(transform), 0.0)
+                            .expect("Warp failed"),
+                    );
+                }
+            })
+        },
+    );
 
     group.finish();
 }
@@ -74,27 +73,26 @@ fn warp_rotation_benchmark(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    for size in [2048].iter() {
-        let frame = generate_frame(*size, *size);
-        // Small rotation typical for astronomical tracking
-        let transform = AffineTransform::new(PI / 180.0 * 2.0, 1.0, 5.0, 3.0);
+    let size = 2048;
+    let frame = generate_frame(size, size);
+    // Small rotation typical for astronomical tracking
+    let transform = AffineTransform::new(PI / 180.0 * 2.0, 1.0, 5.0, 3.0);
 
-        group.throughput(Throughput::Elements((REPS * size * size) as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
-            &(&frame, &transform),
-            |b, (frame, transform)| {
-                b.iter(|| {
-                    for _ in 0..REPS {
-                        black_box(
-                            warp_frame(black_box(frame), black_box(transform), 0.0)
-                                .expect("Warp failed"),
-                        );
-                    }
-                })
-            },
-        );
-    }
+    group.throughput(Throughput::Elements((REPS * size * size) as u64));
+    group.bench_with_input(
+        BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
+        &(&frame, &transform),
+        |b, (frame, transform)| {
+            b.iter(|| {
+                for _ in 0..REPS {
+                    black_box(
+                        warp_frame(black_box(frame), black_box(transform), 0.0)
+                            .expect("Warp failed"),
+                    );
+                }
+            })
+        },
+    );
 
     group.finish();
 }

@@ -2,10 +2,14 @@
 name = "night_amplifier_core"
 version = "0.0.0-dev"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Night Amplifier Contributors"]
 description = "Night Amplifier's domain: image pipeline, cameras and plugin traits"
 license-file = "../../LICENSE"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 async-trait = { workspace = true }

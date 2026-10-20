@@ -282,7 +282,7 @@ fn admits_null(schema: &Value, definitions: &Map<String, Value>) -> bool {
 }
 
 /// The branch of a flattened enum `wire` was sent as: the one whose constants it carries.
-fn branch_of<'a>(variant: &'a Value, wire: &Value, definitions: &Map<String, Value>) -> Option<(Map<String, Value>, BTreeSet<String>)> {
+fn branch_of(variant: &Value, wire: &Value, definitions: &Map<String, Value>) -> Option<(Map<String, Value>, BTreeSet<String>)> {
     branches(variant)?.iter().map(|branch| fields(branch, definitions)).find(|(properties, _)| {
         properties.iter().all(|(name, property)| property.get("const").is_none_or(|c| wire.get(name) == Some(c)))
     })

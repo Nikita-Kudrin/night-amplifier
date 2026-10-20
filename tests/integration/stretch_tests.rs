@@ -178,8 +178,10 @@ fn test_eyepiece_intensity_metrics() {
     // The comparison still passed — both sides were scrambled identically — which is exactly
     // why it had stopped being a regression guard for the eyepiece intensity path.
     let mean_median_at = |intensity: f32| {
-        let mut settings = night_amplifier::session::state::CaptureSettings::default();
-        settings.auto_stretch = true;
+        let mut settings = night_amplifier::session::state::CaptureSettings {
+            auto_stretch: true,
+            ..Default::default()
+        };
         settings.eyepiece.intensity = intensity;
 
         let mut frame = img.frame.clone();

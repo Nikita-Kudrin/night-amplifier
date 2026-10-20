@@ -63,17 +63,7 @@ impl FramePrefetcher {
         // (we use sync_channel's backpressure to limit parallelism)
         let worker = thread::spawn(move || {
             for (index, raw_frame, is_bayer) in image_data {
-                let frame = if is_bayer && raw_frame.channels() == 1 {
-                    let config = pattern
-                        .map(|p| DebayerConfig::new(p).with_algorithm(DebayerAlgorithm::Bilinear))
-                        .unwrap_or_else(|| {
-                            DebayerConfig::new(CfaPattern::Rggb)
-                                .with_algorithm(DebayerAlgorithm::Bilinear)
-                        });
-                    night_amplifier::debayer_with_config(&raw_frame, config).ok()
-                } else {
-                    Some(raw_frame)
-                };
+                let frame = debayered(raw_frame, is_bayer, pattern);
 
                 if let Some(f) = frame {
                     // This blocks if channel is full (backpressure)
@@ -138,29 +128,17 @@ impl ParallelPrefetcher {
             // Each chunk is processed by rayon, results sent through channel
             let chunk_size = buffer_size.max(4);
 
-            for chunk in image_data.chunks(chunk_size) {
+            let mut frames = image_data.into_iter();
+            loop {
+                let chunk: Vec<_> = frames.by_ref().take(chunk_size).collect();
+                if chunk.is_empty() {
+                    break;
+                }
                 // Process chunk in parallel
                 let results: Vec<_> = chunk
-                    .par_iter()
+                    .into_par_iter()
                     .filter_map(|(index, raw_frame, is_bayer)| {
-                        let frame = if *is_bayer && raw_frame.channels() == 1 {
-                            let config = pattern
-                                .map(|p| {
-                                    DebayerConfig::new(p).with_algorithm(DebayerAlgorithm::Bilinear)
-                                })
-                                .unwrap_or_else(|| {
-                                    DebayerConfig::new(CfaPattern::Rggb)
-                                        .with_algorithm(DebayerAlgorithm::Bilinear)
-                                });
-                            night_amplifier::debayer_with_config(raw_frame, config).ok()
-                        } else {
-                            Some(raw_frame.clone())
-                        };
-
-                        frame.map(|f| PrefetchedFrame {
-                            frame: f,
-                            index: *index,
-                        })
+                        debayered(raw_frame, is_bayer, pattern).map(|frame| PrefetchedFrame { frame, index })
                     })
                     .collect();
 
@@ -186,4 +164,13 @@ impl ParallelPrefetcher {
             Ok(None) | Err(_) => None,
         }
     }
+}
+
+/// The frame the pipeline stacks: Bayer data debayered bilinearly, RGGB unless detected.
+fn debayered(raw: Frame, is_bayer: bool, pattern: Option<CfaPattern>) -> Option<Frame> {
+    if !is_bayer || raw.channels() != 1 {
+        return Some(raw);
+    }
+    let config = DebayerConfig::new(pattern.unwrap_or(CfaPattern::Rggb)).with_algorithm(DebayerAlgorithm::Bilinear);
+    night_amplifier::debayer_with_config(&raw, config).ok()
 }

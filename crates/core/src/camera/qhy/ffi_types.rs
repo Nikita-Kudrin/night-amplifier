@@ -8,6 +8,7 @@ pub const QHYCCD_READ_DIRECTLY: u32 = 0x2000;
 
 pub type QhyccdHandle = *mut c_void;
 
+// Variants keep the SDK header's acronyms (`DDR`, `CurPWM`), so they grep across to it.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

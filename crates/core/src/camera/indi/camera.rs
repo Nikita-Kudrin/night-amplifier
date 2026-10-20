@@ -92,7 +92,7 @@ impl IndiCamera {
                 .map(|n| n.max as i32)
                 .unwrap_or(100),
             min_exposure_us: 1,
-            max_exposure_us: 3600_000_000,
+            max_exposure_us: 3_600_000_000,
             supported_formats: vec![
                 crate::camera::ImageFormat::Raw16,
                 crate::camera::ImageFormat::Raw8,

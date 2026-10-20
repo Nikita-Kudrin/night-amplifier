@@ -39,9 +39,7 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
         (None, None)
     };
 
-    let name = unsafe { std::ffi::CStr::from_ptr(props.cameraModelName.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
+    let name = crate::ffi_safety::fixed_c_str(&props.cameraModelName);
 
     CameraInfo {
         name,
@@ -67,17 +65,12 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
             .collect(),
         supported_formats,
         min_exposure_us: 1,
-        max_exposure_us: 3600_000_000,
+        max_exposure_us: 3_600_000_000,
         min_gain: 0,
         max_gain: 500,
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
-        serial: crate::camera::identity::normalize_serial(&c_chars_to_string(&props.SN)),
+        serial: crate::camera::identity::normalize_serial(&crate::ffi_safety::fixed_c_str(&props.SN)),
     }
-}
-
-fn c_chars_to_string(chars: &[std::os::raw::c_char]) -> String {
-    let len = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-    chars[..len].iter().map(|&c| c as u8 as char).collect()
 }

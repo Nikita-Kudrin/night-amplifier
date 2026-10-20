@@ -156,7 +156,7 @@ fn test_mono_frame_downsamples_to_grey_not_false_colour() {
     let (rgb, w, h) = frame_to_rgb8_downsampled(&to_ready_frame(&frame), 137, 111).unwrap();
 
     assert_eq!(rgb.len(), w as usize * h as usize * 3);
-    for (i, px) in rgb.chunks_exact(3).enumerate() {
+    for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
         assert_eq!(
             (px[0], px[1], px[2]),
             (px[0], px[0], px[0]),
@@ -178,9 +178,9 @@ fn test_mono_frame_stays_grey_at_native_size() {
 
     assert_eq!((w, h), (64, 48));
     assert_eq!(rgb.len(), 64 * 48 * 3);
-    for (px, &src) in rgb.chunks_exact(3).zip(frame.data()) {
-        let expected = (src.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-        assert_eq!(px, [expected, expected, expected]);
+    for (px, &src) in rgb.as_chunks::<3>().0.iter().zip(frame.data()) {
+        let expected = (src.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        assert_eq!(*px, [expected; 3]);
     }
 }
 
@@ -1006,7 +1006,6 @@ fn a_near_unity_downsample_leaves_no_dark_ring_around_bright_stars() {
     );
 }
 
-/// The denoise-on path streams its denoised rows through the same sky-shadow driver; it
 // ---------------------------------------------------------------------------
 // The quadrature contract: how a noise map has to be resampled.
 //
