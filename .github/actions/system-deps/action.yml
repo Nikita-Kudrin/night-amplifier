@@ -31,11 +31,21 @@ runs:
     - name: Install system deps (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
+      # pwsh ignores a native exit code, so a failed choco install (pkgconfiglite downloads from
+      # SourceForge, which drops often) once passed here and surfaced only as fitsio-sys's
+      # "pkg-config could not be found" in the build. Retry, then fail in this step.
       run: |
-        choco install pkgconfiglite nasm
+        for ($attempt = 1; $true; $attempt++) {
+          choco install pkgconfiglite nasm -y --no-progress
+          if ($LASTEXITCODE -eq 0) { break }
+          if ($attempt -eq 3) { throw "choco install failed (exit $LASTEXITCODE)" }
+          Start-Sleep -Seconds (15 * $attempt)
+        }
+        Get-Command pkg-config | Out-Null
         $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
         $triplet = "$arch-windows-static"
         vcpkg install cfitsio:$triplet
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg install cfitsio:$triplet failed (exit $LASTEXITCODE)" }
         $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet"
         echo "PKG_CONFIG_PATH=$vcpkg_path/lib/pkgconfig" >> $env:GITHUB_ENV
         echo "CFITSIO_STATIC=1" >> $env:GITHUB_ENV
