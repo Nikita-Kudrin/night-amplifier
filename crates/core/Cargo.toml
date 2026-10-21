@@ -18,6 +18,7 @@ dlopen2 = { workspace = true }
 # FITS file support for astronomical image storage
 fitsio = { workspace = true }
 fs4 = { workspace = true }
+half = { workspace = true }      # Subs held at half precision during a stack's probation
 image = { workspace = true }
 nalgebra = { workspace = true }  # Linear algebra for RBF background extraction
 png = { workspace = true }

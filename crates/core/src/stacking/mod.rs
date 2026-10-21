@@ -1,6 +1,7 @@
 mod comet_plugin;
 mod config;
 mod crop;
+mod held;
 mod incremental_pixel;
 mod quality_baseline;
 mod rejection;
@@ -25,6 +26,7 @@ pub use crop::{
     largest_covered, min_coverage, CropDecision, CropRect, CropTracker, GROW_SHARE, KEEP_COVERAGE,
     MIN_CROP_DEPTH, MIN_CROP_SHARE, MIN_CROP_SIDE, PICK_COVERAGE,
 };
+pub use held::HeldFrame;
 pub use rejection::RejectionMethod;
 pub use stack::MasterStack;
 pub use stacker::Stacker;

@@ -45,6 +45,7 @@ dlopen2 = "0.8.2"
 fitsio = "0.21.10"
 fs4 = { version = "1.1.0", default-features = false }
 futures-util = "0.3.33"
+half = "2.7.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
 libc = "0.2"
 lz4_flex = "0.14.0"

@@ -436,6 +436,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "fireworks-galaxy-imx533",
         "https://drive.usercontent.google.com/download?id=17Nm3Jooy2_X30dLdo_BS1odYpsNG6mzT&export=download&confirm=t",
     ),
+    // Four real sessions whose first subs are bad, cut from the sets above to 1536² on even
+    // origins and reordered: M101 opening on a satellite trail, Fireworks on a bump and on
+    // its own smeared sub 1, the 250 mm M27 on its bumped sub 1. Each `manifest.txt` names
+    // the bad subs (`early_subs_tests`).
+    (
+        "early-bad-subs-imx533",
+        "https://drive.usercontent.google.com/download?id=174IQ2R_pA8onDB_nR0PBvMd1gqPEL4p2&export=download&confirm=t",
+    ),
     // Display-size (bin 2) stacks of the ten sessions the background model is judged on,
     // with `depths.txt`: what the render task hands the background stage at 1440p. Cut
     // by Pro's `background_gradient_diagnostics::cut_stack_fixture`, so the regression

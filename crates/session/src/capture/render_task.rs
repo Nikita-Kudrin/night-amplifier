@@ -65,6 +65,7 @@ pub fn run_render_task(
             frame_number,
             settings,
             stack_depth,
+            stack_generation,
             mut noise,
             crop,
             star_fwhm,
@@ -127,6 +128,7 @@ pub fn run_render_task(
             }
         };
         analysis.note_crop(crop);
+        analysis.note_stack(stack_generation);
         // The stack's catalog footprints, carried onto the frame as cut and binned. Only
         // a stack is registered to the frame they were solved on, and only one its size.
         analysis.set_protection(
@@ -586,6 +588,7 @@ mod tests {
             frame_number: 1,
             settings: settings.into(),
             stack_depth: 0,
+            stack_generation: 0,
             crop: None,
             star_fwhm: None,
         };
@@ -610,6 +613,7 @@ mod tests {
             frame_number: 0,
             settings: settings.clone().into(),
             stack_depth: 0,
+            stack_generation: 0,
             crop: None,
             star_fwhm: None,
         };
@@ -624,6 +628,7 @@ mod tests {
                 frame_number: n + 1,
                 settings: settings.clone().into(),
                 stack_depth: 0,
+                stack_generation: 0,
                 crop: None,
                 star_fwhm: None,
             };
@@ -638,6 +643,7 @@ mod tests {
             frame_number: 4,
             settings: settings.clone().into(),
             stack_depth: 0,
+            stack_generation: 0,
             crop: None,
             star_fwhm: None,
         };

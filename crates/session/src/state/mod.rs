@@ -511,6 +511,11 @@ impl AppState {
         self.stats.start(now_ms);
     }
 
+    /// See [`SessionStats::restacked`]; the next `frame_captured` event carries the result.
+    pub fn frames_restacked(&self, retracted: usize, reinstated: usize) {
+        self.stats.restacked(retracted, reinstated);
+    }
+
     /// Reset frame counters without resetting session start time
     pub fn reset_counters(&self) {
         self.stats.reset_counters();

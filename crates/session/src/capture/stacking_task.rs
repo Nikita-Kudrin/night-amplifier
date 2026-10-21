@@ -12,7 +12,7 @@ use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
 use super::field_solve;
-use super::frame_gate::RejectionReason;
+use super::frame_gate::{RejectionReason, Restacked};
 use super::context::{LiveStacker, StackingCarryover};
 use super::stack_crop::{self, StackCrop};
 use super::wanderer::Wanderer;
@@ -68,6 +68,7 @@ pub fn run_stacking_task(
     let mut stacking_failed = false;
     let mut wanderer = Wanderer::default();
     let mut stack_crop = StackCrop::new();
+    let mut stack_generation = 0u64;
 
     let mut cfa_stage = CfaStage::default();
 
@@ -169,12 +170,8 @@ pub fn run_stacking_task(
             FrameStep::raw(&frame)
         };
 
-        // The stack restarted on a sharper reference, so the integration the
-        // counters describe no longer exists.
-        if step.stack_reset {
-            state.reset_counters();
-            state.field_solve.reset();
-        }
+        step.record_restack(&state);
+        stack_generation += u64::from(step.rebuilt_stack());
 
         // Note there is deliberately no raw-frame fallback for a frame that
         // merely failed to register — see `StackingOutcome`.
@@ -237,6 +234,7 @@ pub fn run_stacking_task(
             frame_number,
             settings,
             stack_depth,
+            stack_generation,
             noise,
             crop,
             star_fwhm: stacker.as_deref().and_then(|stacker| stacker.star_fwhm()),
@@ -280,6 +278,8 @@ struct FrameStep {
     registration_succeeded: bool,
     showing_stack: bool,
     stack_reset: bool,
+    /// What a closing probation did to the stack (`FrameAdmission::restacked`).
+    restacked: Option<Restacked>,
     rejected_because: Option<RejectionReason>,
     stack_depth: u32,
     noise: Option<NoiseField>,
@@ -292,6 +292,7 @@ impl From<pipeline::StackingOutcome> for FrameStep {
             registration_succeeded: outcome.frame_added,
             showing_stack: outcome.showing_stack,
             stack_reset: outcome.stack_reset,
+            restacked: outcome.admission.and_then(|a| a.restacked),
             rejected_because: outcome.rejected_because(),
             stack_depth: outcome.stack_depth,
             noise: outcome.noise,
@@ -307,11 +308,33 @@ impl FrameStep {
             registration_succeeded: false,
             showing_stack: false,
             stack_reset: false,
+            restacked: None,
             rejected_because: None,
             stack_depth: 0,
             noise: None,
             display_frame: Some(Arc::clone(frame)),
         }
+    }
+
+    /// What the stack did to itself this pass, in the session's counters and field solve.
+    fn record_restack(&self, state: &AppState) {
+        // Restarted on a sharper reference: the integration the counters describe is gone.
+        if self.stack_reset {
+            state.reset_counters();
+        }
+        // Either way the stack's pixels moved under any solve of them.
+        if self.stack_reset || self.restacked.is_some_and(|r| r.rereferenced) {
+            state.field_solve.reset();
+        }
+        if let Some(restacked) = self.restacked {
+            state.frames_restacked(restacked.retracted, restacked.reinstated);
+        }
+    }
+
+    /// The stack was rebuilt in place, so estimates taken from it describe another stack,
+    /// though its depth need not have fallen (see `StackedFrame::stack_generation`).
+    fn rebuilt_stack(&self) -> bool {
+        self.stack_reset || self.restacked.is_some()
     }
 
     /// After Wanderer's restart. Always displayed, even when the compute was skipped: the

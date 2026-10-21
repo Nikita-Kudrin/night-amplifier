@@ -8,7 +8,11 @@
 
 use std::collections::VecDeque;
 
-use night_amplifier_core::registration::{AdaptiveRegistrationResult, AffineTransform};
+use night_amplifier_core::registration::AdaptiveRegistrationResult;
+
+#[path = "frame_admission.rs"]
+mod admission;
+pub use admission::{FrameAdmission, RejectionReason, Restacked};
 
 /// Absolute floor for the residual gate, in pixels.
 ///
@@ -42,7 +46,7 @@ const FWHM_K: f32 = 1.8;
 
 /// Measured frames needed before the running medians mean anything. Until then
 /// every registered frame is admitted.
-const WARMUP_FRAMES: usize = 5;
+pub(crate) const WARMUP_FRAMES: usize = 5;
 
 /// Frames the running medians are computed over. Bounded so the gate tracks
 /// seeing as it drifts through the night instead of averaging over a session
@@ -59,7 +63,7 @@ const HISTORY_LEN: usize = 50;
 /// Only failed registrations are judged on it. Dropping *registered* doubled subs too
 /// was measured and does not pay: 2.5 % smaller stars on the worst-tracked set for 6.6 %
 /// more sky noise, and no sharper on the galaxies.
-const DOUBLED_MARGIN: f32 = 0.5;
+pub(crate) const DOUBLED_MARGIN: f32 = 0.5;
 
 /// Consecutive unregistered, bloated subs after which they are read as the sky having
 /// moved after all. Nothing that fails to register updates the session's star size, so
@@ -84,146 +88,6 @@ const REBASE_MARGIN: f32 = 0.75;
 /// Below this fraction of the running median FWHM, an implausibly "sharp" frame
 /// is star detection latching onto noise, not a sharp frame.
 const REBASE_MIN_RATIO: f32 = 0.6;
-
-/// Why a frame was kept out of the stack.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RejectionReason {
-    /// Star detection found nothing usable.
-    NoStars,
-    /// Too few stars to attempt an alignment.
-    TooFewStars,
-    /// No preset could fit a transform at all.
-    RegistrationFailed,
-    /// A transform was fitted, but its pairs are no more than chance produces at
-    /// that star density, or it changes the scale (see `Support::is_credible`).
-    TooFewCorrespondences,
-    /// The fit is far looser than the rest of the session's.
-    ResidualTooHigh,
-    /// The stars are far larger than the rest of the session's — defocus,
-    /// cloud, or shake.
-    StarsTooLarge,
-    /// Every star appears twice, or smeared into a line: the mount moved during the
-    /// exposure. Judged only on subs that would not register.
-    StarsDoubled,
-    /// The accumulator refused the frame.
-    StackerError,
-}
-
-impl RejectionReason {
-    pub fn describe(&self) -> &'static str {
-        match self {
-            Self::NoStars => "star detection failed",
-            Self::TooFewStars => "too few stars",
-            Self::RegistrationFailed => "registration failed",
-            Self::TooFewCorrespondences => "the fitted transform is no better than chance",
-            Self::ResidualTooHigh => "registration residual far above the session median",
-            Self::StarsTooLarge => "stars far larger than the session median",
-            Self::StarsDoubled => "stars doubled or trailed — the mount moved during the exposure",
-            Self::StackerError => "stacker rejected the frame",
-        }
-    }
-
-    /// Whether this verdict was reached by judging how well the frame aligned,
-    /// as opposed to how it looked or whether it aligned at all.
-    pub fn is_about_alignment_quality(&self) -> bool {
-        matches!(self, Self::ResidualTooHigh | Self::TooFewCorrespondences)
-    }
-
-    /// Whether a frame carrying this verdict still measured the sky well enough to
-    /// belong in the running medians. [`RejectionReason::ResidualTooHigh`] and
-    /// [`RejectionReason::StarsTooLarge`] do — their fit covers most of the star
-    /// field; dropping them would make the baseline self-referential (see
-    /// [`QualityHistory`]). [`TooFewCorrespondences`] doesn't: its residual is a mean
-    /// over whatever pairs a coincidence happened to make, on an unrelated scale
-    /// (6 of 200 stars at 8.46px vs. neighbours' 1.3-2.0px) — with a 50-frame window,
-    /// 26 such frames would drag the median low enough to latch the gate shut.
-    fn measures_the_sky(&self) -> bool {
-        matches!(self, Self::ResidualTooHigh | Self::StarsTooLarge)
-    }
-
-    /// Whether this verdict means the frame couldn't be placed against the
-    /// reference at all, vs. being placed badly. What Wanderer mode watches: a user
-    /// swinging a dobsonian to a new object makes the field stop matching, and the
-    /// stack must restart — but a frame that *did* align, merely soft or loose from
-    /// a passing cloud or gust, shouldn't throw away the integration.
-    /// [`TooFewCorrespondences`] counts as "could not align": a fit chance explains
-    /// means the fields don't overlap, whatever the fitter produced.
-    pub fn means_the_sky_moved(&self) -> bool {
-        match self {
-            Self::NoStars
-            | Self::TooFewStars
-            | Self::RegistrationFailed
-            | Self::TooFewCorrespondences => true,
-            Self::ResidualTooHigh
-            | Self::StarsTooLarge
-            | Self::StarsDoubled
-            | Self::StackerError => false,
-        }
-    }
-}
-
-/// What became of one frame offered to the stack.
-#[derive(Debug, Clone, Copy)]
-pub struct FrameAdmission {
-    /// Whether the frame joined the stack.
-    pub added: bool,
-    /// Why it did not. `None` when it did.
-    pub rejected_because: Option<RejectionReason>,
-    /// Whether this frame replaced the reference, discarding prior integration.
-    pub rebased: bool,
-    /// Stars the fitted transform lines up within 1.5 px (`Support::pairs`); 0 if
-    /// registration failed. Not the rung's own correspondence count, which on a thin sub
-    /// counts nebula clutter (Cat's Eye: 47–63 against 5–13 real pairs).
-    pub matched_stars: usize,
-    /// Mean residual of the rung fit's correspondences, in pixels, as the gate judged
-    /// it; NaN if there were none.
-    pub mean_residual: f32,
-    /// Where the frame landed: target -> reference coordinates. `Some` only for a frame
-    /// that joined the stack.
-    pub transform: Option<AffineTransform>,
-}
-
-impl FrameAdmission {
-    pub(super) fn rejected(
-        reason: RejectionReason,
-        matched_stars: usize,
-        mean_residual: f32,
-    ) -> Self {
-        Self {
-            added: false,
-            rejected_because: Some(reason),
-            rebased: false,
-            matched_stars,
-            mean_residual,
-            transform: None,
-        }
-    }
-
-    pub(super) fn accepted(result: &AdaptiveRegistrationResult, rebased: bool) -> Self {
-        Self {
-            added: true,
-            rejected_because: None,
-            rebased,
-            matched_stars: result.support.pairs,
-            mean_residual: result.mean_residual,
-            // A re-based frame *is* the new reference: it landed on itself.
-            transform: Some(if rebased { AffineTransform::identity() } else { result.transform }),
-        }
-    }
-
-    /// A verdict from a mode that aligns without star matching or a gate (comet,
-    /// planetary): it says whether the frame joined, never why it did not.
-    pub(super) fn unreasoned(added: bool) -> Self {
-        Self {
-            added,
-            rejected_because: None,
-            rebased: false,
-            matched_stars: 0,
-            mean_residual: f32::NAN,
-            transform: None,
-        }
-    }
-}
 
 /// Rolling medians of the registration residual and star size seen this session.
 ///
@@ -377,6 +241,28 @@ impl FrameGate {
         verdict
     }
 
+    /// A gate for a stack restarted from a batch: its history empty, its count of
+    /// offered frames carried over so the re-basing window does not reopen.
+    pub(crate) fn restarted(frames_seen: usize) -> Self {
+        Self { frames_seen, ..Self::default() }
+    }
+
+    /// Folds a frame's measurements into the baseline without judging it, for a batch
+    /// judged against itself (a probation). Same rule as [`Self::admit`]: a fit chance
+    /// explains measures nothing.
+    pub(crate) fn record(&mut self, result: &AdaptiveRegistrationResult, stars: StarField) {
+        if result.is_credible() {
+            self.history.record(result.mean_residual, stars.fwhm);
+        }
+        self.history.record_doubling(stars.doubling);
+    }
+
+    /// [`Self::admit`]'s verdict alone, against a baseline a batch recorded: judged from
+    /// the first measurement, since the batch chose who sets the yardstick, not arrival.
+    pub(crate) fn verdict(&self, result: &AdaptiveRegistrationResult, fwhm: Option<f32>) -> Option<RejectionReason> {
+        self.judge_after(result, fwhm, 1)
+    }
+
     /// Why a sub with stars would not register: a soft verdict when its own stars
     /// explain it, else that it could not be placed against the reference at all.
     ///
@@ -418,7 +304,11 @@ impl FrameGate {
     /// Stars far larger than the session's. Needs a warmed-up history: one sub's
     /// size is no yardstick.
     fn is_bloated(&self, fwhm: Option<f32>) -> bool {
-        if self.history.measured() < WARMUP_FRAMES {
+        self.is_bloated_after(fwhm, WARMUP_FRAMES)
+    }
+
+    fn is_bloated_after(&self, fwhm: Option<f32>, warmup: usize) -> bool {
+        if self.history.measured() < warmup {
             return false;
         }
         matches!((fwhm, self.history.median_fwhm()), (Some(fwhm), Some(median)) if fwhm > FWHM_K * median)
@@ -426,10 +316,16 @@ impl FrameGate {
 
     /// Returns why this frame should not be averaged into the stack, or `None`
     /// if it passes.
-    fn judge(
+    fn judge(&self, result: &AdaptiveRegistrationResult, fwhm: Option<f32>) -> Option<RejectionReason> {
+        self.judge_after(result, fwhm, WARMUP_FRAMES)
+    }
+
+    /// [`Self::judge`], trusting the baseline from `warmup` measurements on.
+    fn judge_after(
         &self,
         result: &AdaptiveRegistrationResult,
         fwhm: Option<f32>,
+        warmup: usize,
     ) -> Option<RejectionReason> {
         // Not a share of the star list: a thin sub's true fit pairs 10-19 of 200
         // detections (the rest are noise), while a coincidence on a bright nebula's
@@ -440,7 +336,7 @@ impl FrameGate {
 
         // Until there is history to compare against, a registered frame is the
         // best evidence available.
-        if self.history.measured() < WARMUP_FRAMES {
+        if self.history.measured() < warmup {
             return None;
         }
 
@@ -450,7 +346,7 @@ impl FrameGate {
             }
         }
 
-        if self.is_bloated(fwhm) {
+        if self.is_bloated_after(fwhm, warmup) {
             return Some(RejectionReason::StarsTooLarge);
         }
 

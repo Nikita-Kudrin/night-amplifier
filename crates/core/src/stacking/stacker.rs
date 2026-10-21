@@ -10,6 +10,7 @@ use crate::registration::AffineTransform;
 use tracing::{info_span, instrument, Span};
 
 use super::config::{FrameQuality, StackingConfig};
+use super::held::HeldFrame;
 use super::stack::MasterStack;
 use super::warp::warp_frame_into;
 
@@ -142,6 +143,31 @@ impl Stacker {
             1e-6,
             quality,
         )
+    }
+
+    /// Starts the stack over from held subs, each moved onto the reference by its
+    /// transform (target -> reference) and judged as a batch — see [`MasterStack::restack`].
+    ///
+    /// Warps in place, one sub at a time through the stacker's own buffer, so the only
+    /// memory this adds is one f32 frame of scratch. An identity transform is not warped:
+    /// the interpolator would turn the last row and column into border.
+    pub fn restack(
+        &mut self,
+        subs: &mut [HeldFrame],
+        transforms: &[AffineTransform],
+        qualities: &[FrameQuality],
+    ) -> Result<()> {
+        let mut scratch = Frame::zeros(self.width(), self.height(), self.channels())?;
+        for (sub, transform) in subs.iter_mut().zip(transforms) {
+            if *transform == AffineTransform::identity() {
+                continue;
+            }
+            let _warp_span = info_span!("warp_frame", width = scratch.width(), height = scratch.height()).entered();
+            sub.restore_into(&mut scratch)?;
+            warp_frame_into(&scratch, transform, &mut self.warp_buffer, self.border_value)?;
+            sub.overwrite(&self.warp_buffer)?;
+        }
+        self.stack.restack(subs, qualities, self.border_value)
     }
 
     /// Returns the frame quality metrics for all accumulated frames.

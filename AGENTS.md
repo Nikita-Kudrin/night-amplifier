@@ -490,6 +490,20 @@ geometrically. `RejectionMethod` has four variants but the live path implements 
 per-pixel min/max, +650 MB); the plain-mean path maintains `m2` too, so a settings toggle lands mid-stack without
 opening a gap.
 
+**A stack's first six subs are on probation** (`context::probation`): sub 1 used to become the
+reference unjudged (a bumped one: stars +40 %), and Pro cannot clip a pixel's first three samples.
+They stream as before but are held at f16 (54 MB each at 3008²x3); at sub 6 the reference is
+elected by **consensus** (median pairs the others line up on it; never FWHM, which reads a smeared
+sub *sharper*), sub 1 keeping it within 90 %. Subs pairing under half the best are `Outvoted`, the
+rest face the gate against the agreeing subs' medians (three clouded subs of six dragged the whole
+batch's down until the clear ones read bloated), and the stack is rebuilt once
+(`MasterStack::restack`, set-wide weights, Pro's `reject_batch`); no FWHM re-base follows, unless
+nobody was elected. A restack refuses before clearing or not at all (plugin resolved once, the
+plain mean if it errs), a batch drop counts as `offered`, and `StackedFrame::stack_generation`
+tells the render cache. Held subs are capped by `MemAvailable` (`probation::affordable`).
+`early_subs_tests` / Pro `early_subs_regression` score it on `early-bad-subs-imx533` and injected
+defects against an oracle and the legacy stream (`StackSettings::probation_subs` 0).
+
 **Auto crop** (`stacking::crop`, setting `auto_crop`, off = nothing cut anywhere) is the largest rectangle
 whose coverage cells all hold ≥ 0.95 of the stack, kept while they hold ≥ 0.85, and none before depth 20
 (`MIN_CROP_DEPTH`: shallower, 0.95 is every sub, and one early bump cut the view for 14 subs). The subs'

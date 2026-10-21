@@ -66,4 +66,20 @@ pub trait RejectionPlugin: Send + Sync {
         weight: f32,
         config: &StackingConfig,
     ) -> Result<()>;
+
+    /// Judges a batch of subs the stack restarts from (`MasterStack::restack`), each
+    /// sample against the same pixel of the others, before any is blended: sets a sample
+    /// to NaN to drop it, or moves it to clip it. `subs[k][i]` is sub `k`'s sample `i`; a
+    /// sample within `border_tolerance` of `border_value` is outside that sub's frame.
+    ///
+    /// The default judges nothing, so a plugin without it restacks as it streams.
+    fn reject_batch(
+        &self,
+        _subs: &mut [&mut [f32]],
+        _border_value: f32,
+        _border_tolerance: f32,
+        _config: &StackingConfig,
+    ) -> Result<()> {
+        Ok(())
+    }
 }

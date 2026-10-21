@@ -123,6 +123,9 @@ pub struct Replay {
     stacker: Option<Box<dyn night_amplifier::session::capture::LiveStacker>>,
     stacking_failed: bool,
     captured: usize,
+    /// Overrides the subs a deep-sky stack holds before judging them (`StackSettings`);
+    /// `Some(0)` replays the stack as it streamed before probation existed.
+    probation: Option<usize>,
 }
 
 impl Replay {
@@ -150,7 +153,14 @@ impl Replay {
             stacker: None,
             stacking_failed: false,
             captured: 0,
+            probation: None,
         }
+    }
+
+    /// The same replay with the stack's probation held to `subs` (0: none).
+    pub fn with_probation(mut self, subs: usize) -> Self {
+        self.probation = Some(subs);
+        self
     }
 
     /// Subs in the session, the reference included.
@@ -183,10 +193,14 @@ impl Replay {
         frame: &Frame,
         want_display: bool,
     ) -> night_amplifier::session::capture::pipeline::StackingOutcome {
-        night_amplifier::session::capture::pipeline::stack_frame(
+        let mut stack = night_amplifier::session::capture::StackSettings::of(&self.settings, &self.plugins);
+        if let Some(subs) = self.probation {
+            stack.probation_subs = subs;
+        }
+        night_amplifier::session::capture::pipeline::stack_frame_with(
             frame,
-            &self.settings,
-            &self.plugins,
+            self.settings.stacking_type,
+            &stack,
             &mut self.stacker,
             &mut self.stacking_failed,
             want_display,

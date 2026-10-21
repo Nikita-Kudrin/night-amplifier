@@ -36,21 +36,38 @@ reason. A frame is dropped when:
 
 The last two thresholds follow your session rather than a fixed standard: they are derived from
 the frames measured so far, so a night of soft seeing is not rejected wholesale, while a single
-bad frame on a night of good seeing still is. The first few frames of a session are always
-accepted, since there is nothing yet to compare them against.
+bad frame on a night of good seeing still is. The first frames are judged once there are enough
+of them to judge by — see below.
 
 Alignment error is also judged against the size of your stars, not only against the rest of the
 session. A misalignment matters in proportion to what it is smearing: a pixel of error is nothing
 on a soft, wide star and obvious on a tight one. Without that, a well-tracking mount ended up with
 the strictest gate of all, throwing away frames that were aligned to well inside a single star.
 
-During those first frames the software also watches for a sharper frame than the one it started
-on. The reference frame sets the sharpness ceiling for everything stacked onto it, and the first
-frame of a session is chosen before anything is known about the night. If a frame arrives early
-that is clearly sharper — sharper than the reference *and* than the session so far, so that it is
-a real change in conditions rather than the ordinary frame-to-frame wobble in the measurement —
-the stack restarts from it. The frame counter resets, and the few seconds of integration given up
-buy a sharper result for the rest of the session.
+### The first six frames
+
+Every check above compares a frame with the session so far, so the first frames of a stack have
+nothing to be judged against, and the very first one becomes the reference everything else is
+aligned to. A bumped, trailed, smeared or clouded first frame used to stay in charge all night:
+a bumped one left every star of the stack about 40 % larger.
+
+So the first six frames stack as usual, and the live view shows them, but the stack also keeps a
+copy of each. Once the sixth arrives they are judged together. The reference becomes the frame the
+others line up best on, and stays the first one unless another is clearly better. Frames whose
+stars line up far worse than the rest — cloud, a bump, a trail — are taken out, the remaining
+frames are judged by the checks above against each other, and the stack is rebuilt from what
+remains, each frame weighted against the whole set. The counters move the frames taken out from
+*stacked* to *rejected*, and a frame first refused against a bad reference can come back in.
+
+If no frame lines up with most of the others, nothing is rebuilt and the stack carries on as it
+streamed; a clearly sharper frame among the first ten can then still restart it, as it could before.
+
+The rebuild takes a moment once (about a third of a second on a desktop PC, longer on a Raspberry
+Pi), and the six copies hold about 330 MB at 3008×3008 in colour until it is done; on a computer
+short of free memory fewer frames are held, or none. A stack restarted by Wanderer mode starts its
+own six. Smeared stars are not caught: a frame drawn out by wind looks
+much like the ordinary sub-to-sub wobble of an alt-az field, and stays in the stack as it would
+mid-session.
 
 The live view always shows the accumulated stack. A rejected frame leaves the stack as it was, so
 the preview holds steady instead of dropping back to a single noisy sub-exposure.
@@ -115,6 +132,11 @@ Satellite trails, aircraft and cosmic-ray hits are removed pixel by pixel: each 
 compared with the spread that pixel has shown so far and clipped when it lies too far out. Pro
 starts on **Sigma Clipping**, with **Winsorized** as the gentler alternative; Community averages
 every sample. Deep-sky and planetary stacking both run the method you pick.
+
+A pixel's first few samples have no spread to be compared with, so a trail in the first frames of
+a deep-sky stack used to stay in it. When the first six frames are rebuilt (see *The first six
+frames*), each pixel's six samples are compared with each other instead, and a trail crossing one
+of them is removed before any of it is stacked.
 
 ## Saving raw frames
 

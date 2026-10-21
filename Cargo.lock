@@ -1961,6 +1961,7 @@ dependencies = [
  "dlopen2",
  "fitsio",
  "fs4",
+ "half",
  "image",
  "libc",
  "lz4_flex",

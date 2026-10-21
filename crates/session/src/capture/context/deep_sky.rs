@@ -2,6 +2,7 @@
 
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
+use super::probation::{Commit, Probation};
 use super::{LiveStackError, LiveStacker, StackSettings, MIN_REFERENCE_STARS};
 use night_amplifier_core::detection::{
     collapse_doubles, compute_median_fwhm, compute_median_snr, doubled_star_share,
@@ -11,7 +12,7 @@ use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::registration::{AdaptiveRegistration, AffineTransform};
 use night_amplifier_core::stacking::{FrameQuality, Stacker, StackingType};
 
-use crate::capture::frame_gate::{median, push_bounded, FrameAdmission, FrameGate, RejectionReason, StarField};
+use crate::capture::frame_gate::{median, push_bounded, FrameAdmission, FrameGate, RejectionReason, Restacked, StarField};
 
 pub struct StackingContext {
     pub stacker: Stacker,
@@ -26,6 +27,11 @@ pub struct StackingContext {
     /// Each sub's [`typical_fwhm`], registered or not: the size of a star on screen, which
     /// the renderer holds Detail off by. Not the gate's FWHM, which drops the widest stars.
     star_widths: std::collections::VecDeque<f32>,
+    /// The stack's first subs, held until they can be judged; `None` once committed.
+    probation: Option<Probation>,
+    /// The reference is elected from a probation, so no later sub re-bases it: the
+    /// re-base exists because sub 1 was picked blind, and once discarded 7 subs at sub 8.
+    elected: bool,
 }
 
 impl StackingContext {
@@ -45,6 +51,7 @@ impl StackingContext {
 
         // Use adaptive registration which tries multiple strategies
         let adaptive_registration = AdaptiveRegistration::new();
+        let probation = Probation::for_stack(settings.probation_subs, width * height * channels);
 
         Ok(Self {
             stacker,
@@ -54,6 +61,8 @@ impl StackingContext {
             gate: FrameGate::default(),
             last_transform: None,
             star_widths: Default::default(),
+            elected: probation.is_some(),
+            probation,
         })
     }
 
@@ -86,6 +95,10 @@ impl StackingContext {
             .set_reference(quality.fwhm, doubled_star_share(&self.reference_stars));
         self.last_transform = None;
         self.is_initialized = true;
+        if let Some(probation) = &mut self.probation {
+            probation.offered();
+            probation.hold(frame, self.reference_stars.clone(), quality, true);
+        }
         Span::current().record("star_count", self.reference_stars.len());
         Ok(self.reference_stars.len())
     }
@@ -122,32 +135,40 @@ impl StackingContext {
                 Ok(stars) => stars,
                 Err(_) => {
                     Span::current().record("registered", false);
-                    return Ok(FrameAdmission::rejected(
-                        RejectionReason::NoStars,
-                        0,
-                        f32::NAN,
-                    ));
+                    let starless = FrameAdmission::rejected(RejectionReason::NoStars, 0, f32::NAN);
+                    return self.settle(starless, false);
                 }
             }
         };
 
         if target_stars.len() < MIN_REFERENCE_STARS {
             Span::current().record("registered", false);
-            return Ok(FrameAdmission::rejected(
-                RejectionReason::TooFewStars,
-                0,
-                f32::NAN,
-            ));
+            let starless = FrameAdmission::rejected(RejectionReason::TooFewStars, 0, f32::NAN);
+            return self.settle(starless, false);
         }
         self.record_star_width(typical_fwhm(&target_stars));
 
-        let field = StarField::of(&target_stars);
+        let admission = self.place(frame, &target_stars)?;
+        let Some(probation) = &mut self.probation else {
+            return Ok(admission);
+        };
+        let quality = FrameQuality {
+            fwhm: compute_median_fwhm(&target_stars),
+            snr: compute_median_snr(&target_stars),
+        };
+        probation.hold(frame, target_stars, quality, admission.added);
+        self.settle(admission, true)
+    }
+
+    /// Registers and judges a sub with stars, and stacks it if it passes.
+    fn place(&mut self, frame: &Frame, target_stars: &[Star]) -> Result<FrameAdmission, LiveStackError> {
+        let field = StarField::of(target_stars);
 
         let register_result = {
             let _span = info_span!("register").entered();
             self.adaptive_registration.register_near(
                 &self.reference_stars,
-                &target_stars,
+                target_stars,
                 self.last_transform.as_ref(),
             )
         };
@@ -173,8 +194,8 @@ impl StackingContext {
                 let (registration, reference) = (&self.adaptive_registration, &self.reference_stars);
                 let prior = self.last_transform.as_ref();
                 let is_this_field = || {
-                    dominant_companion_offset(&target_stars)
-                        .map(|offset| collapse_doubles(&target_stars, offset))
+                    dominant_companion_offset(target_stars)
+                        .map(|offset| collapse_doubles(target_stars, offset))
                         .is_some_and(|single| {
                             registration
                                 .register_near(reference, &single, prior)
@@ -199,7 +220,7 @@ impl StackingContext {
         // Compute quality metrics from detected stars for weighted stacking
         let quality = FrameQuality {
             fwhm: field.fwhm,
-            snr: compute_median_snr(&target_stars),
+            snr: compute_median_snr(target_stars),
         };
 
         let verdict = self.gate.admit(&result, field);
@@ -215,10 +236,11 @@ impl StackingContext {
 
         // A sharper frame arriving early is worth more than the few frames of
         // integration it costs: the reference sets a hard sharpness floor on
-        // everything that follows, and frame one is picked blind.
-        if self.gate.should_rebase(quality.fwhm) {
+        // everything that follows, and frame one is picked blind. A probation elects
+        // its reference from the whole batch instead, and keeps what this discards.
+        if !self.elected && self.gate.should_rebase(quality.fwhm) {
             let previous = self.gate.reference_fwhm();
-            self.rebase_on(frame, target_stars, quality, field.doubling)?;
+            self.rebase_on(frame, target_stars.to_vec(), quality, field.doubling)?;
             span.record("registered", true);
             info!(
                 previous_fwhm = ?previous,
@@ -245,6 +267,57 @@ impl StackingContext {
         self.last_transform = Some(result.transform);
         span.record("registered", true);
         Ok(FrameAdmission::accepted(&result, false))
+    }
+
+    /// Counts a sub against the probation and commits it once it is due, folding the
+    /// rebuilt stack's verdicts into this sub's admission. `held`: this sub is the
+    /// probation's newest.
+    fn settle(&mut self, admission: FrameAdmission, held: bool) -> Result<FrameAdmission, LiveStackError> {
+        let Some(probation) = &mut self.probation else {
+            return Ok(admission);
+        };
+        probation.offered();
+        if !probation.is_due() {
+            return Ok(admission);
+        }
+        let probation = self.probation.take().expect("checked above");
+        let Some(commit) = probation.decide(&self.adaptive_registration, self.gate.frames_seen()) else {
+            // Nothing was elected, so sub 1 is still the blind pick the re-base exists for.
+            self.elected = false;
+            info!(held = probation.held().len(), "No held sub registers most of the others: the stack stays as it streamed");
+            return Ok(admission);
+        };
+        Ok(self.commit(probation, commit, admission, held))
+    }
+
+    fn commit(&mut self, probation: Probation, commit: Commit, admission: FrameAdmission, held: bool) -> FrameAdmission {
+        let subs = probation.held();
+        let elected = &subs[commit.reference];
+        let (reference_stars, elected_fwhm) = (elected.stars.clone(), elected.field.fwhm);
+        let streamed: Vec<bool> = subs.iter().map(|sub| sub.stacked).collect();
+        let (mut frames, transforms, qualities) = probation.into_kept(&commit);
+        // Refused before the accumulator is touched (`MasterStack::restack`), so the stack
+        // stays as it streamed, on a reference nobody elected.
+        if let Err(error) = self.stacker.restack(&mut frames, &transforms, &qualities) {
+            warn!(%error, "Probation not committed: the stack stays as it streamed");
+            self.elected = false;
+            return admission;
+        }
+
+        let admission = fold_verdicts(admission, &commit, &streamed, held);
+        let latest = commit.placed.iter().rev().flatten().next().copied();
+        self.last_transform = latest.filter(|t| *t != AffineTransform::identity());
+        self.reference_stars = reference_stars;
+        self.gate = commit.gate;
+        info!(
+            held = streamed.len(),
+            kept = frames.len(),
+            reference = commit.reference + 1,
+            reference_fwhm = ?elected_fwhm,
+            restacked = ?admission.restacked,
+            "Probation committed: stack rebuilt on the elected reference"
+        );
+        admission
     }
 
     /// Discards the accumulated stack and starts again from this frame.
@@ -294,6 +367,30 @@ impl StackingContext {
     pub fn update_from_settings(&mut self, settings: &StackSettings) {
         self.stacker.update_config(settings.config.clone());
     }
+}
+
+/// Folds a commit's verdicts into the admission of the sub that closed it: that sub's own
+/// fate when it is the probation's newest (`held`), and the earlier subs the rebuilt stack
+/// took back out or let in after all (`streamed`: each held sub's place as it streamed).
+fn fold_verdicts(mut admission: FrameAdmission, commit: &Commit, streamed: &[bool], held: bool) -> FrameAdmission {
+    let mut restacked = Restacked { rereferenced: commit.reference != 0, ..Restacked::default() };
+    let newest = streamed.len() - 1;
+    for (i, &stacked) in streamed.iter().enumerate() {
+        let kept = commit.placed[i].is_some();
+        if held && i == newest {
+            admission.added = kept;
+            admission.rejected_because = commit.reasons[i];
+            admission.transform = commit.placed[i];
+            continue;
+        }
+        match (stacked, kept) {
+            (true, false) => restacked.retracted += 1,
+            (false, true) => restacked.reinstated += 1,
+            _ => {}
+        }
+    }
+    admission.restacked = Some(restacked);
+    admission
 }
 
 impl LiveStacker for StackingContext {
@@ -365,102 +462,5 @@ impl LiveStacker for StackingContext {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::CaptureSettings;
-    use night_amplifier_core::plugins::Plugins;
-    use night_amplifier_core::stacking::{RejectionMethod, WeightingPreset};
-
-    fn context() -> StackingContext {
-        let settings = StackSettings::of(&CaptureSettings::default(), &Plugins::none());
-        StackingContext::new(64, 64, 1, &settings).expect("context builds")
-    }
-
-    /// A 64² field of five Gaussian stars of width `sigma`.
-    fn starfield(sigma: f32) -> Frame {
-        let mut frame = Frame::filled(64, 64, 1, 0.05).unwrap();
-        for (cx, cy) in [(16.0f32, 16.0f32), (48.0, 16.0), (32.0, 32.0), (16.0, 48.0), (48.0, 48.0)] {
-            for y in 0..64 {
-                for x in 0..64 {
-                    let r2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
-                    let v = frame.get_pixel(x, y, 0) + 0.6 * (-r2 / (2.0 * sigma * sigma)).exp();
-                    frame.set_pixel(x, y, 0, v);
-                }
-            }
-        }
-        frame
-    }
-
-    /// The session's star width starts at the reference's and follows the subs, a field
-    /// too wide to measure reading as the widest measurable star rather than nothing.
-    #[test]
-    fn the_star_width_follows_the_subs_and_counts_wide_stars() {
-        let mut ctx = context();
-        assert_eq!(ctx.star_fwhm(), None, "nothing measured yet");
-
-        ctx.initialize_with_reference(&starfield(2.0)).expect("reference");
-        let sharp = ctx.star_fwhm().expect("measured on the reference");
-        assert!((sharp - 2.0 * night_amplifier_core::detection::FWHM_PER_SIGMA).abs() < 0.5, "{sharp}");
-
-        // A soft sub need not register to be measured.
-        ctx.add_frame(&starfield(6.0)).expect("offered");
-        ctx.add_frame(&starfield(6.0)).expect("offered");
-        assert_eq!(ctx.star_fwhm(), Some(night_amplifier_core::detection::widest_measurable_fwhm()));
-    }
-
-    /// A starless reference cannot anchor registration, and says so by count rather than
-    /// as a generic stack failure.
-    #[test]
-    fn a_starless_reference_is_too_few_stars() {
-        let blank = Frame::filled(64, 64, 1, 0.1).unwrap();
-        assert_eq!(
-            context().initialize_with_reference(&blank),
-            Err(LiveStackError::TooFewStars { found: 0 })
-        );
-    }
-
-    #[test]
-    fn a_frame_before_the_reference_is_refused() {
-        let frame = Frame::filled(64, 64, 1, 0.1).unwrap();
-        assert_eq!(context().add_frame(&frame).err(), Some(LiveStackError::NoReference));
-    }
-
-    /// Starting a session and editing settings mid-session must agree.
-    ///
-    /// They did not: `new` hardcoded `SigmaClip` from licence state while
-    /// `update_from_settings` read `settings.rejection_method`, so the observer's choice
-    /// only took effect if they happened to touch settings after capture began. Compared
-    /// through the config the accumulator actually ends up running, not through the
-    /// resolver both now call — going through the resolver twice would pass however the
-    /// two paths were wired.
-    #[test]
-    fn session_start_and_a_settings_edit_configure_the_stack_alike() {
-        for method in [RejectionMethod::None, RejectionMethod::SigmaClip] {
-            for (preset, sigma) in [
-                (WeightingPreset::Balanced, 2.5),
-                (WeightingPreset::Nebulae, 1.8),
-                (WeightingPreset::Disabled, 3.2),
-            ] {
-                let settings = CaptureSettings {
-                    rejection_method: method,
-                    weighting_preset: preset,
-                    rejection_sigma: sigma,
-                    ..Default::default()
-                };
-                let settings = StackSettings::of(&settings, &night_amplifier_core::plugins::Plugins::none());
-
-                let mut at_start =
-                    StackingContext::new(64, 64, 3, &settings).expect("context builds");
-                let from_start = at_start.stacker.config().clone();
-
-                at_start.update_from_settings(&settings);
-                let after_edit = at_start.stacker.config();
-
-                assert_eq!(from_start.rejection, after_edit.rejection, "{method:?}");
-                assert_eq!(from_start.sigma_low, after_edit.sigma_low);
-                assert_eq!(from_start.sigma_high, after_edit.sigma_high);
-                assert_eq!(from_start.weighting, after_edit.weighting, "{preset:?}");
-            }
-        }
-    }
-}
+#[path = "deep_sky_tests.rs"]
+mod tests;
