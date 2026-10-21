@@ -279,6 +279,10 @@ pub struct StackedFrame {
     /// The render task's analysis cache refreshes on proportional growth in this, not on
     /// elapsed frames, because the statistics it holds fall as `1/sqrt(N)`.
     pub stack_depth: u32,
+    /// Counts the times the stack was rebuilt in place (a probation's commit, a re-base),
+    /// which the render task's estimates must not outlive though the depth held. A stack
+    /// emptied and begun again reads from the depth falling instead.
+    pub stack_generation: u64,
     /// The stack's coverage map — see [`night_amplifier_core::frame::NoiseField`]. `None` whenever no
     /// accumulator stands behind the frame or its subs covered it completely.
     ///

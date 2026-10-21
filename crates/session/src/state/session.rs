@@ -133,6 +133,19 @@ impl SessionStats {
         self.failures.lock().unwrap_or_else(|e| e.into_inner()).len() >= REJECTION_RATE_THRESHOLD
     }
 
+    /// Moves subs a rebuilt stack took back out from stacked to rejected, and subs it let
+    /// in after all the other way. The frame count stands: they were all captured.
+    pub fn restacked(&self, retracted: usize, reinstated: usize) {
+        let shift = |from: &AtomicU64, to: &AtomicU64, n: usize| {
+            let moved = from
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some(v.saturating_sub(n as u64)))
+                .map_or(0, |was| was.min(n as u64));
+            to.fetch_add(moved, Ordering::SeqCst);
+        };
+        shift(&self.stacked, &self.rejected, retracted);
+        shift(&self.rejected, &self.stacked, reinstated);
+    }
+
     /// Zeroes the counters, keeping the start time: a stack reset, not a new session.
     pub fn reset_counters(&self) {
         for counter in [&self.frames, &self.stacked, &self.rejected, &self.delivered, &self.dropped] {
@@ -237,6 +250,17 @@ mod tests {
                 dropped: 0,
             }
         );
+    }
+
+    #[test]
+    fn a_restack_moves_subs_between_stacked_and_rejected() {
+        let stats = SessionStats::default();
+        for stacked in [true, true, true, false] {
+            stats.frame_captured(stacked, true);
+        }
+        stats.restacked(2, 1);
+        let counts = stats.counts();
+        assert_eq!((counts.frames, counts.stacked, counts.rejected), (4, 2, 2));
     }
 
     #[test]

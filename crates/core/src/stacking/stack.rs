@@ -13,7 +13,7 @@ use tracing::{info_span, warn};
 use super::config::{FrameQuality, StackingConfig};
 use super::incremental_pixel::IncrementalPixel;
 use super::quality_baseline::QualityBaseline;
-use super::rejection::RejectionMethod;
+use super::rejection::{RejectionMethod, RejectionPlugin};
 use crate::plugins::Plugins;
 
 /// One row of variance cells from the `r` accumulator rows they cover.
@@ -70,6 +70,13 @@ fn coverage_row(cover_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: u
         };
     }
 }
+
+/// Samples per band a batch is restacked in: [`MasterStack::restack`] holds one band of every
+/// sub as f32, 4 MB each, rather than every sub's whole frame.
+const BATCH_BAND: usize = 1 << 20;
+
+#[path = "stack_batch.rs"]
+mod batch;
 
 pub struct MasterStack {
     width: usize,
@@ -183,7 +190,8 @@ impl MasterStack {
             });
         }
 
-        let data = frame.data();
+        let plugins = self.plugins.clone();
+        let rejection = self.rejection(&plugins)?;
 
         // 1. Weigh this frame against the frames already stacked, then fold it
         //    into the baseline. Recording first would let the frame help define
@@ -193,62 +201,7 @@ impl MasterStack {
             .calculate_weight(&quality, &self.config.weighting);
         self.quality_baseline.record(&quality);
 
-        let needs_rejection = matches!(
-            self.config.rejection,
-            RejectionMethod::SigmaClip | RejectionMethod::WinsorizedSigmaClip
-        );
-
-        if needs_rejection {
-            if let Some(plugin) = self.plugins.rejection() {
-                plugin.blend_incremental(
-                    &mut self.pixels,
-                    data,
-                    border_value,
-                    border_tolerance,
-                    weight,
-                    &self.config,
-                )?;
-            } else {
-                return Err(StackError::InvalidConfiguration(
-                    "Advanced outlier rejection is a Pro feature.".into(),
-                ));
-            }
-        } else {
-            let _store_span =
-                info_span!("blend_pixels", frame_count = self.frame_count + 1).entered();
-
-            // Built once per frame, not once per pixel: the divide this hoists runs 27
-            // million times otherwise. Same reason as the rejection kernel's copy.
-            let alphas = super::incremental_pixel::scale_alpha_table();
-
-            // 2. Blend the frame directly into the Master result in O(1) memory (No rejection)
-            self.pixels
-                .par_iter_mut()
-                .zip(data.par_iter())
-                .for_each(|(pixel, &val)| {
-                    // Skip borders, and non-finite samples: a NaN in a running mean
-                    // never leaves again.
-                    if !val.is_finite() || (val - border_value).abs() < border_tolerance {
-                        return;
-                    }
-
-                    // `offered` feeds the coverage map. The scale (`m2`) is kept too though
-                    // nothing here clips against it: rejection switched on mid-session
-                    // inherits it warm, and `noise_field` measures it on demand — free,
-                    // since the loop is memory-bound and the pixel is read/written either
-                    // way (117.2 vs 117.5 ms per eight 3008x3008x3 frames, x86). Taken
-                    // before the mean moves, or the deviation would be measured against a
-                    // mean already holding this sample; outliers are dropped by the
-                    // observer itself — see `observe_scale_guarded`.
-                    pixel.offered = pixel.offered.saturating_add(1);
-                    pixel.observe_scale_guarded(val - pixel.mean, &alphas);
-
-                    // Blend into running average
-                    pixel.blend(val, weight);
-                });
-
-            drop(_store_span);
-        }
+        self.blend(rejection, 0, frame.data(), border_value, border_tolerance, weight)?;
 
         self.frame_count += 1;
         self.frame_qualities.push(quality);
@@ -257,6 +210,80 @@ impl MasterStack {
 
     pub fn frame_count(&self) -> usize {
         self.frame_count
+    }
+
+    /// Whether this configuration routes samples through the rejection plugin.
+    fn rejects(&self) -> bool {
+        matches!(
+            self.config.rejection,
+            RejectionMethod::SigmaClip | RejectionMethod::WinsorizedSigmaClip
+        )
+    }
+
+    /// The plugin this configuration routes samples through, `None` for the plain mean; an
+    /// error where it needs one this build or licence lacks. Resolved once per call that
+    /// blends, since the licence is checked on every lookup.
+    fn rejection<'p>(&self, plugins: &'p Plugins) -> Result<Option<&'p dyn RejectionPlugin>> {
+        if !self.rejects() {
+            return Ok(None);
+        }
+        plugins.rejection().map(Some).ok_or_else(|| {
+            StackError::InvalidConfiguration("Advanced outlier rejection is a Pro feature.".into())
+        })
+    }
+
+    /// Blends one sub's samples into the accumulator from `offset` on: a whole frame, or one
+    /// band of it when a batch is restacked (see `batch`).
+    fn blend(
+        &mut self,
+        rejection: Option<&dyn RejectionPlugin>,
+        offset: usize,
+        data: &[f32],
+        border_value: f32,
+        border_tolerance: f32,
+        weight: f32,
+    ) -> Result<()> {
+        let pixels = &mut self.pixels[offset..offset + data.len()];
+        if let Some(plugin) = rejection {
+            return plugin.blend_incremental(
+                pixels,
+                data,
+                border_value,
+                border_tolerance,
+                weight,
+                &self.config,
+            );
+        }
+
+        let _store_span = info_span!("blend_pixels", frame_count = self.frame_count + 1).entered();
+
+        // Built once per frame, not once per pixel: the divide this hoists runs 27
+        // million times otherwise. Same reason as the rejection kernel's copy.
+        let alphas = super::incremental_pixel::scale_alpha_table();
+
+        // 2. Blend the frame directly into the Master result in O(1) memory (No rejection)
+        pixels.par_iter_mut().zip(data.par_iter()).for_each(|(pixel, &val)| {
+            // Skip borders, and non-finite samples: a NaN in a running mean
+            // never leaves again.
+            if !val.is_finite() || (val - border_value).abs() < border_tolerance {
+                return;
+            }
+
+            // `offered` feeds the coverage map. The scale (`m2`) is kept too though
+            // nothing here clips against it: rejection switched on mid-session
+            // inherits it warm, and `noise_field` measures it on demand — free,
+            // since the loop is memory-bound and the pixel is read/written either
+            // way (117.2 vs 117.5 ms per eight 3008x3008x3 frames, x86). Taken
+            // before the mean moves, or the deviation would be measured against a
+            // mean already holding this sample; outliers are dropped by the
+            // observer itself — see `observe_scale_guarded`.
+            pixel.offered = pixel.offered.saturating_add(1);
+            pixel.observe_scale_guarded(val - pixel.mean, &alphas);
+
+            // Blend into running average
+            pixel.blend(val, weight);
+        });
+        Ok(())
     }
 
     pub fn width(&self) -> usize {

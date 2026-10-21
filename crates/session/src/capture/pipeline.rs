@@ -4,10 +4,10 @@
 //! re-exported here, so `pipeline::build_cfa_pipeline` and friends still resolve
 //! for the capture and stacking tasks that call them.
 
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::context::{create_live_stacker, LiveStacker, StackSettings};
+use super::context::{create_live_stacker, LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::plugins::Plugins;
 use super::frame_gate::{FrameAdmission, RejectionReason};
 use night_amplifier_core::frame::Frame;
@@ -114,8 +114,8 @@ impl StackingOutcome {
 
 /// Offers one frame to the session's stack, creating the stack on the first frame.
 ///
-/// `stacking_failed` latches when the mode cannot run at all (no plugin, no reference
-/// stars), so the caller stops asking and shows raw subs until the stack is reset.
+/// `stacking_failed` latches when the mode cannot run at all (no plugin), so the caller
+/// stops asking and shows raw subs until the stack is reset.
 #[instrument(skip_all, fields(
     width = frame.width(),
     height = frame.height(),
@@ -131,9 +131,24 @@ pub fn stack_frame(
     want_display: bool,
 ) -> StackingOutcome {
     let stack = StackSettings::of(settings, plugins);
+    stack_frame_with(frame, settings.stacking_type, &stack, stacker, stacking_failed, want_display)
+}
+
+/// [`stack_frame`] on settings already reduced to what the stack reads: where a test
+/// replays a session with the probation off, through the path production runs.
+#[instrument(skip_all, fields(kind = ?kind))]
+pub fn stack_frame_with(
+    frame: &Frame,
+    kind: night_amplifier_core::stacking::StackingType,
+    stack: &StackSettings,
+    stacker: &mut Option<Box<dyn LiveStacker>>,
+    stacking_failed: &mut bool,
+    want_display: bool,
+) -> StackingOutcome {
+    let created = stacker.is_none();
     let stacker = match stacker {
         Some(stacker) => stacker,
-        None => match create_live_stacker(settings.stacking_type, frame, &stack) {
+        None => match create_live_stacker(kind, frame, stack) {
             Ok(created) => stacker.insert(created),
             Err(e) => {
                 warn!(error = %e, "Cannot stack, falling back to single-frame mode");
@@ -142,18 +157,30 @@ pub fn stack_frame(
             }
         },
     };
-    stacker.apply_settings(&stack);
+    stacker.apply_settings(stack);
 
     if !stacker.has_reference() {
         if let Err(e) = stacker.set_reference(frame) {
-            warn!(error = %e, "Failed to initialize stacking, falling back to single-frame mode");
-            *stacking_failed = true;
+            // A starless sub (a cloud, a dew-covered lens) says nothing about the next one,
+            // which gets to be the reference instead: latching here once showed raw subs
+            // all night after one cloud. Warned once a stack, since a target that never
+            // shows enough stars (the Moon in deep-sky mode) tries every sub.
+            if matches!(e, LiveStackError::TooFewStars { .. }) {
+                if created {
+                    warn!(error = %e, "No reference in this sub, trying each next one");
+                } else {
+                    debug!(error = %e, "No reference in this sub either");
+                }
+            } else {
+                warn!(error = %e, "Failed to initialize stacking, falling back to single-frame mode");
+                *stacking_failed = true;
+            }
             return StackingOutcome::single_frame(frame, false);
         }
         return StackingOutcome::single_frame(frame, true); // The reference always "joins"
     }
 
-    let admission = match stacker.offer(frame, &stack) {
+    let admission = match stacker.offer(frame, stack) {
         Ok(admission) => admission,
         Err(e) => {
             warn!(error = %e, "Error adding frame to stack");

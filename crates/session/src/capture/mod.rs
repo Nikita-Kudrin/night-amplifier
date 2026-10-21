@@ -40,7 +40,7 @@ pub mod watchdog_tests;
 
 pub use analysis::{AnalysisContext, PreviewAnalysis};
 pub use context::{
-    LiveStackError, LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover,
+    LiveStackError, LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover, PROBATION_SUBS,
     StackingContext,
 };
 pub use drop_log::DropLog;

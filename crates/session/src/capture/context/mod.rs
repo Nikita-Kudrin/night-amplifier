@@ -9,12 +9,14 @@
 mod comet;
 mod deep_sky;
 mod planetary;
+mod probation;
 
 pub use comet::CometStacker;
 #[cfg(test)]
 pub(crate) use comet::StubComet;
 pub use deep_sky::StackingContext;
 pub use planetary::PlanetaryStackingContext;
+pub use probation::PROBATION_SUBS;
 
 use thiserror::Error;
 use tracing::warn;
@@ -100,6 +102,10 @@ pub struct StackSettings {
     pub planetary_multi_point_alignment: bool,
     /// What the stack runs: rejection, multi-point alignment, the comet nucleus.
     pub plugins: Plugins,
+    /// Subs a deep-sky stack holds before judging them as a batch ([`PROBATION_SUBS`]);
+    /// below 2, it streams from sub 1 as it did before probation existed. Not a setting:
+    /// tests compare the two.
+    pub probation_subs: usize,
 }
 
 impl StackSettings {
@@ -111,6 +117,7 @@ impl StackSettings {
             planetary_auto_tracking: settings.planetary_auto_tracking,
             planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             plugins: plugins.clone(),
+            probation_subs: PROBATION_SUBS,
         }
     }
 

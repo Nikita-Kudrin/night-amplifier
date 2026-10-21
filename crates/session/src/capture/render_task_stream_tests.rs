@@ -30,6 +30,7 @@ fn stacked_frame(frame: Arc<night_amplifier_core::frame::Frame>, settings: Captu
         frame_number: 1,
         settings: settings.into(),
         stack_depth: 0,
+        stack_generation: 0,
         star_fwhm: None,
     }
 }

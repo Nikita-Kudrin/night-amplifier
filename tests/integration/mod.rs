@@ -26,16 +26,21 @@
 //! - `instruments` - The measurement instruments, shared with Pro by `#[path]`: no `crate::` there
 //! - `render_brightness_tests` - The brightness-against-grain trade, on the instruments that judge it
 //! - `auto_crop_tests` - `auto_crop` on real sessions: area kept, crop motion, the cut before stretch
+//! - `early_subs_tests` - Bad first subs, streamed against the stack's probation and an oracle
+//! - `bad_subs_scan` - Diagnostic: every local session's subs tabulated, to find bad ones
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 pub mod auto_crop_tests;
 pub mod background_tests;
+pub mod bad_subs_scan;
 pub mod cfa_tests;
 pub mod common;
 pub mod debayer_tests;
 pub mod detection_tests;
 pub mod display_output_tests;
 pub mod dither_tests;
+pub mod early_subs;
+pub mod early_subs_tests;
 pub mod encoding_tests;
 pub mod fixture_processing;
 pub mod image_loading;

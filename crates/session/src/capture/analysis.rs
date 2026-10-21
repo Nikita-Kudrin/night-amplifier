@@ -189,6 +189,9 @@ pub struct PreviewAnalysis {
     crop: Option<CropRect>,
     /// `crop` moved since the last frame.
     crop_changed: bool,
+    /// The last [`Self::note_stack`] generation, and whether it changed since the last frame.
+    generation: u64,
+    rebuilt: bool,
     /// The stack's catalog footprints on the frame being analysed — see
     /// [`Self::set_protection`].
     protection: Option<Arc<FieldProtection>>,
@@ -209,6 +212,14 @@ impl PreviewAnalysis {
     pub fn note_crop(&mut self, crop: Option<CropRect>) {
         self.crop_changed = self.crop != crop;
         self.crop = crop;
+    }
+
+    /// The stack's `StackedFrame::stack_generation`, before [`Self::begin_frame`]: a stack
+    /// rebuilt in place is another stack whatever its depth says, and a probation's commit
+    /// can keep or raise it, which [`Self::begin_frame`] alone reads as the same stack.
+    pub fn note_stack(&mut self, generation: u64) {
+        self.rebuilt |= self.generation != generation;
+        self.generation = generation;
     }
 
     /// The stack's catalog footprints, mapped onto the next frame, before
@@ -252,8 +263,9 @@ impl PreviewAnalysis {
         );
 
         let crop_changed = std::mem::take(&mut self.crop_changed);
+        let rebuilt = std::mem::take(&mut self.rebuilt);
         let protection_changed = self.cached.as_ref().is_some_and(|c| c.key.protection != key.protection);
-        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx, crop_changed, protection_changed);
+        let same_stack = ctx.showing_stack && !rebuilt && self.continues_stack(&key, ctx, crop_changed, protection_changed);
         let remeasure = crop_changed || protection_changed;
         if !same_stack {
             self.trend = NoiseTrend::default();
@@ -511,6 +523,25 @@ mod tests {
         assert!(!begin(&mut a, stacked(140), &cfg));
         let _ = a.white_balance(|| Ok([1.0, 1.0, 1.0]));
         assert!(!begin(&mut a, stacked(1), &cfg));
+    }
+
+    /// A probation's commit rebuilds the stack at the depth it had: only the generation
+    /// tells the render task the estimates describe another stack, and only once.
+    #[test]
+    fn a_stack_rebuilt_at_its_depth_invalidates_once() {
+        let mut a = PreviewAnalysis::new();
+        let cfg = config();
+        a.note_stack(0);
+        assert!(!begin(&mut a, stacked(6), &cfg));
+        let _ = a.white_balance(|| Ok([1.0, 1.0, 1.0]));
+        a.note_stack(0);
+        assert!(begin(&mut a, stacked(6), &cfg), "the same stack reuses");
+
+        a.note_stack(1);
+        assert!(!begin(&mut a, stacked(6), &cfg), "the rebuilt stack reused the old one's estimates");
+        let _ = a.white_balance(|| Ok([1.0, 1.0, 1.0]));
+        a.note_stack(1);
+        assert!(begin(&mut a, stacked(7), &cfg), "the rebuilt stack is measured once, then reused");
     }
 
     /// The getters must not hand back a value the frame did not ask to reuse, and must

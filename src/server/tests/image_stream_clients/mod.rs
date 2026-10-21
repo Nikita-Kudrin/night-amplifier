@@ -177,6 +177,7 @@ impl TestServer {
             frame_number: 1,
             settings: Arc::new(settings),
             stack_depth: if showing_stack { 10 } else { 0 },
+            stack_generation: 0,
             crop,
             star_fwhm: None,
         })
