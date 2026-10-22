@@ -1,0 +1,4 @@
+# Every test runs to the end, locally and on CI (archive runs read this file too): the
+# default stops at the first failure, which once left 114 of Pro's 156 tests unrun.
+[profile.default]
+fail-fast = false

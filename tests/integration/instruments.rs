@@ -1768,12 +1768,15 @@ pub fn measure_sky_and_target(rgb8: &[u8], width: usize, sky: (usize, usize, usi
     }
 }
 
-/// `(x, y, width, height)` in pixels.
+/// `(x0, y0, x1, y1)` in pixels.
 pub type PixelBox = (usize, usize, usize, usize);
+
+/// The side of the blocks [`locate_boxes`] and [`box_at`] measure.
+const BOX: usize = 96;
 
 /// Darkest and brightest 96 px block of the green channel, by median.
 pub fn locate_boxes(rgb8: &[u8], w: usize, h: usize) -> (PixelBox, PixelBox) {
-    const B: usize = 96;
+    const B: usize = BOX;
     let mut darkest = (f64::MAX, (0, 0, B, B));
     let mut brightest = (f64::MIN, (0, 0, B, B));
     // Stay off the edges: registration leaves a partially covered border.
@@ -1790,6 +1793,14 @@ pub fn locate_boxes(rgb8: &[u8], w: usize, h: usize) -> (PixelBox, PixelBox) {
         }
     }
     (darkest.1, brightest.1)
+}
+
+/// The 96 px block centred on `(cx, cy)`, in frame fractions, kept inside a `w x h` frame
+/// (at its origin, if the frame is narrower than a block).
+pub fn box_at((cx, cy): (f64, f64), w: usize, h: usize) -> PixelBox {
+    let corner = |c: f64, side: usize| ((c * side as f64) as usize).saturating_sub(BOX / 2).min(side.saturating_sub(BOX));
+    let (x, y) = (corner(cx, w), corner(cy, h));
+    (x, y, x + BOX, y + BOX)
 }
 
 /// Grain against depth on a real session, the target against that grain, and how far
@@ -1835,9 +1846,27 @@ const STREAM_BOXES: [(&str, StreamBox); 2] = [
 pub enum GiveBack {
     /// Never more than 2 output levels below the best so far.
     Banded,
-    /// A target too faint for a 2-level band, named by its test: it must still reach
-    /// `min_peak` levels, so it cannot fade out unseen.
-    Faint { min_peak: f64 },
+    /// [`Self::Banded`] on the target its test names rather than the frame's brightest
+    /// block, which on a faint target's frame is a star or the glow.
+    Named(NamedTarget),
+}
+
+/// Where a [`GiveBack::Named`] target is, in fractions of the `frame` (stack size, px) it
+/// was plate-solved on. The size is checked against the stack: fractions copied from a
+/// crop of IC 59 once put the test's IC 63 on the glow 0.46 of a frame away.
+#[derive(Clone, Copy, Debug)]
+pub struct NamedTarget {
+    pub centre: (f64, f64),
+    pub frame: (usize, usize),
+}
+
+impl NamedTarget {
+    /// The target's [`box_at`] block in `stack` rendered at `w x h`.
+    pub fn block(&self, stack: &Frame, (w, h): (usize, usize)) -> PixelBox {
+        let size = (stack.width(), stack.height());
+        assert_eq!(size, self.frame, "the target was located on another frame size; plate-solve this stack");
+        box_at(self.centre, w, h)
+    }
 }
 
 /// [`measure_real_session`]'s assertions on its snapshots rendered into `stream_box`.
@@ -1851,7 +1880,10 @@ fn measure_snapshots_at(
     let settings = night_amplifier::session::state::CaptureSettings::default();
     let deepest = snapshots.last().unwrap();
     let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, stream_box, deepest.depth as u32);
-    let (sky, target) = locate_boxes(&deep_rgb, w, h);
+    let (sky, mut target) = locate_boxes(&deep_rgb, w, h);
+    if let GiveBack::Named(named) = give_back {
+        target = named.block(&deepest.frame, (w, h));
+    }
 
     for &denoise in denoise_modes {
         println!(
@@ -1954,18 +1986,12 @@ fn measure_snapshots_at(
             "  target contrast peaked at {best:.0} levels, worst give-back \
              {worst_drop:.0} levels at {worst_n} subs"
         );
-        match give_back {
-            GiveBack::Banded => assert!(
-                worst_drop <= 2.0,
-                "{label}: rendered target contrast fell {worst_drop:.0} levels below a \
-                 shallower stack's by {worst_n} subs — the curve is spending more depth on \
-                 the sky than the stack delivers"
-            ),
-            GiveBack::Faint { min_peak } => assert!(
-                best >= min_peak,
-                "{label}: the faint target peaked at {best:.0} levels, under {min_peak:.0}"
-            ),
-        }
+        assert!(
+            worst_drop <= 2.0,
+            "{label}: rendered target contrast fell {worst_drop:.0} levels below a \
+             shallower stack's by {worst_n} subs — the curve is spending more depth on \
+             the sky than the stack delivers"
+        );
 
         // Stability: the sky must not jump between one stack update and the next. In a
         // dark eyepiece a few levels of background step reads as the field pumping.

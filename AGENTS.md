@@ -97,11 +97,15 @@ If you can't fix a test, don't simplify it into not testing the idea. Tests can 
 **Never run benchmarks alongside other tests/tasks** — it skews the numbers. One benchmark run per **machine**
 at a time, counting other worktrees, checkouts and sessions: check `pgrep -af '[_]benchmark-|[c]argo bench'` comes
 back empty before starting, and wait otherwise. Real-data fixtures live in
-`DEFAULT_FIXTURES` (`tests/integration/common.rs`), download on demand; a test wanting one calls
-`stack_depth_grain_tests::managed_session`, which **panics** rather than skip. Measurement instruments
-(`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. A stacking test replays a
-fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` → `stack_frame`), never a
-re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set production stacks at 87 %.
+`DEFAULT_FIXTURES` (`tests/integration/common.rs`), download on demand, and count as present only if they hold
+the files and bytes registered from their archive (`Contents`: a hand-cut IC 59 passed for the published set, and
+a stack cut from it put IC 63 0.46 of a frame off); a test wanting one calls
+`stack_depth_grain_tests::managed_session`, which **panics** rather than skip. A pending set registers its
+contents too. Coordinates measured on a stack name its size (`NamedTarget::frame`).
+Measurement instruments (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
+A stacking test replays a fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` →
+`stack_frame`), never a re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
+production stacks at 87 %.
 Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
 count calls at runtime), not a hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and
 `AppState::new_for_testing` via `test-support`.
@@ -120,7 +124,7 @@ per-stage.
 
 ```bash
 cargo build --release
-cargo test                                                          # fast unit tests, all three crates
+cargo test --no-fail-fast                                           # fast unit tests, all three crates
 cargo clippy --workspace --all-targets --features telemetry,api-schema -- -D warnings  # as CI lints
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow, ignored by default)
 cargo bench --bench <name> -- --noplot                              # see Benchmark sizing
@@ -129,6 +133,10 @@ cargo run --release --features telemetry -- --telemetry
 cargo run --release -- --span-timings                               # per-stage durations on span close
 UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.{types,settings,events}.ts
 ```
+
+**Every run goes to the end**: `.config/nextest.toml` (both repos) sets `fail-fast = false` for every nextest
+run, CI's archive runs included, and `cargo test` takes `--no-fail-fast` (no config key; it stops at the first
+failing binary otherwise). A fail-fast run once left 114 of Pro's 156 integration tests unrun behind one failure.
 
 **Clippy while editing**: point the IDE's on-save check at clippy (rust-analyzer `check.command = "clippy"`, or
 RustRover's external linter). It costs about a second over `cargo check` (2.0 → 2.8 s after touching one core file).
@@ -139,7 +147,7 @@ in Community first. Pro's own `checkout-siblings` does that checkout; step timeo
 
 Frontend commands (install/dev/build/typecheck/lint/test) run from `web/` — see README. There is no formatter:
 format by hand as the surrounding file does (Prettier was removed — no config reproduced the code, it rewrote 193
-of 262 files and the generated ones). Always run `cargo test` after changes, `npm run test:run` and `npm run typecheck` too.
+of 262 files and the generated ones). Always run `cargo test --no-fail-fast` after changes, `npm run test:run` and `npm run typecheck` too.
 A frontend test that reaches `fetch` unmocked fails (`src/testSetup.ts`) even where the code swallows the error:
 happy-dom sends `/api/...` to `localhost:3000`, so one sent 40 real requests a run that anything on that port would
 have answered mid-test.

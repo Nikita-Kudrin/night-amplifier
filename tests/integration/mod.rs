@@ -14,6 +14,7 @@
 //! # Module Organization
 //!
 //! - `common` - Shared constants, types, and fixture discovery utilities
+//! - `fixture_contents_tests` - A fixture counts as present only if it holds what its archive does
 //! - `image_loading` - TIFF and FITS file loading, frame saving
 //! - `prefetch` - Parallel frame prefetching for optimized loading
 //! - `cfa_tests` - Raw-CFA stage: hot pixels, row/column FPN, superpixel debayer
@@ -42,6 +43,7 @@ pub mod dither_tests;
 pub mod early_subs;
 pub mod early_subs_tests;
 pub mod encoding_tests;
+pub mod fixture_contents_tests;
 pub mod fixture_processing;
 pub mod image_loading;
 pub mod instruments;

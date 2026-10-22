@@ -13,7 +13,7 @@ use serial_test::serial;
 
 use crate::integration::instruments::{
     expected_grain_ratio, load_sub, measure_real_session, measure_sky_and_target, render,
-    session_files, GiveBack,
+    session_files, GiveBack, NamedTarget,
 };
 
 /// The managed fixture set, which CI has: 35 IMX533 subs of M27 on a 250 mm Dobsonian.
@@ -186,10 +186,33 @@ fn a_deep_session_gets_calmer_with_depth() {
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn a_faint_nebula_session_gets_calmer_with_depth() {
     const SET: &str = "ic-59-ghost-of-cassiopeia-nebula";
+    // The set's target, IC 63: ASTAP on sub 1 (1.23"/px at bin 2), OpenNGC's position. IC 59
+    // lies off the frame, and the γ Cas glow rises from below it into the lower right.
+    const IC_63: NamedTarget = NamedTarget { centre: (0.410, 0.462), frame: (3008, 3008) };
     let files = managed_session(SET);
-    // Too faint for the 2-level band: 5 levels at peak at the shipped tone, 3 given back by
-    // 8 subs (3-4 and none at Black level 30 %). Held to its peak so it cannot fade out.
-    measure_real_session(SET, &files, &[1, 2, 4, 8, 15], &[false], GiveBack::Faint { min_peak: 4.0 }, &load_sub);
+    // Measured 2026-10-22 at the shipped tone, unprotected as Community renders it: 0-1
+    // levels over the sky at every depth, both streams. Too faint at 15 subs for a floor,
+    // so this holds the band; a protected IC 63 is Pro's (`catalog_protection_keeps_ic_63`).
+    measure_real_session(SET, &files, &[1, 2, 4, 8, 15], &[false], GiveBack::Named(IC_63), &load_sub);
+}
+
+#[test]
+fn a_named_target_is_measured_where_its_fractions_put_it_on_the_render() {
+    let target = NamedTarget { centre: (0.410, 0.462), frame: (64, 48) };
+    let stack = night_amplifier::Frame::filled(64, 48, 1, 0.1).unwrap();
+    assert_eq!(target.block(&stack, (1440, 1440)), (542, 617, 638, 713));
+    // A corner stays inside the frame, and a frame narrower than a block keeps it at 0.
+    let corner = NamedTarget { centre: (1.0, 0.0), ..target };
+    assert_eq!(corner.block(&stack, (1440, 1440)), (1344, 0, 1440, 96));
+    assert_eq!(corner.block(&stack, (64, 48)), (0, 0, 96, 96));
+}
+
+/// Fractions solved on a crop point somewhere else on the full frame.
+#[test]
+#[should_panic(expected = "another frame size")]
+fn a_named_target_located_on_another_frame_size_is_refused() {
+    let target = NamedTarget { centre: (0.82, 0.67), frame: (1504, 1504) };
+    target.block(&night_amplifier::Frame::filled(3008, 3008, 1, 0.1).unwrap(), (1440, 1440));
 }
 
 #[test]
