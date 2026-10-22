@@ -174,6 +174,16 @@ pub(super) async fn give_up(
 ) {
     warn!(camera = %recorded.info.name, %reason, "Giving up on reconnecting the camera");
     end_isolation(state, recorded.role);
+    // Before the role empties: recorded after, a sync in between showed the camera gone
+    // with no reason, and a test that saw the empty role read the status before it landed.
+    state.recovery_status.set(
+        recorded.role,
+        RecoveryStatus::Failed {
+            name: recorded.info.name.clone(),
+            attempts,
+            reason: reason.to_string(),
+        },
+    );
     if is_recovering(state, recorded).await {
         lifecycle::finalize_disconnect(
             state,
@@ -183,14 +193,6 @@ pub(super) async fn give_up(
         )
         .await;
     }
-    state.recovery_status.set(
-        recorded.role,
-        RecoveryStatus::Failed {
-            name: recorded.info.name.clone(),
-            attempts,
-            reason: reason.to_string(),
-        },
-    );
     state.send_error(format!(
         "Could not bring camera '{}' back ({}). Check the cable and reconnect.",
         recorded.info.name, reason
