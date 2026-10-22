@@ -493,7 +493,7 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
     // a hand-cut copy, so IC 63's position held for it alone.
     Fixture {
         name: "background-gradient-stacks",
-        url: "https://drive.usercontent.google.com/download?id=PENDING_UPLOAD&export=download&confirm=t",
+        url: "https://drive.usercontent.google.com/download?id=1bM7sDcimSbVvQtK4hL9-iYNFbYsn9Nlg&export=download&confirm=t",
         contents: Contents { files: 11, bytes: 242_332_133 },
     },
 ];
