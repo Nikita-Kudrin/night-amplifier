@@ -81,12 +81,22 @@ impl ChildGuard {
 }
 
 impl Drop for ChildGuard {
+    /// Kills the group here, not in a spawned task: a runtime shutting down never ran that
+    /// task, and an abandoned ASTAP outlived its solve (nextest reported the test leaky).
+    /// Only the reaping is left to the runtime, when there is one.
     fn drop(&mut self) {
-        if let Some(mut process) = self.process.take() {
-            // Drop can't be async, so we spawn a task to kill the process group
-            tokio::spawn(async move {
-                let _ = process.kill().await;
+        let Some(mut process) = self.process.take() else {
+            return;
+        };
+        let _ = process.child.start_kill();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = process.wait().await;
             });
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "process_tests.rs"]
+mod tests;

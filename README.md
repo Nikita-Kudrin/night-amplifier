@@ -164,7 +164,7 @@ cargo build --release       # or `cargo build` for a debug build
 ## Running Tests
 
 ```bash
-cargo test
+cargo test --no-fail-fast   # or `cargo nextest run`, which never stops early here
 ```
 
 Camera SDK installation and udev rules: see [System dependencies](system-dependencies.md#camera-sdks).

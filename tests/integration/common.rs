@@ -316,160 +316,248 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
     Ok(output_dir)
 }
 
+/// A published fixture set: where it downloads from, and what its archive holds.
+pub struct Fixture {
+    pub name: &'static str,
+    pub url: &'static str,
+    pub contents: Contents,
+}
+
+/// A set's files and their bytes, counted as [`contents_of`] counts (dotfiles aside, at any
+/// depth). A set on disk counts as present only if it holds what its archive does: a
+/// hand-cut 1504² IC 59 under the published 3008² set's name passed unseen, and a bound
+/// measured on it failed on every CI run. To register a set, put zeros here and copy the
+/// counts the refusal prints for the set you zipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Contents {
+    pub files: usize,
+    pub bytes: u64,
+}
+
 /// Default list of fixture datasets to download.
-pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
-    (
-        "250mm-dob-imx533-dumbbell-fits",
-        "https://drive.usercontent.google.com/download?id=1Xl_Ip539vfWyvP-VWvDxZe4y90hzaAWD&export=download&confirm=t",
-    ),
-    (
-        "250mm-dob-imx464-orion-png",
-        "https://drive.usercontent.google.com/download?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download&confirm=t",
-    ),
-    (
-        "35mm-imx464-orion-tiff",
-        "https://drive.usercontent.google.com/download?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download&confirm=t",
-    ),
-    (
-        "130mm-imx464-dumbell-nebulae-png",
-        "https://drive.usercontent.google.com/download?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download&confirm=t",
-    ),
-    (
-        "130mm-imx464-ring-nebulae-png",
-        "https://drive.usercontent.google.com/download?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download&confirm=t",
-    ),
-    (
-        "176mm-imx464-m101-fits",
-        "https://drive.usercontent.google.com/download?id=1R4Tjcj5Ztkp4JSnzag2oXsq29ftt98VP&export=download&confirm=t",
-    ),
-    (
-        "176mm-imx464-delphinus-fits",
-        "https://drive.usercontent.google.com/download?id=1fCEHKLGFsLNasuO4ebUqoIDcGwx882PU&export=download&confirm=t",
-    ),
+pub const DEFAULT_FIXTURES: &[Fixture] = &[
+    Fixture {
+        name: "250mm-dob-imx533-dumbbell-fits",
+        url: "https://drive.usercontent.google.com/download?id=1Xl_Ip539vfWyvP-VWvDxZe4y90hzaAWD&export=download&confirm=t",
+        contents: Contents { files: 35, bytes: 633_528_000 },
+    },
+    Fixture {
+        name: "250mm-dob-imx464-orion-png",
+        url: "https://drive.usercontent.google.com/download?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download&confirm=t",
+        contents: Contents { files: 30, bytes: 84_841_573 },
+    },
+    Fixture {
+        name: "35mm-imx464-orion-tiff",
+        url: "https://drive.usercontent.google.com/download?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download&confirm=t",
+        contents: Contents { files: 17, bytes: 141_818_386 },
+    },
+    Fixture {
+        name: "130mm-imx464-dumbell-nebulae-png",
+        url: "https://drive.usercontent.google.com/download?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download&confirm=t",
+        contents: Contents { files: 20, bytes: 114_838_374 },
+    },
+    Fixture {
+        name: "130mm-imx464-ring-nebulae-png",
+        url: "https://drive.usercontent.google.com/download?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download&confirm=t",
+        contents: Contents { files: 20, bytes: 106_885_504 },
+    },
+    Fixture {
+        name: "176mm-imx464-m101-fits",
+        url: "https://drive.usercontent.google.com/download?id=1R4Tjcj5Ztkp4JSnzag2oXsq29ftt98VP&export=download&confirm=t",
+        contents: Contents { files: 3, bytes: 16_693_801 },
+    },
+    Fixture {
+        name: "176mm-imx464-delphinus-fits",
+        url: "https://drive.usercontent.google.com/download?id=1fCEHKLGFsLNasuO4ebUqoIDcGwx882PU&export=download&confirm=t",
+        contents: Contents { files: 2, bytes: 8_347_112 },
+    },
     // Guide frames whose hot pixels, spread by bilinear demosaic, stop ASTAP solving.
-    (
-        "176mm-imx464-guide-hot-pixels-fits",
-        "https://drive.usercontent.google.com/download?id=1wiLkVvM-yNS9LFXHTxEO-odscGq0Bz41&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "176mm-imx464-guide-hot-pixels-fits",
+        url: "https://drive.usercontent.google.com/download?id=1wiLkVvM-yNS9LFXHTxEO-odscGq0Bz41&export=download&confirm=t",
+        contents: Contents { files: 4, bytes: 25_039_942 },
+    },
     // The same guide rig across a 5 s/g376 -> 0.5 s/g123 change: a noise estimate carried
     // over between them stopped the short sub plate-solving.
-    (
-        "176mm-imx464-guide-exposure-change-fits",
-        "https://drive.usercontent.google.com/download?id=1ZeJEc_OC33oz_QuoNdkJOIgjxxE-Szc-&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "176mm-imx464-guide-exposure-change-fits",
+        url: "https://drive.usercontent.google.com/download?id=1ZeJEc_OC33oz_QuoNdkJOIgjxxE-Szc-&export=download&confirm=t",
+        contents: Contents { files: 2, bytes: 16_692_480 },
+    },
     // Guide frames from the 2026-09-14 Lagoon push: one still pointing that Push-To solved
     // twice (134-142), then the push onto M8 (183, 184, 187).
-    (
-        "176mm-imx464-guide-lagoon-fits",
-        "https://drive.usercontent.google.com/download?id=1O4lUyZZtH8XJeb_Ef7MDuuo1LhVT9Cc4&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "176mm-imx464-guide-lagoon-fits",
+        url: "https://drive.usercontent.google.com/download?id=1O4lUyZZtH8XJeb_Ef7MDuuo1LhVT9Cc4&export=download&confirm=t",
+        contents: Contents { files: 13, bytes: 100_157_682 },
+    },
     // Guide frames from the 2026-10-12 hunt for M101, then the Spindle Galaxy: frames ASTAP
     // solves under exit code 2, two full-sky false matches, one-off bad frames (a meteor,
     // two shaking after a push) beside neighbours that solve, and the OpenNGC rows of both
     // Spindles (`push_to_m101_spindle_replay_tests`, Pro).
-    (
-        "176mm-imx464-guide-m101-spindle-fits",
-        "https://drive.usercontent.google.com/download?id=1W6vYiyFl0Bq6sgMsUgME13Slw2CicL4g&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "176mm-imx464-guide-m101-spindle-fits",
+        url: "https://drive.usercontent.google.com/download?id=1W6vYiyFl0Bq6sgMsUgME13Slw2CicL4g&export=download&confirm=t",
+        contents: Contents { files: 16, bytes: 108_507_528 },
+    },
     // 16 subs of M27, cropped to 1024x1024 on an even origin so the RGGB phase survives.
     // Deliberately not the whole session: this is the shortest run that still shows the
     // render collapsing as the stack deepens, which is what `stack_depth_regression`
     // asserts against.
-    (
-        "stack-depth-dumbbell",
-        "https://drive.usercontent.google.com/download?id=1MKQqxU3QSqWqg2wjGuLXmRhTW-iTaCVm&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "stack-depth-dumbbell",
+        url: "https://drive.usercontent.google.com/download?id=1MKQqxU3QSqWqg2wjGuLXmRhTW-iTaCVm&export=download&confirm=t",
+        contents: Contents { files: 16, bytes: 33_638_400 },
+    },
     // The whole 106-sub M27 session (IMX533, 5 s, 250 mm Dob), cropped to 1024x1024 on an
     // even origin around the nebula. The depth is the point and 16 subs cannot stand in
     // for it: the tone curve's depth gain only stops paying once a real session's sigma
     // stops falling as sqrt(N), which happens past ~32 frames (`stack_depth_grain_tests`).
-    (
-        "deep-stack-dumbbell-106",
-        "https://drive.usercontent.google.com/download?id=1WSXWaRnIxQ6zX3faFdXV3wZsrHOFIEMe&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "deep-stack-dumbbell-106",
+        url: "https://drive.usercontent.google.com/download?id=1WSXWaRnIxQ6zX3faFdXV3wZsrHOFIEMe&export=download&confirm=t",
+        contents: Contents { files: 106, bytes: 222_854_400 },
+    },
     // 12 subs of a globular (IMX533, 6 s) from the 2026-09-14 session that rendered blocky
     // at the eyepiece, cropped to 2048x2048 on an even origin around the cluster.
     // `eyepiece_globular_regression` (Pro) asserts the downsample lattice, black-floor
     // grain and RBF halo against it.
-    (
-        "globular-cluster-eyepiece",
-        "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
-    ),
-    (
-        "ic-59-ghost-of-cassiopeia-nebula",
-        "https://drive.usercontent.google.com/download?id=1LsFIKXtybn-bWGMmEtMMs6VR0qFaJ8Vi&export=download&confirm=t",
-    ),
-    (
-        "m33-triangulum-galaxy-imx533",
-        "https://drive.usercontent.google.com/download?id=19Zi6f8ItzVpqdqQgFMp-k5ocxvEd5gBx&export=download&confirm=t",
-    ),
-    (
-        "m101-pinwheel-galaxy-imx533",
-        "https://drive.usercontent.google.com/download?id=13QC7HvBGJGzSB3oDzmGeBWY-ModyV5Tn&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "globular-cluster-eyepiece",
+        url: "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
+        contents: Contents { files: 12, bytes: 100_707_840 },
+    },
+    Fixture {
+        name: "ic-59-ghost-of-cassiopeia-nebula",
+        url: "https://drive.usercontent.google.com/download?id=1LsFIKXtybn-bWGMmEtMMs6VR0qFaJ8Vi&export=download&confirm=t",
+        contents: Contents { files: 15, bytes: 271_512_000 },
+    },
+    Fixture {
+        name: "m33-triangulum-galaxy-imx533",
+        url: "https://drive.usercontent.google.com/download?id=19Zi6f8ItzVpqdqQgFMp-k5ocxvEd5gBx&export=download&confirm=t",
+        contents: Contents { files: 35, bytes: 633_528_000 },
+    },
+    Fixture {
+        name: "m101-pinwheel-galaxy-imx533",
+        url: "https://drive.usercontent.google.com/download?id=13QC7HvBGJGzSB3oDzmGeBWY-ModyV5Tn&export=download&confirm=t",
+        contents: Contents { files: 39, bytes: 705_931_200 },
+    },
     // 27 subs of NGC 6543 (IMX533, 0.7 s at gain 0, 250 mm Dob) from 2026-09-20: ~15 real
     // stars a sub against a nebula that shatters into ~45 brighter detections. Every sub
     // after the reference was refused (`thin_subs_of_a_bright_nebula_still_stack`).
-    (
-        "cats-eye-nebula-imx533",
-        "https://drive.usercontent.google.com/download?id=1udM7sCdeknz_lhZihoDDLwqaGA4en8ZD&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "cats-eye-nebula-imx533",
+        url: "https://drive.usercontent.google.com/download?id=1udM7sCdeknz_lhZihoDDLwqaGA4en8ZD&export=download&confirm=t",
+        contents: Contents { files: 27, bytes: 488_721_600 },
+    },
     // 64 subs of M33 (IMX533, 7 s), cropped to 1024x1024 on an even origin: the field drifts
     // across the crop, so only ~56 % of it holds every sub by the end — the hard case for
     // `auto_crop_tests` (crop area, change rate, the border skewing the stretch's statistics).
-    (
-        "m33-drifting-imx533-1024",
-        "https://drive.usercontent.google.com/download?id=1EHrsxIVrU7A5-Qsj2K-IoakXdeq5Gb2A&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "m33-drifting-imx533-1024",
+        url: "https://drive.usercontent.google.com/download?id=1EHrsxIVrU7A5-Qsj2K-IoakXdeq5Gb2A&export=download&confirm=t",
+        contents: Contents { files: 64, bytes: 134_553_600 },
+    },
     // M57 (two sessions) and NGC 6946 sessions (IMX533) whose stacks carry a strong one-sided
     // gradient (moon/light pollution) over a quarter to half of the frame
     // (`background_gradient_tests`).
-    (
-        "ring-nebula-imx533",
-        "https://drive.usercontent.google.com/download?id=1h8-up54TbYq3QwQR2j3PNnJvNqzYTtlC&export=download&confirm=t",
-    ),
-    (
-        "ring-2-nebula-fixture-imx533",
-        "https://drive.usercontent.google.com/download?id=191XhtUIbbIitqaUZJAXdpTrYjOl-BQuS&export=download&confirm=t",
-    ),
-    (
-        "fireworks-galaxy-imx533",
-        "https://drive.usercontent.google.com/download?id=17Nm3Jooy2_X30dLdo_BS1odYpsNG6mzT&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "ring-nebula-imx533",
+        url: "https://drive.usercontent.google.com/download?id=1h8-up54TbYq3QwQR2j3PNnJvNqzYTtlC&export=download&confirm=t",
+        contents: Contents { files: 38, bytes: 687_830_400 },
+    },
+    Fixture {
+        name: "ring-2-nebula-fixture-imx533",
+        url: "https://drive.usercontent.google.com/download?id=191XhtUIbbIitqaUZJAXdpTrYjOl-BQuS&export=download&confirm=t",
+        contents: Contents { files: 43, bytes: 778_334_400 },
+    },
+    Fixture {
+        name: "fireworks-galaxy-imx533",
+        url: "https://drive.usercontent.google.com/download?id=17Nm3Jooy2_X30dLdo_BS1odYpsNG6mzT&export=download&confirm=t",
+        contents: Contents { files: 70, bytes: 1_267_056_000 },
+    },
     // Four real sessions whose first subs are bad, cut from the sets above to 1536² on even
     // origins and reordered: M101 opening on a satellite trail, Fireworks on a bump and on
     // its own smeared sub 1, the 250 mm M27 on its bumped sub 1. Each `manifest.txt` names
     // the bad subs (`early_subs_tests`).
-    (
-        "early-bad-subs-imx533",
-        "https://drive.usercontent.google.com/download?id=174IQ2R_pA8onDB_nR0PBvMd1gqPEL4p2&export=download&confirm=t",
-    ),
+    Fixture {
+        name: "early-bad-subs-imx533",
+        url: "https://drive.usercontent.google.com/download?id=174IQ2R_pA8onDB_nR0PBvMd1gqPEL4p2&export=download&confirm=t",
+        contents: Contents { files: 68, bytes: 302_286_166 },
+    },
     // Display-size (bin 2) stacks of the ten sessions the background model is judged on,
     // with `depths.txt`: what the render task hands the background stage at 1440p. Cut
     // by Pro's `background_gradient_diagnostics::cut_stack_fixture`, so the regression
     // (`background_gradient_regression`) needs ~300 MB instead of every session's subs.
-    (
-        "background-gradient-stacks",
-        "https://drive.usercontent.google.com/download?id=1bM7sDcimSbVvQtK4hL9-iYNFbYsn9Nlg&export=download&confirm=t",
-    ),
+    // IC 59's stack is re-cut from the published set: the last upload's was a 752² crop of
+    // a hand-cut copy, so IC 63's position held for it alone.
+    Fixture {
+        name: "background-gradient-stacks",
+        url: "https://drive.usercontent.google.com/download?id=PENDING_UPLOAD&export=download&confirm=t",
+        contents: Contents { files: 11, bytes: 242_332_133 },
+    },
 ];
 
 /// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.
 ///
 /// The set is registered at the same time as the test that needs it, so the two cannot
-/// drift apart; replacing this in the URL is the only step left. A test reaching a
-/// pending set must fail — see [`missing_fixture_message`] — never skip.
+/// drift apart; replacing this in the URL is the only step left. Its contents are
+/// registered with it, so the author's local cut is held to them like any download. A test
+/// reaching a pending set it does not have must fail — see [`missing_fixture_message`].
 pub const PENDING_UPLOAD: &str = "PENDING_UPLOAD";
 
 fn is_pending_upload(url: &str) -> bool {
     url.contains(PENDING_UPLOAD)
 }
 
+/// What the set at `dir` holds: every file under it, dotfiles aside at any depth (a Finder
+/// `.DS_Store` is no frame, and no loader reads one).
+pub fn contents_of(dir: &Path) -> std::io::Result<Contents> {
+    let mut contents = Contents { files: 0, bytes: 0 };
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let meta = fs::metadata(entry.path())?;
+        if meta.is_dir() {
+            let inner = contents_of(&entry.path())?;
+            contents.files += inner.files;
+            contents.bytes += inner.bytes;
+        } else {
+            contents.files += 1;
+            contents.bytes += meta.len();
+        }
+    }
+    Ok(contents)
+}
+
+/// Whether the set at `dir` is the one `fixture` publishes. Read-only, so a download in
+/// another process can never show it half-marked; refused, never replaced, since a copy
+/// that differs may be someone's own work.
+pub fn check_fixture_contents(dir: &Path, fixture: &Fixture) -> Result<(), String> {
+    let found = contents_of(dir).map_err(|e| format!("fixture {} at {}: {e}", fixture.name, dir.display()))?;
+    if found == fixture.contents {
+        return Ok(());
+    }
+    Err(format!(
+        "fixture {} at {} holds {} files / {} bytes, but DEFAULT_FIXTURES registers {} files / \
+         {} bytes: it is not the set CI measures (cut or edited by hand, or from an older link). \
+         Move it away and the tests download the published one",
+        fixture.name,
+        dir.display(),
+        found.files,
+        found.bytes,
+        fixture.contents.files,
+        fixture.contents.bytes
+    ))
+}
+
 /// Why `name` is not on disk, said in a way that names the next action.
 pub fn missing_fixture_message(name: &str) -> String {
     let pending = DEFAULT_FIXTURES
         .iter()
-        .any(|(set, url)| *set == name && is_pending_upload(url));
+        .any(|fixture| fixture.name == name && is_pending_upload(fixture.url));
     if pending {
         format!(
             "fixture {name} is registered in DEFAULT_FIXTURES as {PENDING_UPLOAD}: the archive \
@@ -498,15 +586,10 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
         .lock()
         .await;
 
-    let fixtures: Vec<(&str, &str)> = if let Some(names) = names {
-        DEFAULT_FIXTURES
-            .iter()
-            .filter(|(name, _)| names.contains(name))
-            .copied()
-            .collect()
-    } else {
-        DEFAULT_FIXTURES.to_vec()
-    };
+    let fixtures: Vec<&Fixture> = DEFAULT_FIXTURES
+        .iter()
+        .filter(|fixture| names.is_none_or(|names| names.contains(&fixture.name)))
+        .collect();
 
     let fixtures_dir = Path::new(FIXTURES_DIR);
     if !fixtures_dir.exists() {
@@ -515,9 +598,11 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             .expect("Failed to create fixtures dir");
     }
 
-    for (name, url) in fixtures {
+    for fixture in fixtures {
+        let (name, url) = (fixture.name, fixture.url);
         let dir_path = fixtures_dir.join(name);
         if dir_path.exists() {
+            check_fixture_contents(&dir_path, fixture).unwrap_or_else(|e| panic!("{e}"));
             continue;
         }
         if is_pending_upload(url) {
@@ -599,6 +684,14 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             let _ = fs::remove_dir_all(&staging);
             let extracted = extract_archive(&mut archive, &staging);
             let _ = fs::remove_file(&zip_path);
+            if extracted.is_ok() && staging.join(name).is_dir() {
+                // The registry's mistake, not the download's: a retry fetches the same archive.
+                let staged = check_fixture_contents(&staging.join(name), fixture);
+                if let Err(e) = staged {
+                    let _ = fs::remove_dir_all(&staging);
+                    panic!("{url} no longer publishes the registered set — update its contents: {e}");
+                }
+            }
             if let Err(e) = extracted.and_then(|()| publish_staged(&staging, name, &dir_path)) {
                 let _ = fs::remove_dir_all(&staging);
                 if dir_path.exists() {
@@ -653,8 +746,9 @@ fn extract_archive(
 }
 
 /// Move `staging/<name>` to `dir_path` in one rename. Losing that rename to another
-/// process that published the same fixture first is success, not an error.
-fn publish_staged(staging: &Path, name: &str, dir_path: &Path) -> Result<(), String> {
+/// process that published the same fixture first is success, not an error, and leaves the
+/// winner's set untouched.
+pub(crate) fn publish_staged(staging: &Path, name: &str, dir_path: &Path) -> Result<(), String> {
     let staged = staging.join(name);
     if !staged.is_dir() {
         return Err(format!("archive has no top-level {name}/ directory"));
