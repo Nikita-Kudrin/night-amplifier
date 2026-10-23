@@ -2,9 +2,9 @@
 
 Live stacking Web application for Electronically Assisted Astronomy - https://skycontrast.com/software/night-amplifier
 
-|                                Mobile View                                |                             Desktop View                             |
-|:-------------------------------------------------------------------------:|:--------------------------------------------------------------------:|
-| <img src="manual/mobile_device_view.png" height="450" alt="Mobile View"/> | <img src="manual/desktop_view.png" height="450" alt="Desktop View"/> |
+|                             Eyepiece View                              |                             Mobile Main View                              |                          Desktop Main View                           |
+|:----------------------------------------------------------------------:|:-------------------------------------------------------------------------:|:--------------------------------------------------------------------:|
+| <img src="manual/eyepiece_view.png" height="450" alt="Eyepiece View"/> | <img src="manual/mobile_device_view.png" height="450" alt="Mobile View"/> | <img src="manual/desktop_view.png" height="450" alt="Desktop View"/> |
 
 ## Supported Platforms
 
