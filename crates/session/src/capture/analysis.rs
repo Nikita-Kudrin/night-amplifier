@@ -74,6 +74,7 @@ struct AnalysisKey {
     reference_percentile: u32,
     aggressiveness: u32,
     edge_inset: u32,
+    edge_profiles: bool,
     /// The catalog protection's generation: a plate solve landing mid-session must
     /// rebuild the model once, not wait for the stack to grow.
     protection: Option<u64>,
@@ -101,6 +102,7 @@ impl AnalysisKey {
             reference_percentile: background.reference_percentile.to_bits(),
             aggressiveness: background.aggressiveness.to_bits(),
             edge_inset: background.edge_inset.to_bits(),
+            edge_profiles: background.edge_profiles,
             protection: background.protection.as_ref().map(|p| p.generation),
             scnr,
             scnr_amount: scnr_amount.to_bits(),

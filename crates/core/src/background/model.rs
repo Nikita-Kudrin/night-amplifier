@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::frame::Frame;
 use crate::statistics::MAD_TO_SIGMA;
+use super::edges::EdgeProfiles;
+use super::pchip::{self, Segment};
 use rayon::prelude::*;
 use tracing::instrument;
 
@@ -25,10 +27,12 @@ pub struct BackgroundModel {
     reference_percentile: f32,
     /// Share of the gradient subtracted (0.0 to 1.0)
     aggressiveness: f32,
-    /// Pixel X coordinates of grid columns (enables fast delta-stepping subtraction)
+    /// Pixel X coordinates of grid columns: interpolate between nodes, not cell centres
     nodes_x: Option<Vec<usize>>,
-    /// Pixel Y coordinates of grid rows (enables fast delta-stepping subtraction)
+    /// Pixel Y coordinates of grid rows
     nodes_y: Option<Vec<usize>>,
+    /// Structure along the frame's edges, added on top of the grid ([`EdgeProfiles`]).
+    edges: Option<EdgeProfiles>,
 }
 
 impl BackgroundModel {
@@ -57,13 +61,13 @@ impl BackgroundModel {
             aggressiveness,
             nodes_x: None,
             nodes_y: None,
+            edges: None,
         }
     }
 
-    /// Create a model with explicit node coordinates for fast delta-stepping subtraction.
-    ///
-    /// When `nodes_x` and `nodes_y` are present, `subtract_from()` uses a scanline
-    /// delta-stepping inner loop instead of per-pixel weight lookups.
+    /// Create a model with explicit node coordinates: `subtract_from()` then joins the nodes
+    /// by monotone cubic interpolation ([`super::pchip`]) instead of bilinear weights
+    /// between cell centres.
     // As `new`, plus the node coordinates.
     #[allow(clippy::too_many_arguments)]
     pub fn with_node_coords(
@@ -91,36 +95,26 @@ impl BackgroundModel {
             aggressiveness,
             nodes_x: Some(nodes_x),
             nodes_y: Some(nodes_y),
+            edges: None,
         }
     }
 
-    /// Get the interpolated background value at a pixel position
+    /// This model with `edges` added on top of its grid.
+    pub fn with_edges(mut self, edges: EdgeProfiles) -> Self {
+        self.edges = Some(edges);
+        self
+    }
+
+    pub fn edges(&self) -> Option<&EdgeProfiles> {
+        self.edges.as_ref()
+    }
+
+    /// The background at one pixel as [`Self::subtract_from`] removes it (before the
+    /// reference offset), edge profiles included. It once read a node model between cell
+    /// centres instead, which no subtraction used. Prepares the rows each call: many pixels
+    /// are [`Self::render_plane`]'s job.
     pub fn get_background(&self, x: usize, y: usize, channel: usize) -> f32 {
-        // Map pixel coordinates to grid coordinates (as floats for interpolation)
-        let gx = (x as f32 + 0.5) * self.grid_width as f32 / self.image_width as f32 - 0.5;
-        let gy = (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
-
-        // Bilinear interpolation
-        let gx0 = (gx.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
-        let gy0 = (gy.floor() as isize).clamp(0, self.grid_height as isize - 1) as usize;
-        let gx1 = (gx0 + 1).min(self.grid_width - 1);
-        let gy1 = (gy0 + 1).min(self.grid_height - 1);
-
-        let fx = (gx - gx0 as f32).clamp(0.0, 1.0);
-        let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
-
-        let grid = &self.grid_values[channel];
-
-        let v00 = grid[gy0 * self.grid_width + gx0];
-        let v10 = grid[gy0 * self.grid_width + gx1];
-        let v01 = grid[gy1 * self.grid_width + gx0];
-        let v11 = grid[gy1 * self.grid_width + gx1];
-
-        // Bilinear interpolation formula
-        let v0 = v00 * (1.0 - fx) + v10 * fx;
-        let v1 = v01 * (1.0 - fx) + v11 * fx;
-
-        v0 * (1.0 - fy) + v1 * fy
+        self.sampler(channel, &[y]).at(x, 0)
     }
 
     /// Subtract this background model from a frame, clamping to [0.0, 1.0] afterward.
@@ -136,11 +130,9 @@ impl BackgroundModel {
         aggressiveness = self.aggressiveness
     ))]
     pub fn subtract_from(&self, frame: &mut Frame) {
-        // `subtract_weight_based` recovers the channel index from `self.image_height`
-        // while writing `frame.data_mut()`, so a frame that does not match the model
-        // would silently write one plane's correction into another. `subtract_delta_stepping`
-        // reads the same geometry off the frame instead. Rather than leave the two paths
-        // disagreeing about which is authoritative, refuse the mismatch here.
+        // The rows recover the channel index from `self.image_height` while writing
+        // `frame.data_mut()`, so a frame that does not match the model would silently write
+        // one plane's correction into another: refuse the mismatch.
         if frame.width() != self.image_width
             || frame.height() != self.image_height
             || frame.channels() != self.channels
@@ -221,184 +213,58 @@ impl BackgroundModel {
             vec![0.0; self.channels]
         };
 
-        // Dispatch to the optimal subtraction path
-        if let (Some(nodes_x), Some(nodes_y)) = (&self.nodes_x, &self.nodes_y) {
-            let _span = tracing::info_span!("delta_stepping_subtraction").entered();
-            self.subtract_delta_stepping(
-                frame,
-                &offsets,
-                aggressiveness,
-                pedestal,
-                nodes_x,
-                nodes_y,
-            );
-        } else {
-            let _span = tracing::info_span!("weight_based_subtraction").entered();
-            self.subtract_weight_based(frame, &offsets, aggressiveness, pedestal);
-        }
-    }
-
-    /// Fast delta-stepping subtraction using boundary-hugging node coordinates: iterates
-    /// grid bands, computing edge values per scanline and advancing via a constant delta —
-    /// no per-pixel divisions or weight lookups.
-    ///
-    /// Parallel **per row**, not per band: the predecessor split work across 11 bands (default
-    /// 12x12 grid) via `(data as *const [f32] as *mut f32)` — UB under Stacked Borrows
-    /// regardless of overlap. Planar layout is simpler and safe: each plane is contiguous,
-    /// so `par_chunks_mut(width)` hands one owned row per task, its band precomputed from `y`.
-    fn subtract_delta_stepping(
-        &self,
-        frame: &mut Frame,
-        offsets: &[f32],
-        aggressiveness: f32,
-        pedestal: f32,
-        nodes_x: &[usize],
-        nodes_y: &[usize],
-    ) {
-        let width = frame.width();
-        let height = frame.height();
-        let grid_cols = self.grid_width;
-        let grid_rows = self.grid_height;
-
-        // (band index, interpolation fraction down that band) for every output row.
-        //
-        // Bands are half-open `[nodes_y[j], nodes_y[j + 1])`, except the last, which
-        // includes its bottom node — same partition the band loop used. `initialize_grid`
-        // hugs the boundaries (`nodes_y[0] == 0`, `nodes_y[last] == height - 1`), so
-        // every row lands in exactly one band.
-        let mut row_band: Vec<(usize, f32)> = Vec::with_capacity(height);
-        let mut j = 0usize;
-        for y in 0..height {
-            while j + 2 < grid_rows && y >= nodes_y[j + 1] {
-                j += 1;
-            }
-            let inv_dy = 1.0 / (nodes_y[j + 1] - nodes_y[j]) as f32;
-            row_band.push((j, (y - nodes_y[j]) as f32 * inv_dy));
-        }
-
-        // One dispatch over every row of every plane, as `subtract_weight_based` does.
-        // The shape matters: dispatching once per channel instead costs three rayon
-        // barriers and measured 19 % slower than the band-parallel predecessor. This
-        // form lands inside its noise band (12.2-12.6 ms against 12.6-13.9 ms over
-        // repeated runs of `background_subtract/subtract_from_x5`), so the `unsafe` goes
-        // away for free rather than being paid for.
-        let grids = &self.grid_values;
-        frame
-            .data_mut()
-            .par_chunks_mut(width)
-            .enumerate()
-            .for_each(|(idx, row)| {
-                let c = idx / height;
-                let y = idx % height;
-                let grid = &grids[c];
-                let offset = offsets[c];
-                let (j, ty) = row_band[y];
-
-                for i in 0..grid_cols - 1 {
-                    let x_start = nodes_x[i];
-                    // Half-open: include the last pixel only in the final band.
-                    let x_end_loop = if i == grid_cols - 2 {
-                        nodes_x[i + 1] + 1
-                    } else {
-                        nodes_x[i + 1]
-                    };
-                    let inv_dx = 1.0 / (nodes_x[i + 1] - x_start) as f32;
-
-                    let v_tl = grid[j * grid_cols + i];
-                    let v_bl = grid[(j + 1) * grid_cols + i];
-                    let v_tr = grid[j * grid_cols + i + 1];
-                    let v_br = grid[(j + 1) * grid_cols + i + 1];
-
-                    let v_left = v_tl + (v_bl - v_tl) * ty;
-                    let v_right = v_tr + (v_br - v_tr) * ty;
-                    let delta_x = (v_right - v_left) * inv_dx;
-
-                    let mut current_bg = v_left;
-                    for slot in &mut row[x_start..x_end_loop] {
-                        let subtraction = (current_bg - offset) * aggressiveness;
-                        *slot = (*slot - subtraction + pedestal).max(0.0);
-                        current_bg += delta_x;
-                    }
+        let _span = tracing::info_span!("apply_subtraction").entered();
+        let rows = Rows::new(self);
+        let height = self.image_height;
+        // One dispatch over every row of every plane: per channel instead cost three rayon
+        // barriers and measured 19 % slower.
+        frame.data_mut().par_chunks_mut(self.image_width).enumerate().for_each_init(
+            || rows.scratch(),
+            |scratch, (idx, row)| {
+                let (c, y) = (idx / height, idx % height);
+                rows.render(c, y, scratch);
+                for (slot, background) in row.iter_mut().zip(&scratch.row) {
+                    let subtraction = (background - offsets[c]) * aggressiveness;
+                    *slot = (*slot - subtraction + pedestal).max(0.0);
                 }
-            });
+            },
+        );
     }
 
-    /// Weight-based subtraction (existing approach, used by RBF path)
-    fn subtract_weight_based(
-        &self,
-        frame: &mut Frame,
-        offsets: &[f32],
-        aggressiveness: f32,
-        pedestal: f32,
-    ) {
-        let width = frame.width();
+    /// The background of `channel` as subtracted (before the reference offset), into `out`.
+    pub fn render_plane(&self, channel: usize, out: &mut [f32]) {
+        let rows = Rows::new(self);
+        out.par_chunks_mut(self.image_width).enumerate().for_each_init(
+            || rows.scratch(),
+            |scratch, (y, row)| {
+                rows.render(channel, y, scratch);
+                row.copy_from_slice(&scratch.row);
+            },
+        );
+    }
 
-        let (gx_weights, gy_weights) = {
-            let _span = tracing::info_span!("prepare_interpolation_weights").entered();
-            let mut gx_weights = Vec::with_capacity(width);
-            for x in 0..width {
-                let gx = (x as f32 + 0.5) * self.grid_width as f32 / self.image_width as f32 - 0.5;
-                let gx0 = (gx.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
-                let gx1 = (gx0 + 1).min(self.grid_width - 1);
-                let fx = (gx - gx0 as f32).clamp(0.0, 1.0);
-                gx_weights.push((gx0, gx1, fx));
-            }
-
-            let mut gy_weights = Vec::with_capacity(self.image_height);
-            for y in 0..self.image_height {
-                let gy =
-                    (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
-                // `grid_height`, not `grid_width`: clamping the row index against the
-                // column count is harmless while the grid is square or wider than it is
-                // tall (the extractor's 12x12/16x16 defaults, and RBF on a landscape
-                // frame), but RBF derives `eval_height = 256 * h / w`, so a portrait
-                // frame gets more grid rows than columns and every row past
-                // `grid_width - 1` collapsed onto that one.
-                let gy0 = (gy.floor() as isize).clamp(0, self.grid_height as isize - 1) as usize;
-                let gy1 = (gy0 + 1).min(self.grid_height - 1);
-                let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
-                gy_weights.push((gy0, gy1, fy));
-            }
-            (gx_weights, gy_weights)
-        };
-
-        {
-            let _span = tracing::info_span!("apply_subtraction").entered();
-            // One dispatch for the whole buffer instead of one per channel. Planes are
-            // contiguous and every plane has `height` rows, so a flat walk over
-            // `width`-sized chunks yields both the channel and the row from the chunk
-            // index — no zip, no per-channel barrier.
-            let height = self.image_height;
-            let grid_width = self.grid_width;
-            let grids = &self.grid_values;
-
-            frame
-                .data_mut()
-                .par_chunks_mut(width)
-                .enumerate()
-                .for_each(|(i, row)| {
-                    let c = i / height;
-                    let y = i % height;
-                    let grid = &grids[c];
-                    let offset = offsets[c];
-
-                    let (gy0, gy1, fy) = gy_weights[y];
-                    // Row offsets into the grid are fixed for the whole row.
-                    let row0 = gy0 * grid_width;
-                    let row1 = gy1 * grid_width;
-
-                    for x in 0..width {
-                        let (gx0, gx1, fx) = gx_weights[x];
-
-                        let v0 = grid[row0 + gx0] * (1.0 - fx) + grid[row0 + gx1] * fx;
-                        let v1 = grid[row1 + gx0] * (1.0 - fx) + grid[row1 + gx1] * fx;
-                        let bg = v0 * (1.0 - fy) + v1 * fy;
-
-                        let subtraction = (bg - offset) * aggressiveness;
-                        row[x] = (row[x] - subtraction + pedestal).max(0.0);
-                    }
+    /// Channel `c`'s background (as [`Self::render_plane`] has it) at single pixels of rows
+    /// `ys`: each row's curve is prepared once and read at any column. The edge profiles
+    /// read ~300k pixels a channel; rendering their rows whole into a fresh buffer had 20
+    /// threads page-faulting on one lock for a quarter of the estimate.
+    pub(super) fn sampler(&self, c: usize, ys: &[usize]) -> Sampler<'_> {
+        let rows = Rows::new(self);
+        let mut scratch = rows.scratch();
+        let segments = match &rows.kind {
+            RowKind::Nodes { nodes_x, .. } => {
+                let mut of = vec![0u16; self.image_width];
+                for (i, pair) in nodes_x.windows(2).enumerate() {
+                    of[pair[0]..=pair[1]].fill(i as u16);
+                }
+                let per_row = ys.iter().flat_map(|&y| {
+                    rows.segments(c, y, &mut scratch);
+                    scratch.segments.clone()
                 });
-        }
+                Some((of, per_row.collect()))
+            }
+            RowKind::Weights { .. } => None,
+        };
+        Sampler { rows, c, ys: ys.to_vec(), segments }
     }
 
     /// Compute reference level for a channel using the configured percentile
@@ -415,22 +281,13 @@ impl BackgroundModel {
         sorted[idx.min(sorted.len() - 1)]
     }
 
-    /// Generate the background as a new Frame (useful for visualization)
+    /// The background as subtracted, as a new Frame (for visualization).
     pub fn to_frame(&self) -> Result<Frame> {
         let mut frame = Frame::zeros(self.image_width, self.image_height, self.channels)?;
-        let width = self.image_width;
         let channels = self.channels;
 
         for c in 0..channels {
-            let plane = frame.channel_data_mut(c);
-            plane
-                .par_chunks_mut(width)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for (x, out) in row.iter_mut().enumerate() {
-                        *out = self.get_background(x, y, c);
-                    }
-                });
+            self.render_plane(c, frame.channel_data_mut(c));
         }
 
         Ok(frame)
@@ -444,5 +301,192 @@ impl BackgroundModel {
     /// Get the raw grid values for a channel
     pub fn grid_values(&self, channel: usize) -> &[f32] {
         &self.grid_values[channel]
+    }
+}
+
+/// Per-call state that writes one row of a model's background: node interpolation
+/// ([`pchip`]) when the model carries node coordinates, bilinear weights between cell
+/// centres otherwise (RBF's dense evaluated grid), then the edge profiles on top.
+struct Rows<'a> {
+    model: &'a BackgroundModel,
+    kind: RowKind<'a>,
+}
+
+enum RowKind<'a> {
+    Nodes {
+        xs: Vec<f32>,
+        ys: Vec<f32>,
+        nodes_x: &'a [usize],
+        /// Every node's slope down its column, per channel, laid out like the grid.
+        column_slopes: Vec<Vec<f32>>,
+        /// Band of every row: half-open `[ys[j], ys[j + 1])`, the last one closed.
+        row_band: Vec<usize>,
+    },
+    Weights {
+        gx: Vec<(usize, usize, f32)>,
+        gy: Vec<(usize, usize, f32)>,
+    },
+}
+
+struct Scratch {
+    values: Vec<f32>,
+    slopes: Vec<f32>,
+    segments: Vec<Segment>,
+    row: Vec<f32>,
+}
+
+impl<'a> Rows<'a> {
+    fn new(model: &'a BackgroundModel) -> Self {
+        let kind = match (&model.nodes_x, &model.nodes_y) {
+            (Some(nodes_x), Some(nodes_y)) => Self::nodes(model, nodes_x, nodes_y),
+            _ => Self::weights(model),
+        };
+        Self { model, kind }
+    }
+
+    fn nodes(model: &BackgroundModel, nodes_x: &'a [usize], nodes_y: &[usize]) -> RowKind<'a> {
+        let (cols, rows) = (model.grid_width, model.grid_height);
+        let ys: Vec<f32> = nodes_y.iter().map(|&y| y as f32).collect();
+        let column_slopes = model
+            .grid_values
+            .iter()
+            .map(|grid| {
+                let mut out = vec![0.0; rows * cols];
+                let (mut column, mut d) = (vec![0.0; rows], vec![0.0; rows]);
+                for i in 0..cols {
+                    column.iter_mut().enumerate().for_each(|(j, v)| *v = grid[j * cols + i]);
+                    pchip::slopes(&ys, &column, &mut d);
+                    d.iter().enumerate().for_each(|(j, &s)| out[j * cols + i] = s);
+                }
+                out
+            })
+            .collect();
+        let mut row_band = Vec::with_capacity(model.image_height);
+        let mut j = 0usize;
+        for y in 0..model.image_height {
+            while j + 2 < rows && y >= nodes_y[j + 1] {
+                j += 1;
+            }
+            row_band.push(j);
+        }
+        RowKind::Nodes { xs: nodes_x.iter().map(|&x| x as f32).collect(), ys, nodes_x, column_slopes, row_band }
+    }
+
+    fn weights(model: &BackgroundModel) -> RowKind<'a> {
+        // Clamped against each axis's own count: RBF's grid is taller than wide on a
+        // portrait frame, and a row index clamped to the column count collapsed its rows.
+        let axis = |pixels: usize, cells: usize| -> Vec<(usize, usize, f32)> {
+            (0..pixels)
+                .map(|p| {
+                    let g = (p as f32 + 0.5) * cells as f32 / pixels as f32 - 0.5;
+                    let g0 = (g.floor() as isize).clamp(0, cells as isize - 1) as usize;
+                    (g0, (g0 + 1).min(cells - 1), (g - g0 as f32).clamp(0.0, 1.0))
+                })
+                .collect()
+        };
+        RowKind::Weights {
+            gx: axis(model.image_width, model.grid_width),
+            gy: axis(model.image_height, model.grid_height),
+        }
+    }
+
+    fn scratch(&self) -> Scratch {
+        let cols = self.model.grid_width;
+        Scratch {
+            values: vec![0.0; cols],
+            slopes: vec![0.0; cols],
+            segments: Vec::with_capacity(cols),
+            row: vec![0.0; self.model.image_width],
+        }
+    }
+
+    /// Row `y` of channel `c` across the node columns, into `scratch.segments`: a node
+    /// model's cubic between each pair of node columns, without the edge profiles.
+    fn segments(&self, c: usize, y: usize, scratch: &mut Scratch) {
+        let RowKind::Nodes { xs, ys, column_slopes, row_band, .. } = &self.kind else {
+            unreachable!("only a node model has segments");
+        };
+        let (grid, cols) = (&self.model.grid_values[c], self.model.grid_width);
+        let (d, j) = (&column_slopes[c], row_band[y]);
+        let (h, s) = (ys[j + 1] - ys[j], y as f32 - ys[j]);
+        for (i, value) in scratch.values.iter_mut().enumerate() {
+            let (upper, lower) = (j * cols + i, (j + 1) * cols + i);
+            *value = Segment::new(h, (grid[upper], d[upper]), (grid[lower], d[lower])).at(s);
+        }
+        pchip::slopes(xs, &scratch.values, &mut scratch.slopes);
+        let (values, slopes) = (&scratch.values, &scratch.slopes);
+        scratch.segments.clear();
+        scratch.segments.extend((0..cols - 1).map(|i| {
+            Segment::new(xs[i + 1] - xs[i], (values[i], slopes[i]), (values[i + 1], slopes[i + 1]))
+        }));
+    }
+
+    /// Row `y` of channel `c` into `scratch.row`.
+    fn render(&self, c: usize, y: usize, scratch: &mut Scratch) {
+        let grid = &self.model.grid_values[c];
+        let cols = self.model.grid_width;
+        let edges = self.model.edges.as_ref();
+        // The top and bottom profiles are one value per row: added in the same pass.
+        let vertical = edges.map_or(0.0, |e| e.vertical(c, y, self.model.image_height));
+        match &self.kind {
+            RowKind::Nodes { nodes_x, .. } => {
+                self.segments(c, y, scratch);
+                for (i, segment) in scratch.segments.iter().enumerate() {
+                    // Half-open: the last segment also takes the last pixel.
+                    let end = if i == cols - 2 { nodes_x[i + 1] + 1 } else { nodes_x[i + 1] };
+                    let segment = segment.raised(vertical);
+                    // An `i32` offset: converting a `usize` to `f32` does not vectorise, and
+                    // was most of this loop (`cvtsi2ss` per lane).
+                    for (k, out) in (0i32..).zip(&mut scratch.row[nodes_x[i]..end]) {
+                        *out = segment.at(k as f32);
+                    }
+                }
+            }
+            RowKind::Weights { gx, gy } => {
+                let (gy0, gy1, fy) = gy[y];
+                let (row0, row1) = (gy0 * cols, gy1 * cols);
+                for (out, &(gx0, gx1, fx)) in scratch.row.iter_mut().zip(gx) {
+                    let v0 = grid[row0 + gx0] * (1.0 - fx) + grid[row0 + gx1] * fx;
+                    let v1 = grid[row1 + gx0] * (1.0 - fx) + grid[row1 + gx1] * fx;
+                    *out = v0 * (1.0 - fy) + v1 * fy + vertical;
+                }
+            }
+        }
+        if let Some(edges) = edges {
+            edges.add_sides(c, &mut scratch.row);
+        }
+    }
+}
+
+/// [`BackgroundModel::sampler`]: one channel's background at single pixels of a few rows.
+pub(super) struct Sampler<'a> {
+    rows: Rows<'a>,
+    c: usize,
+    ys: Vec<usize>,
+    /// A node model's segment for every column, and every row's segments one after another.
+    segments: Option<(Vec<u16>, Vec<Segment>)>,
+}
+
+impl Sampler<'_> {
+    /// The background at column `x` of the `slot`th row the sampler was made for.
+    pub(super) fn at(&self, x: usize, slot: usize) -> f32 {
+        let model = self.rows.model;
+        let y = self.ys[slot];
+        let grid = match (&self.segments, &self.rows.kind) {
+            (Some((of, segments)), RowKind::Nodes { nodes_x, .. }) => {
+                let i = of[x] as usize;
+                segments[slot * (model.grid_width - 1) + i].at((x - nodes_x[i]) as f32)
+            }
+            (_, RowKind::Weights { gx, gy }) => {
+                let (grid, cols) = (&model.grid_values[self.c], model.grid_width);
+                let ((gx0, gx1, fx), (gy0, gy1, fy)) = (gx[x], gy[y]);
+                let v0 = grid[gy0 * cols + gx0] * (1.0 - fx) + grid[gy0 * cols + gx1] * fx;
+                let v1 = grid[gy1 * cols + gx0] * (1.0 - fx) + grid[gy1 * cols + gx1] * fx;
+                v0 * (1.0 - fy) + v1 * fy
+            }
+            (None, RowKind::Nodes { .. }) => unreachable!("a node model's sampler holds its segments"),
+        };
+        let edges = model.edges.as_ref();
+        grid + edges.map_or(0.0, |e| e.vertical(self.c, y, model.image_height) + e.side(self.c, x, model.image_width))
     }
 }

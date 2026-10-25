@@ -108,6 +108,13 @@ one edge or a corner. The galaxy, nebula or cluster you are looking at is kept o
 background model: anything that brightens *inside* the frame is treated as a target, anything
 that brightens *towards an edge* as glow. The whole gradient is removed in every stretch mode.
 
+Narrow bands along an edge — stray light inside the tube, the edge of an uncorrected vignette —
+are removed from the stacked picture too: they run the whole length of the edge, which a target
+touching that edge does not. Live view, showing single frames, leaves them in. Two things along
+an edge are left alone: an object the plate solve found there (Pro), even when it runs the edge's
+whole length, and the thin border a young stack has where the frames have drifted, until
+**Auto crop** cuts it at 20 subs.
+
 **Algorithm** picks how the sky samples are joined: Grid, or RBF (Pro), a smooth spline with no
 seams between samples. Pro starts on RBF; if the licence lapses, the picture falls back to Grid
 until it is renewed, and your choice is kept. Pro also starts with **Shadow Saturation Boost**

@@ -165,7 +165,7 @@ have answered mid-test.
 | `detection/`       | Star detection, CoM centroiding, FWHM/SNR                                      |
 | `registration/`    | Triangle matching + RANSAC → `AffineTransform`                                 |
 | `stacking/`        | `MasterStack` accumulator, rejection, warping                                  |
-| `background/`      | Gradient model: node layout, sky/target classifier, catalog protection         |
+| `background/`      | Gradient model: node layout, sky/target classifier, catalog protection, edge profiles |
 | `render/`          | Stretch, autostretch solver, white balance, S-curve; `display/` the f32 → RGB8 kernels and PNG |
 | `camera/`          | Traits + vendor SDKs + simulator                                               |
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
@@ -526,20 +526,41 @@ the two travel on different sockets, and reframing an old frame still in flight 
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
-**One node classifier for both models** (`background::classify`; bilinear here, Pro's TPS through the same completed
-grid): a robust polynomial ladder (degree <= 4) rejects nodes 3 sigma above it, **a rejected node whose climb up the
-excess ends at the frame edge is glow** and readmitted, targets grow through their wing (1 sigma, 3x3 mean, <= 2
-lines) and by their own radius (1-3 lines); holes refill from the fit, never above the node's own value, stepping
-down a degree where it would (a frame-filling M27 rendered black) and flat where the sky is one corner. Nodes hug
-both edges plus an inset line at 3.5 % (edge falloff), and the model subtracts the **whole** gradient: the 0.7 the
-stretch profiles set, a brightness prune and a crowding disc that landed off-target on every real stack once left
-M57's moon band at 22 output levels and a 35 mm corner glow at 70 (now 4 each). **Pro plate-solves each stack once**
-(`capture::field_solve`, depth >= 6, 90 s, never blind) and catalog footprints (`FieldProtection`, a generation in
-the analysis key) stay out of the sky. It solves on the **stack's** rig (the imaging camera's, not a guide holding
-Push-To, whose FOV refused every stack) and leaves Push-To's state alone: sharing it left a Push-To spinner up and
-sent Push-To's next bad frame blind. Push-To comes first — a Push-To solve cancels it — and a cancel (or Stop)
-retries on the next sub, never gives the stack up. Real-data guard: Pro's `background_gradient_regression` on
-`background-gradient-stacks`; `background_gradient_diagnostics` cuts it.
+**One node classifier for both models** (`background::classify`; monotone cubic (PCHIP) here, Pro's TPS through the
+same completed grid): a robust polynomial ladder (degree <= 4) rejects nodes 3 sigma above it, **a rejected node
+whose climb up the excess ends at the frame edge is glow** and readmitted, targets grow through their wing (1 sigma,
+3x3 mean, <= 2 lines) and by their own radius (1-3 lines); holes refill from the fit, never above the node's own
+value, stepping down a degree where it would (a frame-filling M27 rendered black) and flat where the sky is one
+corner. Nodes hug both edges plus an inset line at 3.5 % (edge falloff), and the model subtracts the **whole**
+gradient: the 0.7 the stretch profiles set, a brightness prune and a crowding disc that landed off-target on every
+real stack once left M57's moon band at 22 output levels and a 35 mm corner glow at 70 (now 4 each). **Pro
+plate-solves each stack once** (`capture::field_solve`, depth >= 6, 90 s, never blind) and catalog footprints
+(`FieldProtection`, a generation in the analysis key) stay out of the sky. It solves on the **stack's** rig (the
+imaging camera's, not a guide holding Push-To, whose FOV refused every stack) and leaves Push-To's state alone:
+sharing it left a Push-To spinner up and sent Push-To's next bad frame blind. Push-To comes first — a Push-To solve
+cancels it — and a cancel (or Stop) retries on the next sub, never gives the stack up. Real-data guard: Pro's
+`background_gradient_regression` on `background-gradient-stacks` and `background-capture-stacks`;
+`background_gradient_diagnostics` cuts both.
+
+**Edge profiles** (`background::edges`) take what either model leaves along the frame's edges: per edge, a profile
+across its outer 20 %, the median of five segments along it (a target touching the edge fills one or two), each
+segment's least-trimmed-squares line removed first (the grid follows smooth slopes; a plain fit through a band left
+the edge 3 sigma low). 2026-10-24's M57 and Iris carried an *instrument* band at 0.85-0.90 of the sensor width (same
+place on every target that night), which bilinear nodes cut and the old 0.01 RBF ridge flattened. Off for a single
+frame (`edge_profiles`, from `showing_stack`): live view re-estimates every frame and a sub's noise buries a band;
+~3.5-5.5 ms an estimate at 2712x1538 on 20 x86 cores. Keep 12 nodes: denser grids rejected the band as a target,
+since the classifier's reach constants count node lines. `background_injection_regression` scores injected
+gradients and faint nebulae on every stack, as `out(base + g + n) - out(base) - n`, so the stack's own unknown
+background cancels.
+
+**What the profiles must not take**: samples inside the classifier's catalog footprints (`protected_regions`; a
+protected 15 sigma filament along an edge lost 14.6), and a **thin-coverage strip** by the edge, found as the leading
+steps noisier than 1.25x the band's inner half (`THIN`; ring-2's registration border read 4.5, auto-cropped stacks
+0.87-1.13) and left as the grid has it: profiled through, it printed a line 8 output levels brighter. Steps are 0.5 %
+of the frame, joined linearly — held whole they jumped 1.5 sigma between neighbouring rows. The model is read at
+sampled pixels (`BackgroundModel::sampler`), not rendered into a buffer: 20 threads page-faulting a fresh 6.5 MB
+plane were a quarter of the estimate. Guarded by `no_line_is_printed_along_an_edge` and
+`the_edge_correction_has_no_steps` (Pro), which see the outer 1 % every other measure leaves out.
 
 ### Phase 7-8: Statistics & Auto-Color
 
