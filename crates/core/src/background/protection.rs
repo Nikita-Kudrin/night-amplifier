@@ -29,8 +29,21 @@ impl ProtectedRegion {
         let (dx, dy) = (x - self.cx, y - self.cy);
         let (sin, cos) = self.angle.sin_cos();
         let (u, v) = (dx * cos + dy * sin, -dx * sin + dy * cos);
-        let (a, b) = (self.semi_major * MARGIN, self.semi_minor.max(1.0) * MARGIN);
+        let (a, b) = self.axes();
         (u / a).powi(2) + (v / b).powi(2) <= 1.0
+    }
+
+    /// The box `(x0, y0, x1, y1)` holding the grown footprint.
+    pub fn bounds(&self) -> (f32, f32, f32, f32) {
+        let (a, b) = self.axes();
+        let (sin, cos) = self.angle.sin_cos();
+        let hx = ((a * cos).powi(2) + (b * sin).powi(2)).sqrt();
+        let hy = ((a * sin).powi(2) + (b * cos).powi(2)).sqrt();
+        (self.cx - hx, self.cy - hy, self.cx + hx, self.cy + hy)
+    }
+
+    fn axes(&self) -> (f32, f32) {
+        (self.semi_major * MARGIN, self.semi_minor.max(1.0) * MARGIN)
     }
 }
 
@@ -98,6 +111,27 @@ mod tests {
         let field = FieldProtection { generation: 1, width: 200, height: 200, regions: vec![region] };
         assert!(field.contains(125.0, 125.0), "on the major axis, 35 px out");
         assert!(!field.contains(125.0, 75.0), "on the minor axis, 35 px out");
+    }
+
+    /// The edge profiles test only the footprints whose box reaches their band, so the box
+    /// must hold every point `contains` accepts, and no more than the ellipse needs.
+    #[test]
+    fn the_bounds_hold_a_rotated_footprint_tightly() {
+        let region = ProtectedRegion { cx: 100.0, cy: 80.0, semi_major: 40.0, semi_minor: 8.0, angle: 0.6 };
+        let (x0, y0, x1, y1) = region.bounds();
+        let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for y in 0..200 {
+            for x in 0..200 {
+                let (fx, fy) = (x as f32, y as f32);
+                if region.contains(fx, fy) {
+                    assert!(fx >= x0 && fx <= x1 && fy >= y0 && fy <= y1, "({fx}, {fy}) outside {:?}", region.bounds());
+                    (lo_x, lo_y, hi_x, hi_y) = (lo_x.min(fx), lo_y.min(fy), hi_x.max(fx), hi_y.max(fy));
+                }
+            }
+        }
+        for (bound, reached) in [(x0, lo_x), (y0, lo_y), (x1, hi_x), (y1, hi_y)] {
+            assert!((bound - reached).abs() < 1.5, "bound {bound} beyond the footprint's {reached}");
+        }
     }
 
     #[test]

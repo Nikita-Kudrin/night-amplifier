@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Default)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub enum BackgroundExtractionAlgorithm {
-    /// Grid-based median with bilinear interpolation (fast, stable)
+    /// Grid nodes joined by monotone cubic interpolation (fast, stable; the wire name keeps
+    /// the bilinear it replaced)
     #[default]
     GridBilinear,
     /// Radial Basis Function with Thin-Plate Splines (high quality, nebula-safe)
@@ -65,6 +66,9 @@ pub struct BackgroundConfig {
     pub aggressiveness: f32,
     /// Catalog objects in this frame, from the session's plate solve, never fitted as sky.
     pub protection: Option<Arc<FieldProtection>>,
+    /// Measure what the grid leaves along the frame's edges ([`super::EdgeProfiles`]). Off
+    /// for a single sub: its noise buries a band a stack shows, and it re-estimates every frame.
+    pub edge_profiles: bool,
 }
 
 impl Default for BackgroundConfig {
@@ -79,6 +83,7 @@ impl Default for BackgroundConfig {
             reference_percentile: 0.1,
             aggressiveness: 1.0,
             protection: None,
+            edge_profiles: true,
         }
     }
 }
@@ -133,6 +138,12 @@ impl BackgroundConfig {
     /// Catalog objects to keep out of the model.
     pub fn with_protection(mut self, protection: Option<Arc<FieldProtection>>) -> Self {
         self.protection = protection;
+        self
+    }
+
+    /// Whether to measure the edges' profiles on top of the grid.
+    pub fn with_edge_profiles(mut self, edge_profiles: bool) -> Self {
+        self.edge_profiles = edge_profiles;
         self
     }
 }

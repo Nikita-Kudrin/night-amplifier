@@ -43,8 +43,8 @@ fn bench_subtract_from(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(200));
     group.measurement_time(Duration::from_secs(2));
 
-    // ~2.4 ms per call, so 44 clones (~2.2 GB live, see the module comment on why that's
-    // the minimum rather than a padded figure) clears ~106 ms.
+    // ~2.7 ms per call (edge profiles included), so 44 clones (~2.2 GB live, see the module
+    // comment on why that's the minimum rather than a padded figure) clears ~119 ms.
     const REPS: usize = 44;
     group.bench_function(format!("subtract_from_x{}", REPS), |b| {
         b.iter_batched_ref(

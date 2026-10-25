@@ -3,8 +3,9 @@ use crate::frame::Frame;
 use crate::plugins::Plugins;
 use tracing::{debug, instrument, warn};
 
-use super::classify::{classify, NodeLayout};
+use super::classify::{classify, protected_regions, NodeLayout};
 use super::config::{BackgroundConfig, BackgroundExtractionAlgorithm};
+use super::edges::EdgeProfiles;
 use super::grid::{compute_box_size, median, sample_nodes};
 use super::model::BackgroundModel;
 
@@ -46,8 +47,23 @@ impl BackgroundExtractor {
         gradient_only = self.config.gradient_only
     ))]
     pub fn estimate(&self, frame: &Frame) -> Result<BackgroundModel> {
+        let model = self.estimate_grid(frame)?;
+        if !self.config.edge_profiles {
+            return Ok(model);
+        }
+        let edges = {
+            let _span = tracing::info_span!("edge_profiles").entered();
+            let c = &self.config;
+            let layout = NodeLayout::new(frame.width(), frame.height(), c.grid_width, c.grid_height, c.edge_inset);
+            EdgeProfiles::estimate(frame, &model, &protected_regions(&layout, c.protection.as_deref()))
+        };
+        Ok(model.with_edges(edges))
+    }
+
+    /// The node grid's model, without [`EdgeProfiles`].
+    fn estimate_grid(&self, frame: &Frame) -> Result<BackgroundModel> {
         match self.config.algorithm {
-            BackgroundExtractionAlgorithm::GridBilinear => self.estimate_bilinear(frame),
+            BackgroundExtractionAlgorithm::GridBilinear => self.estimate_nodes(frame),
             BackgroundExtractionAlgorithm::Rbf => {
                 if let Some(plugin) = self.plugins.background() {
                     plugin.estimate_rbf(frame, &self.config)
@@ -62,17 +78,17 @@ impl BackgroundExtractor {
         }
     }
 
-    /// Bilinear background estimation through the classified node grid.
+    /// Background estimation through the classified node grid.
     ///
     /// Nodes hug both edges and add an inset line ([`NodeLayout`]); [`classify`] decides
-    /// which are sky and completes the rest; the model interpolates the completed grid by
-    /// delta-stepping. Too few sky nodes to fit a plane falls back to a flat median.
-    fn estimate_bilinear(&self, frame: &Frame) -> Result<BackgroundModel> {
+    /// which are sky and completes the rest; the model joins the completed grid by monotone
+    /// cubics. Too few sky nodes to fit a plane falls back to a flat median.
+    fn estimate_nodes(&self, frame: &Frame) -> Result<BackgroundModel> {
         let (width, height, channels) = (frame.width(), frame.height(), frame.channels());
         let (cols, rows) = (self.config.grid_width, self.config.grid_height);
         if cols < 2 || rows < 2 {
             return Err(StackError::InvalidConfiguration(
-                "Grid dimensions must be >= 2 for bilinear interpolation".into(),
+                "Grid dimensions must be >= 2 to interpolate".into(),
             ));
         }
         if width < cols || height < rows {
@@ -85,13 +101,13 @@ impl BackgroundExtractor {
         let samples = sample_nodes(frame, &layout.nodes(), compute_box_size(width));
         let stats_channel = if channels > 1 { 1 } else { 0 };
         let grid = {
-            let _span = tracing::info_span!("bilinear_classify").entered();
+            let _span = tracing::info_span!("node_classify").entered();
             match classify(&layout, &samples, stats_channel, self.config.protection.as_deref()) {
                 Some(classified) => {
                     debug!(
                         sky = classified.sky.iter().filter(|&&s| s).count(),
                         nodes = classified.sky.len(),
-                        "Bilinear background nodes"
+                        "Grid background nodes"
                     );
                     classified.values
                 }

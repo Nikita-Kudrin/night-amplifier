@@ -496,6 +496,15 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
         url: "https://drive.usercontent.google.com/download?id=1bM7sDcimSbVvQtK4hL9-iYNFbYsn9Nlg&export=download&confirm=t",
         contents: Contents { files: 11, bytes: 242_332_133 },
     },
+    // Four 2026-10-24 IMX533 sessions cut like `background-gradient-stacks` but auto-cropped
+    // as production shows them (Pro's `cut_capture_stacks`): M57 and the Iris beside an
+    // instrument glow peaking at 0.85-0.90 of the sensor width, NGC 40, and M13 filling the
+    // frame. The glow is what both models left as a band on screen.
+    Fixture {
+        name: "background-capture-stacks",
+        url: "https://drive.usercontent.google.com/download?id=1rEYLT7PrxGedIYcJPatNdcd6o4v3LoeS&export=download&confirm=t",
+        contents: Contents { files: 5, bytes: 101_998_167 },
+    },
 ];
 
 /// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.

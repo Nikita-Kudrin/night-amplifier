@@ -1,4 +1,4 @@
-//! Which grid nodes are sky, shared by the bilinear and RBF extractors.
+//! Which grid nodes are sky, shared by the grid and RBF extractors.
 //!
 //! A target is an excess that peaks *inside* the frame; a glow (moon, light pollution,
 //! horizon) peaks at its *edge*. So: fit a robust polynomial ladder to the nodes and
@@ -12,7 +12,7 @@
 
 use super::grid::{layout_nodes, median, node_axis, GridNode};
 use super::poly::{robust_sigma, terms, Point, Poly, DEGREE_GAIN, MAX_DEGREE};
-use super::protection::FieldProtection;
+use super::protection::{FieldProtection, ProtectedRegion};
 
 /// Residual, in robust sigmas of the survivors', above which a node is not sky.
 const K_ABOVE: f64 = 3.0;
@@ -158,13 +158,20 @@ pub fn classify(
 }
 
 fn protected_nodes(layout: &NodeLayout, protection: Option<&FieldProtection>) -> Vec<bool> {
-    let nodes = layout.nodes();
-    let n = nodes.len();
+    let regions = protected_regions(layout, protection);
+    layout.nodes().iter().map(|node| regions.iter().any(|r| r.contains(node.x as f32, node.y as f32))).collect()
+}
+
+/// The catalog footprints that count on `layout`'s nodes, past [`MAX_PROTECTED_SHARE`]:
+/// the edge profiles keep out of the same ones the classifier does.
+pub fn protected_regions(layout: &NodeLayout, protection: Option<&FieldProtection>) -> Vec<ProtectedRegion> {
     let Some(protection) = protection else {
-        return vec![false; n];
+        return Vec::new();
     };
-    let share = |mask: &[bool]| mask.iter().filter(|&&m| m).count() as f32 / n.max(1) as f32;
-    let mut mask = vec![false; n];
+    let nodes = layout.nodes();
+    let share = |mask: &[bool]| mask.iter().filter(|&&m| m).count() as f32 / nodes.len().max(1) as f32;
+    let mut mask = vec![false; nodes.len()];
+    let mut regions = Vec::new();
     for region in &protection.regions {
         let inside: Vec<bool> = nodes.iter().map(|node| region.contains(node.x as f32, node.y as f32)).collect();
         if share(&inside) > MAX_PROTECTED_SHARE {
@@ -172,12 +179,13 @@ fn protected_nodes(layout: &NodeLayout, protection: Option<&FieldProtection>) ->
             continue;
         }
         mask.iter_mut().zip(inside).for_each(|(m, i)| *m |= i);
+        regions.push(*region);
     }
     if share(&mask) > MAX_PROTECTED_SHARE {
         tracing::debug!(share = share(&mask), "Catalog protection covers most of the field; ignored");
-        return vec![false; n];
+        return Vec::new();
     }
-    mask
+    regions
 }
 
 /// [`robust_mask`], then each target grown through its wing ([`K_GROW`]).
