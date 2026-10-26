@@ -14,7 +14,7 @@ mod cache;
 mod interpolate;
 
 pub(crate) use cache::InverseTransformCache;
-use interpolate::{bilinear_interpolate_direct_1ch, warp_row_rgb, RowWalk};
+use interpolate::{bilinear_interpolate_direct_1ch, warp_row_rgb, RowWalk, ANCHOR_EVERY};
 
 /// Smallest frame a bilinear warp can sample from.
 ///
@@ -166,17 +166,21 @@ fn warp_row_1ch(
     r_row: &mut [f32],
     border_value: f32,
 ) {
-    let (mut sx, mut sy) = inv_cache.inverse_transform_point(0.0, dy as f32);
+    let (sx, sy) = inv_cache.inverse_transform_point(0.0, dy as f32);
     let (sx_step, sy_step) = inv_cache.x_step();
+    let walk = RowWalk { sx, sy, sx_step, sy_step };
 
-    for r_px in r_row.iter_mut().take(bounds.width) {
-        if sx >= 0.0 && sx < bounds.max_sx && sy >= 0.0 && sy < bounds.max_sy {
-            *r_px = bilinear_interpolate_direct_1ch(src_r, bounds.width, sx, sy);
-        } else {
-            *r_px = border_value;
+    for (run, pixels) in r_row[..bounds.width].chunks_mut(ANCHOR_EVERY).enumerate() {
+        let (mut sx, mut sy) = walk.at(run * ANCHOR_EVERY);
+        for r_px in pixels {
+            if sx >= 0.0 && sx < bounds.max_sx && sy >= 0.0 && sy < bounds.max_sy {
+                *r_px = bilinear_interpolate_direct_1ch(src_r, bounds.width, sx, sy);
+            } else {
+                *r_px = border_value;
+            }
+            sx += sx_step;
+            sy += sy_step;
         }
-        sx += sx_step;
-        sy += sy_step;
     }
 }
 
@@ -296,6 +300,89 @@ mod tests {
         let transform = AffineTransform::new(0.0, 1.0, -0.5, -0.5);
         let warped = warp_frame(&frame, &transform, 0.0).unwrap();
         assert_eq!(warped.width(), 100);
+    }
+}
+
+/// Where a warp samples, at sensor size: a frame whose planes hold their own coordinates
+/// comes back holding the source coordinate of every output pixel, since bilinear
+/// interpolation of a linear ramp is exact.
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    /// IMX533's 3008², where a row walk is long enough to drift.
+    const SIZE: usize = 3008;
+    const OFF_FRAME: f32 = -1.0;
+    /// A walk stepping a whole row reached 0.25-0.37 px on these transforms; one
+    /// re-anchored every `ANCHOR_EVERY` pixels reaches 0.005.
+    const MAX_ERROR_PX: f64 = 0.01;
+
+    /// Transforms registration produced on the 2026-10-24 M13 and M33 sessions, whose
+    /// rotations sit near half an ulp of a coordinate past 2048, plus a coarse one.
+    fn session_transforms() -> [AffineTransform; 4] {
+        [
+            AffineTransform::new(-1.211e-4, 1.001_133, 12.4, -31.7),
+            AffineTransform::new(1.165e-4, 1.000_693, -48.2, 6.9),
+            AffineTransform::new(1.255e-4, 0.999_378, 3.6, 55.1),
+            AffineTransform::new(2.0f32.to_radians(), 1.0, 25.3, -17.8),
+        ]
+    }
+
+    /// One plane per axis: `x` across, `y` down.
+    fn ramp(axis: usize) -> Vec<f32> {
+        (0..SIZE * SIZE)
+            .map(|i| if axis == 0 { (i % SIZE) as f32 } else { (i / SIZE) as f32 })
+            .collect()
+    }
+
+    /// The exact source coordinate, in f64, of output pixel `(x, y)`.
+    fn exact_source(t: &AffineTransform, x: usize, y: usize) -> (f64, f64) {
+        let (cos, sin) = (f64::from(t.rotation).cos(), f64::from(t.rotation).sin());
+        let inv_s = 1.0 / f64::from(t.scale);
+        let (xt, yt) = (x as f64 - f64::from(t.tx), y as f64 - f64::from(t.ty));
+        (inv_s * (cos * xt + sin * yt), inv_s * (-sin * xt + cos * yt))
+    }
+
+    /// The worst distance between where `sampled` says each pixel was read and where `t`
+    /// puts it, over every column of every 7th row; off-frame pixels are skipped.
+    fn worst_error(t: &AffineTransform, sampled: impl Fn(usize, usize) -> (f32, f32)) -> f64 {
+        let mut worst = 0.0f64;
+        for y in (0..SIZE).step_by(7) {
+            for x in 0..SIZE {
+                let (sx, sy) = sampled(x, y);
+                if sx == OFF_FRAME {
+                    continue;
+                }
+                let (ex, ey) = exact_source(t, x, y);
+                worst = worst.max((f64::from(sx) - ex).hypot(f64::from(sy) - ey));
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn every_sample_lands_where_the_transform_puts_it() {
+        let mut data = ramp(0);
+        data.extend(ramp(1));
+        data.extend(vec![0.0; SIZE * SIZE]);
+        let frame = Frame::from_f32_vec(data, SIZE, SIZE, 3).unwrap();
+        for t in session_transforms() {
+            let warped = warp_frame(&frame, &t, OFF_FRAME).unwrap();
+            let worst = worst_error(&t, |x, y| (warped.get_pixel(x, y, 0), warped.get_pixel(x, y, 1)));
+            assert!(worst < MAX_ERROR_PX, "{t:?}: a sample landed {worst:.4} px from where the transform puts it");
+        }
+    }
+
+    /// The single-channel kernel is a separate walk: mono cameras stack through it.
+    #[test]
+    fn every_mono_sample_lands_where_the_transform_puts_it() {
+        let across = Frame::from_f32_vec(ramp(0), SIZE, SIZE, 1).unwrap();
+        let down = Frame::from_f32_vec(ramp(1), SIZE, SIZE, 1).unwrap();
+        for t in session_transforms() {
+            let (wx, wy) = (warp_frame(&across, &t, OFF_FRAME).unwrap(), warp_frame(&down, &t, OFF_FRAME).unwrap());
+            let worst = worst_error(&t, |x, y| (wx.get_pixel(x, y, 0), wy.get_pixel(x, y, 0)));
+            assert!(worst < MAX_ERROR_PX, "{t:?}: a mono sample landed {worst:.4} px from where the transform puts it");
+        }
     }
 }
 

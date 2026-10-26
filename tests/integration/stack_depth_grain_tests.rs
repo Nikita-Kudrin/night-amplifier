@@ -215,6 +215,38 @@ fn a_named_target_located_on_another_frame_size_is_refused() {
     target.block(&night_amplifier::Frame::filled(3008, 3008, 1, 0.1).unwrap(), (1440, 1440));
 }
 
+/// The sky box sits on the sky the stretch solved, not on darker real sky below it: a
+/// frame-filling target leaves the darkest block in that population (M33's corner).
+#[test]
+fn the_sky_box_is_the_solved_sky_not_the_darkest_corner() {
+    const SIZE: usize = 768;
+    let mut rgb8 = vec![0u8; SIZE * SIZE * 3];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    for (i, px) in rgb8.chunks_mut(3).enumerate() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let (x, y) = (i % SIZE, i / SIZE);
+        let (dx, dy) = (x as i64 - SIZE as i64 / 2, y as i64 - SIZE as i64 / 2);
+        let level = if dx * dx + dy * dy < 80 * 80 {
+            120
+        } else if x < 300 && y < 300 {
+            6 // the darker population a black point anchored on the mode puts near black
+        } else {
+            20
+        };
+        px.fill((level + (seed % 3) as i32 - 1) as u8);
+    }
+    let (sky, target) = crate::integration::instruments::locate_boxes(&rgb8, SIZE, SIZE);
+    let sky_level = crate::integration::instruments::green_median(
+        &crate::integration::instruments::crop_rgb8(&rgb8, SIZE, sky),
+    );
+    assert!((sky_level - 20.0).abs() <= 1.0, "sky box {sky:?} reads {sky_level} levels, not the solved sky's 20");
+    assert!(sky.0 >= 300 || sky.1 >= 300, "sky box {sky:?} sits in the dark corner");
+    let centre = ((target.0 + target.2) / 2, (target.1 + target.3) / 2);
+    assert!(centre.0.abs_diff(SIZE / 2) < 80 && centre.1.abs_diff(SIZE / 2) < 80, "target box {target:?} missed the target");
+}
+
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]

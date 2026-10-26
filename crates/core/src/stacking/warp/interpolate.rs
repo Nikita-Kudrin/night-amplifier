@@ -40,6 +40,23 @@ pub struct RowWalk {
     pub sy_step: f32,
 }
 
+/// Output pixels a row kernel steps through before re-anchoring on [`RowWalk::at`].
+///
+/// Stepping a whole 3008 px row in f32 rounded the step on every pixel and drifted up to
+/// 0.37 px (a 1.2e-4 rad turn is half an ulp past 2048); 32 steps bound it to 0.005.
+/// Computing every pixel from its index instead cost 10 % of a rotated warp.
+pub const ANCHOR_EVERY: usize = 32;
+
+impl RowWalk {
+    /// Where output pixel `dx` samples, from its index rather than a running sum. Not
+    /// `mul_add`: without FMA in the target that is a libm call.
+    #[inline]
+    pub fn at(&self, dx: usize) -> (f32, f32) {
+        let x = dx as f32;
+        (self.sx + x * self.sx_step, self.sy + x * self.sy_step)
+    }
+}
+
 /// Specialized RGB row warping with unrolled interpolation.
 #[inline]
 pub fn warp_row_rgb(
@@ -64,11 +81,9 @@ pub fn warp_row_rgb(
         b_row[dx] = border_value;
     }
 
-    if x_start < x_end {
-        let mut sx = sx_start + (x_start as f32) * sx_step;
-        let mut sy = sy_start + (x_start as f32) * sy_step;
-
-        for dx in x_start..x_end {
+    for anchor in (x_start..x_end).step_by(ANCHOR_EVERY) {
+        let (mut sx, mut sy) = walk.at(anchor);
+        for dx in anchor..(anchor + ANCHOR_EVERY).min(x_end) {
             let x0 = sx.floor() as usize;
             let y0 = sy.floor() as usize;
 

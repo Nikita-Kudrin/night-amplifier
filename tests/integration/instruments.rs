@@ -1757,15 +1757,27 @@ pub fn green_median(rgb8: &[u8]) -> f64 {
     g[g.len() / 2] as f64
 }
 
+/// Levels are [`green_level`]s, so a target under one output level still has a contrast:
+/// as whole-level medians IC 63 read 0 at one sub, and target-to-grain gain divided by it.
 pub fn measure_sky_and_target(rgb8: &[u8], width: usize, sky: (usize, usize, usize, usize), target: (usize, usize, usize, usize)) -> Measured {
     let sky_px = crop_rgb8(rgb8, width, sky);
     let target_px = crop_rgb8(rgb8, width, target);
-    let sky_level = green_median(&sky_px);
+    let sky_level = green_level(&sky_px);
     Measured {
         sky_grain: sky_sigma_levels(&sky_px, 1),
         sky_level,
-        target_contrast: green_median(&target_px) - sky_level,
+        target_contrast: green_level(&target_px) - sky_level,
     }
+}
+
+/// Mean of the green channel's middle half: a star in the block moves it no more than a
+/// median, and the block's noise dithers it finer than one output level.
+pub fn green_level(rgb8: &[u8]) -> f64 {
+    let mut g: Vec<u8> = rgb8.iter().skip(1).step_by(3).copied().collect();
+    g.sort_unstable();
+    let quarter = g.len() / 4;
+    let middle = &g[quarter..g.len() - quarter];
+    middle.iter().map(|&v| f64::from(v)).sum::<f64>() / middle.len() as f64
 }
 
 /// `(x0, y0, x1, y1)` in pixels.
@@ -1774,25 +1786,53 @@ pub type PixelBox = (usize, usize, usize, usize);
 /// The side of the blocks [`locate_boxes`] and [`box_at`] measure.
 const BOX: usize = 96;
 
-/// Darkest and brightest 96 px block of the green channel, by median.
+/// The sky and the target: the 96 px green block whose median sits nearest the rendered
+/// sky level (the interior's histogram mode, what the stretch solves its sky to), and the
+/// brightest block. Of the blocks equally near, the most uniform (5-95 % range): one
+/// straddling a population boundary reads the step as grain.
+///
+/// Not the darkest block: on a target that fills the frame that is real sky *below* the
+/// mode, which the black point is built to put near black — M33's corner went 6 -> 4
+/// levels with depth and its grain fell to 0.32x while the sky the curve solved held.
 pub fn locate_boxes(rgb8: &[u8], w: usize, h: usize) -> (PixelBox, PixelBox) {
     const B: usize = BOX;
-    let mut darkest = (f64::MAX, (0, 0, B, B));
+    let sky_level = interior_green_mode(rgb8, w, h, B) as f64;
+    let mut sky = ((f64::MAX, u8::MAX), (0, 0, B, B));
     let mut brightest = (f64::MIN, (0, 0, B, B));
     // Stay off the edges: registration leaves a partially covered border.
     for y in (B..h - 2 * B).step_by(B / 2) {
         for x in (B..w - 2 * B).step_by(B / 2) {
             let bx = (x, y, x + B, y + B);
-            let med = green_median(&crop_rgb8(rgb8, w, bx));
-            if med < darkest.0 {
-                darkest = (med, bx);
+            let block = crop_rgb8(rgb8, w, bx);
+            let med = green_median(&block);
+            let fit = ((med - sky_level).abs(), green_range(&block));
+            if fit.0 < sky.0 .0 || (fit.0 == sky.0 .0 && fit.1 < sky.0 .1) {
+                sky = (fit, bx);
             }
             if med > brightest.0 {
                 brightest = (med, bx);
             }
         }
     }
-    (darkest.1, brightest.1)
+    (sky.1, brightest.1)
+}
+
+/// Spread of the green channel between its 5th and 95th percentiles, in levels.
+fn green_range(rgb8: &[u8]) -> u8 {
+    let mut g: Vec<u8> = rgb8.iter().skip(1).step_by(3).copied().collect();
+    g.sort_unstable();
+    g[g.len() * 95 / 100] - g[g.len() * 5 / 100]
+}
+
+/// Most common green level inside a `margin` px border.
+fn interior_green_mode(rgb8: &[u8], w: usize, h: usize, margin: usize) -> u8 {
+    let mut histogram = [0usize; 256];
+    for y in margin..h - margin {
+        for x in margin..w - margin {
+            histogram[rgb8[(y * w + x) * 3 + 1] as usize] += 1;
+        }
+    }
+    (0..=255u8).max_by_key(|&level| histogram[level as usize]).expect("256 levels")
 }
 
 /// The 96 px block centred on `(cx, cy)`, in frame fractions, kept inside a `w x h` frame
@@ -1820,7 +1860,7 @@ pub fn measure_real_session(
 ) {
     if std::env::var("STACK_GRAIN_TRACE").is_ok() {
         let _ = tracing_subscriber::fmt()
-            .with_env_filter("night_amplifier::render::autostretch=debug")
+            .with_env_filter("night_amplifier_core::render::autostretch=debug")
             .with_test_writer()
             .try_init();
     }

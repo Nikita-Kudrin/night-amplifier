@@ -72,6 +72,8 @@ pub const MANAGED_FIXTURE_SETS: &[&str] = &[
     "130mm-imx464-dumbell-nebulae-png",
     "130mm-imx464-ring-nebulae-png",
     "cats-eye-nebula-imx533",
+    "hercules-globular-cluster-imx533-fixture",
+    "iris-nebula-imx533",
 ];
 
 /// Supported image file extensions
@@ -504,6 +506,18 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
         name: "background-capture-stacks",
         url: "https://drive.usercontent.google.com/download?id=1rEYLT7PrxGedIYcJPatNdcd6o4v3LoeS&export=download&confirm=t",
         contents: Contents { files: 5, bytes: 101_998_167 },
+    },
+    // Two of those sessions' raw subs, whole (Ares-C PRO, 3008², gain 126): M13 filling the
+    // frame in 75 subs of 0.4 s, and the Iris (NGC 7023) in 63 of 5 s.
+    Fixture {
+        name: "hercules-globular-cluster-imx533-fixture",
+        url: "https://drive.usercontent.google.com/download?id=1EXDudBM5ovlbTq10OId3sR7TjKt-Uux9&export=download&confirm=t",
+        contents: Contents { files: 75, bytes: 1_357_560_000 },
+    },
+    Fixture {
+        name: "iris-nebula-imx533",
+        url: "https://drive.usercontent.google.com/download?id=1e91M7PAjp_VxjVDaST7BN05vHVfal6IB&export=download&confirm=t",
+        contents: Contents { files: 63, bytes: 1_140_350_400 },
     },
 ];
 

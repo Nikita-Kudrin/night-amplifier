@@ -276,6 +276,11 @@ fn wanderer_reads_a_new_target_as_movement() {
             "250mm-dob-imx533-dumbbell-fits",
             "cats-eye-nebula-imx533",
         ),
+        // A star-filled field swung in: M13's 0.4 s subs, against the Iris's 5 s ones.
+        (
+            "iris-nebula-imx533",
+            "hercules-globular-cluster-imx533-fixture",
+        ),
     ];
 
     for (home, elsewhere) in pairings {

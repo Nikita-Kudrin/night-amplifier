@@ -499,6 +499,11 @@ geometrically. `RejectionMethod` has four variants but the live path implements 
 per-pixel min/max, +650 MB); the plain-mean path maintains `m2` too, so a settings toggle lands mid-stack without
 opening a gap.
 
+**The warp re-anchors its row walk** every `ANCHOR_EVERY` (32) pixels (`stacking::warp`): stepping a whole 3008 px
+row in f32 drifted samples up to 0.37 px (a 1.2e-4 rad turn is half an ulp past 2048), now 0.005; computing every
+pixel from its index cost 10 % of a rotated warp. Registration is held to a least-squares oracle on the same subs
+(`registration_keeps_what_a_least_squares_fit_would`), which seeing cannot fail as it fails a sub-vs-stack size.
+
 **A stack's first six subs are on probation** (`context::probation`): sub 1 used to become the
 reference unjudged (a bumped one: stars +40 %), and Pro cannot clip a pixel's first three samples.
 They stream as before but are held at f16 (54 MB each at 3008²x3); at sub 6 the reference is
