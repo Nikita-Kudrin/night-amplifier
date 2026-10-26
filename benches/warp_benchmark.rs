@@ -97,5 +97,42 @@ fn warp_rotation_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, warp_identity_benchmark, warp_rotation_benchmark);
+/// Mono warps per measured iteration: ~5.8 ms each, about 60 % of an RGB warp (its
+/// kernel bounds-checks every pixel), so three times [`REPS`] reports ~200 ms.
+const MONO_REPS: usize = 3 * REPS;
+
+/// The single-channel kernel, which mono cameras stack through: its own row walk.
+fn warp_rotation_mono_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("warp_rotation_mono");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+
+    let size = 2048;
+    let data = (0..size * size)
+        .map(|i| 0.05 + 0.1 * (i % size) as f32 / size as f32)
+        .collect();
+    let frame = Frame::from_f32_vec(data, size, size, 1).expect("Failed to create frame");
+    let transform = AffineTransform::new(PI / 180.0 * 2.0, 1.0, 5.0, 3.0);
+
+    group.throughput(Throughput::Elements((MONO_REPS * size * size) as u64));
+    group.bench_with_input(
+        BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, MONO_REPS)),
+        &(&frame, &transform),
+        |b, (frame, transform)| {
+            b.iter(|| {
+                for _ in 0..MONO_REPS {
+                    black_box(
+                        warp_frame(black_box(frame), black_box(transform), 0.0)
+                            .expect("Warp failed"),
+                    );
+                }
+            })
+        },
+    );
+
+    group.finish();
+}
+
+criterion_group!(benches, warp_identity_benchmark, warp_rotation_benchmark, warp_rotation_mono_benchmark);
 criterion_main!(benches);

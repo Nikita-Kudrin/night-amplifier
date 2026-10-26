@@ -472,7 +472,10 @@ pub fn misses(label: &str, c: &Comparison, expect: Expect) -> Vec<String> {
 pub fn real_cases() -> [(&'static str, Expect); 4] {
     [
         ("m101-trail-first", Expect::TrailGone),
-        ("fireworks-bump-first", Expect::Sharp { hfr: 0.02, legacy_hfr: 0.015, legacy_noise: f32::INFINITY }),
+        // One bumped sub of 16 shows little in the stream: +1.6 % when this was set, +1.5 %
+        // (Community) and +1.3 % (Pro) once the warp placed samples exactly; the probation's
+        // stack scatters ±0.4 % about the oracle, so 1 % still tells the defect from noise.
+        ("fireworks-bump-first", Expect::Sharp { hfr: 0.02, legacy_hfr: 0.01, legacy_noise: f32::INFINITY }),
         ("fireworks-smear-first", Expect::NoWorse { hfr: 0.005 }),
         ("dumbbell-bump-first", Expect::Sharp { hfr: 0.03, legacy_hfr: 0.08, legacy_noise: 1.3 }),
     ]
