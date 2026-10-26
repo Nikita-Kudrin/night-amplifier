@@ -161,7 +161,8 @@ defineEmits<{
   background: var(--surface-hover);
 }
 
-.btn-overlay.active {
+.btn-overlay.active,
+.btn-overlay.active:hover:not(:disabled) {
   background: var(--primary);
   color: var(--on-primary);
 }

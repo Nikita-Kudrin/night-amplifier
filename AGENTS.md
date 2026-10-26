@@ -265,7 +265,8 @@ Pro feature is optional uses `ignoreProOnly`, never a bare `catch {}`. Formatter
 splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`. Styles take tokens from `main.css`
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.ts` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
-components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
+components' error icons). A `.btn-x.active` rule needs its `:hover:not(:disabled)` twin (the test checks): a touch
+screen leaves `.btn:hover` stuck on the tapped button, which hid the Settings and Push-To tabs' active colour. Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
 `createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts` and
 complete (its fields over the event's required ones, a nullable one `null`: a handler reads them without a fallback),
 `settings(overrides)` (a partial group over its default; the panel's `settingsMirror` is a plain copy), `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a

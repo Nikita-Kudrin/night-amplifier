@@ -300,8 +300,10 @@ describe('App.vue sidebar tabs', () => {
     expect(pane('push-to').isVisible()).toBe(true)
     expect(pane('main').isVisible()).toBe(false)
     expect(button('push-to').attributes('aria-pressed')).toBe('true')
+    expect(button('push-to').classes()).toContain('active')
 
     await click('settings')
+    expect(button('push-to').classes()).not.toContain('active')
     expect(pane('settings').isVisible()).toBe(true)
     expect(pane('push-to').isVisible()).toBe(false)
     expect(pane('main').isVisible()).toBe(false)

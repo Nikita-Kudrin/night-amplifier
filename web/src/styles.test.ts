@@ -50,6 +50,23 @@ describe('stylesheets', () => {
         expect(sources[path].replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/color-mix\(/)
     })
 
+    // A touch screen leaves :hover on the tapped button, and `.btn:hover:not(:disabled)` (0,3,0)
+    // outranks a bare `.btn-x.active` (0,2,0): the Settings and Push-To tabs stayed grey.
+    it('keeps a pressed button\'s state colour under :hover', () => {
+        const stateRules: string[] = []
+        const missing: string[] = []
+        for (const [path, text] of Object.entries(sources)) {
+            const selectors = [...text.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{/g)]
+                .flatMap(([, list]) => list!.split(',').map((selector) => selector.trim()))
+            for (const selector of selectors.filter((s) => /^\.btn-[\w-]+\.active$/.test(s))) {
+                stateRules.push(`${path} ${selector}`)
+                if (!selectors.includes(`${selector}:hover:not(:disabled)`)) missing.push(`${path} ${selector}`)
+            }
+        }
+        expect(stateRules.length).toBeGreaterThanOrEqual(4)
+        expect(missing).toEqual([])
+    })
+
     // The UI is red for dark adaptation; a hue belongs in `:root` with a name. Shadows and
     // scrims stay neutral black or white and may be written in place.
     it.each(Object.keys(sources))('%s takes every colour from the theme', (path) => {
