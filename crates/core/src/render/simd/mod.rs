@@ -7,7 +7,7 @@
 //! NEON's stride-3 gather/scatter may trade differently and deleting on x86 evidence alone
 //! would be a guess. Planar is proven: `apply_fused_stretch_frame` runs 12.5M samples in 2.4ms.
 
-use crate::render::stretch::scale_lut_position;
+use crate::render::stretch::{scale_lut_position, ScaleLut};
 use wide::f32x4;
 
 const SIMD_MIN_LEN: usize = 8;
@@ -104,20 +104,19 @@ pub fn multiply_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
 /// 0.39 % of the luminance apart at every level, so interpolation keeps the worst case
 /// within 0.15 of an 8-bit level of the curve from 1e-9 to 1, at any curve the solver
 /// returns (`stretch::tests`). Above 1.0 (calibration overshoot) and NaN read the last
-/// entry; a table shorter than [`crate::render::stretch::SCALE_LUT_SIZE`] reads its last
-/// interval rather than past its end.
+/// entry.
 #[inline(always)]
-pub(crate) fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
+pub(crate) fn scale_lut_lookup(scale_lut: &ScaleLut, lum: f32) -> f32 {
     let (i, frac) = scale_lut_position(lum);
-    let i0 = i.min(scale_lut.len() - 2);
-    let lo = scale_lut[i0];
-    lo + (scale_lut[i0 + 1] - lo) * frac
+    let entries = scale_lut.entries();
+    let lo = entries[i];
+    lo + (entries[i + 1] - lo) * frac
 }
 
 /// [`scale_lut_lookup`] for four luminances. A gather either way: per lane it costs what the
 /// evenly spread table's multiply and convert did.
 #[inline(always)]
-pub(crate) fn scale_lut_lookup_x4(scale_lut: &[f32], lum: f32x4) -> f32x4 {
+pub(crate) fn scale_lut_lookup_x4(scale_lut: &ScaleLut, lum: f32x4) -> f32x4 {
     let [a, b, c, d] = lum.to_array();
     f32x4::new([
         scale_lut_lookup(scale_lut, a),

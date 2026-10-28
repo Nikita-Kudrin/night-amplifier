@@ -202,7 +202,7 @@ fn bench_frame_to_rgb8(c: &mut Criterion, frames: &TestFrames) {
     let mut shadowed_imx533_rgb = ready_imx533_rgb.clone();
     shadowed_imx533_rgb.stretch_result = Some(night_amplifier::render::display::StretchResult {
         black_point: 0.0,
-        scale_lut: std::sync::Arc::new(vec![]),
+        scale_lut: std::sync::Arc::new(night_amplifier::render::stretch::scale_lut_from(|_| 1.0)),
         color_intensity: 1.0,
         deferred_shadow_floor: None,
         sky_shadow: night_amplifier::render::SkyShadow::from_sky(0.7, 0.1),

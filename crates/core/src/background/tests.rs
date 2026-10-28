@@ -371,6 +371,49 @@ fn a_windowed_model_subtracts_what_the_whole_one_did_there() {
     }
 }
 
+/// Every `step`-th row of a window subtracts what the whole window subtracted from those
+/// rows, inside the image and past its edge alike.
+#[test]
+fn a_model_on_every_nth_row_subtracts_what_it_did_on_those_rows() {
+    let mut frame = Frame::zeros(200, 160, 3).unwrap();
+    for c in 0..3 {
+        for y in 0..160 {
+            for x in 0..200 {
+                frame.set_pixel(x, y, c, 0.1 + 0.002 * x as f32 + 0.0015 * y as f32 + 0.01 * c as f32);
+            }
+        }
+    }
+    let config = BackgroundConfig::default().with_grid_size(8, 8).with_gradient_only(false);
+    let model = BackgroundExtractor::new(config).estimate(&frame).unwrap();
+    for (x0, y0, w, h, step) in [(30isize, 20isize, 150usize, 120usize, 7usize), (-4, 3, 150, 157, 4), (0, 0, 200, 160, 1)] {
+        let cut = |rows: &[usize]| {
+            let mut f = Frame::zeros(w, rows.len(), 3).unwrap();
+            for c in 0..3 {
+                for (i, &y) in rows.iter().enumerate() {
+                    for x in 0..w {
+                        let (sx, sy) = ((x0 + x as isize).clamp(0, 199) as usize, (y0 + y as isize).clamp(0, 159) as usize);
+                        f.set_pixel(x, i, c, frame.get_pixel(sx, sy, c));
+                    }
+                }
+            }
+            f
+        };
+        let mut whole = cut(&(0..h).collect::<Vec<_>>());
+        model.windowed(x0, y0, w, h).unwrap().subtract_from(&mut whole);
+        let rows: Vec<usize> = (0..h).step_by(step).collect();
+        let mut sparse = cut(&rows);
+        model.windowed(x0, y0, w, h).unwrap().every_nth_row(step).subtract_from(&mut sparse);
+        assert_eq!(sparse.height(), h.div_ceil(step));
+        // The pedestal is each frame's own, so compare differences from one pixel.
+        let at = |f: &Frame, x: usize, y: usize, c: usize| f.get_pixel(x, y, c) - f.get_pixel(0, 0, c);
+        for (i, &y) in rows.iter().enumerate() {
+            for (x, c) in [(0, 0), (w / 2, 1), (w - 1, 2)] {
+                assert!((at(&sparse, x, i, c) - at(&whole, x, y, c)).abs() < 1e-6, "window {x0},{y0} step {step}: ({x}, {y}, {c})");
+            }
+        }
+    }
+}
+
 #[test]
 fn test_flat_field_fallback() {
     // Create a frame that is mostly bright (simulating a tightly cropped nebula)

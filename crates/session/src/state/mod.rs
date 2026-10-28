@@ -67,7 +67,7 @@ pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState, SolverCamera};
-pub use stack_noise::StackNoiseWindow;
+pub use stack_noise::{ShownStack, StackNoiseWindow};
 pub use stream_crop::StreamCropView;
 pub use viewed_camera::{ViewSelection, ViewedCamera};
 

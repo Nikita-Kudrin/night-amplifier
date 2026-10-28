@@ -116,6 +116,10 @@ pub async fn run_capture_loop(
         storage_queue_depth.taken();
     }
 
+    // Before any thread starts: cleared by the render thread, a save racing its start could
+    // read the last session's window.
+    state.stack_noise.clear();
+
     // Spawn worker threads — each gets a clone of the tokio Handle
     let state_capture = Arc::clone(&state);
     let state_stacking = Arc::clone(&state);

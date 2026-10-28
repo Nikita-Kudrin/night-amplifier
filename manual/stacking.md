@@ -100,7 +100,8 @@ measure noisier than it is, and the stretch came out flatter. As the field keeps
 shrinks, in occasional steps rather than on every frame. If you have zoomed in, the live view keeps
 the same patch of sky in view across a step. A step leaves the picture's brightness alone: cutting
 sky away used to make a bright nebula read as noisier and dim it a little at each step, through to
-the saved PNG. With the setting off nothing is ever cut.
+the saved PNG, which is cut to the crop the live view last showed. Changing a setting or the
+Processing Resolution mid-session keeps that too. With the setting off nothing is ever cut.
 
 ## Background removal
 

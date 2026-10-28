@@ -39,13 +39,15 @@ pub struct BackgroundModel {
 }
 
 /// `(x, y)` and size of a window on the model's image, in its pixels; it may start before
-/// the image or end past it by [`MAX_WINDOW_REACH`].
+/// the image or end past it by [`MAX_WINDOW_REACH`]. Its rows are every `row_step`-th of the
+/// image's ([`BackgroundModel::every_nth_row`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Window {
     x: isize,
     y: isize,
     width: usize,
     height: usize,
+    row_step: usize,
 }
 
 /// How far past its image, as a share of the side, a window may reach: that strip takes the
@@ -55,9 +57,14 @@ struct Window {
 const MAX_WINDOW_REACH: f32 = 0.035;
 
 impl Window {
-    /// Whether every pixel of the window lies on the image.
-    fn inside(&self, width: usize, height: usize) -> bool {
-        self.x >= 0 && self.y >= 0 && self.x as usize + self.width <= width && self.y as usize + self.height <= height
+    /// Whether every column of the window lies on the image; rows are clamped one at a time.
+    fn columns_inside(&self, width: usize) -> bool {
+        self.x >= 0 && self.x as usize + self.width <= width
+    }
+
+    /// The image row the window's row `y` reads.
+    fn image_row(&self, y: usize) -> isize {
+        self.y + (y * self.row_step) as isize
     }
 }
 
@@ -88,7 +95,7 @@ impl BackgroundModel {
             nodes_x: None,
             nodes_y: None,
             edges: None,
-            window: Window { x: 0, y: 0, width: image_width, height: image_height },
+            window: Window { x: 0, y: 0, width: image_width, height: image_height, row_step: 1 },
         }
     }
 
@@ -123,7 +130,7 @@ impl BackgroundModel {
             nodes_x: Some(nodes_x),
             nodes_y: Some(nodes_y),
             edges: None,
-            window: Window { x: 0, y: 0, width: image_width, height: image_height },
+            window: Window { x: 0, y: 0, width: image_width, height: image_height, row_step: 1 },
         }
     }
 
@@ -142,14 +149,24 @@ impl BackgroundModel {
     /// measured, not how they were subtracted. Only [`Self::subtract_from`] reads the window.
     /// `None` if it reaches past the image by more than [`MAX_WINDOW_REACH`] of a side.
     pub fn windowed(&self, x: isize, y: isize, width: usize, height: usize) -> Option<Self> {
-        let window = Window { x: self.window.x + x, y: self.window.y + y, width, height };
+        let step = self.window.row_step;
+        let window = Window { x: self.window.x + x, y: self.window.y + y * step as isize, width, height, row_step: step };
         let (iw, ih) = (self.image_width as f32, self.image_height as f32);
         let reach = |start: isize, len: usize, side: f32| {
             let past = (-start).max(0).max(start + len as isize - side as isize);
             past as f32 <= MAX_WINDOW_REACH * side
         };
-        let fits = width > 0 && height > 0 && reach(window.x, width, iw) && reach(window.y, height, ih);
+        let rows = height.saturating_sub(1) * step + 1;
+        let fits = width > 0 && height > 0 && reach(window.x, width, iw) && reach(window.y, rows, ih);
         fits.then(|| Self { window, ..self.clone() })
+    }
+
+    /// This model as a frame of every `step`-th row of its window sees it (rows 0, `step`,
+    /// ...): what a probe measuring a window's noise on a fraction of its rows subtracts.
+    pub fn every_nth_row(&self, step: usize) -> Self {
+        let step = step.max(1);
+        let window = Window { height: self.window.height.div_ceil(step), row_step: self.window.row_step * step, ..self.window };
+        Self { window, ..self.clone() }
     }
 
     /// The background at one pixel as [`Self::subtract_from`] removes it (before the
@@ -256,7 +273,7 @@ impl BackgroundModel {
 
         let _span = tracing::info_span!("apply_subtraction").entered();
         let rows = Rows::new(self);
-        let inside = window.inside(self.image_width, self.image_height);
+        let inside = window.columns_inside(self.image_width);
         let last = (self.image_width - 1) as isize;
         let clamp = |at: isize, last: isize| at.clamp(0, last) as usize;
         // One dispatch over every row of every plane: per channel instead cost three rayon
@@ -265,7 +282,7 @@ impl BackgroundModel {
             || rows.scratch(),
             |scratch, (idx, row)| {
                 let (c, y) = (idx / window.height, idx % window.height);
-                rows.render(c, clamp(window.y + y as isize, self.image_height as isize - 1), scratch);
+                rows.render(c, clamp(window.image_row(y), self.image_height as isize - 1), scratch);
                 let subtract = |slot: &mut f32, background: f32| {
                     let subtraction = (background - offsets[c]) * aggressiveness;
                     *slot = (*slot - subtraction + pedestal).max(0.0);

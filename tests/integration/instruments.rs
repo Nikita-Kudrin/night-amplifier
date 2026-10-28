@@ -543,7 +543,19 @@ pub fn cut_for_pipeline(
     rect: Option<&night_amplifier::stacking::CropRect>,
     settings: &night_amplifier::session::state::CaptureSettings,
 ) -> (Frame, Option<night_amplifier::NoiseField>) {
-    use night_amplifier::session::capture::stack_crop;
+    cut_held(frame, noise, rect, settings, &mut night_amplifier::session::capture::PreviewAnalysis::new())
+}
+
+/// [`cut_for_pipeline`] through the render task's own cut (`cut_for_render`), telling the
+/// `analysis` held across a session's depths as it does: a moved crop hands over the stack's
+/// rows on the crop it left, which the next render's probe reads.
+pub fn cut_held(
+    frame: Frame,
+    mut noise: Option<night_amplifier::NoiseField>,
+    rect: Option<&night_amplifier::stacking::CropRect>,
+    settings: &night_amplifier::session::state::CaptureSettings,
+    analysis: &mut night_amplifier::session::capture::PreviewAnalysis,
+) -> (Frame, Option<night_amplifier::NoiseField>) {
     use night_amplifier::session::state::Resolution;
     let resolution = match settings.preview_resolution {
         Resolution::Native => std::env::var("PROCESSING_RESOLUTION")
@@ -553,13 +565,9 @@ pub fn cut_for_pipeline(
         chosen => chosen,
     };
     let bin = night_amplifier::session::capture::preview_bin(frame.width(), frame.height(), resolution);
-    let noise = match rect {
-        Some(rect) => stack_crop::crop_coverage(noise.as_ref(), rect).unwrap(),
-        None => noise,
-    };
     let mut shared = std::sync::Arc::new(frame);
-    let binned = stack_crop::cut_display_frame(&mut shared, rect, bin).unwrap();
-    let noise = if binned { noise.and_then(|field| field.binned(bin).ok()) } else { noise };
+    let (cut, _) = night_amplifier::session::capture::cut_for_render(&mut shared, &mut noise, rect.copied(), bin, analysis);
+    assert_eq!(cut.as_ref(), rect, "the stack could not be cut to its crop");
     (std::sync::Arc::into_inner(shared).expect("the only handle"), noise)
 }
 
@@ -599,6 +607,8 @@ pub struct HeldRender {
     pub solve: Option<night_amplifier::render::AutoStretchResult>,
     /// The stack's MAD sigma, before the pipeline.
     pub stack_sigma: f32,
+    /// The noise window the held analysis served this depth through (`PreviewAnalysis::noise_window`).
+    pub noise_window: f32,
     /// One `(rgb8, w, h)` per `denoise` mode at the depths [`replay_held`] encodes, else empty.
     pub renders: Vec<(Vec<u8>, usize, usize)>,
 }
@@ -663,9 +673,8 @@ pub fn replay_held(
         for (order, (settings, analysis, crop, rows)) in orders.iter().zip(&mut held) {
             let noise = snapshot.noise.is_usable().then(|| snapshot.noise.clone());
             let rect = crop.decide(settings.auto_crop, snapshot.depth, noise.as_ref());
-            analysis.note_crop(rect);
+            let (mut frame, noise) = cut_held(snapshot.frame.clone(), noise, rect.as_ref(), settings, analysis);
             analysis.note_stack(snapshot.generation);
-            let (mut frame, noise) = cut_for_pipeline(snapshot.frame.clone(), noise, rect.as_ref(), settings);
             let ctx = AnalysisContext { showing_stack: snapshot.depth > 1, stack_depth: snapshot.depth as u32 };
             let night_amplifier::session::capture::pipeline::PreviewRender { pipeline_config, stretch_result, solve } =
                 night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(&mut frame, settings, &plugins, ctx, analysis)
@@ -692,7 +701,8 @@ pub fn replay_held(
                 previous.renders.clear();
             }
             let stack = (snapshot.frame.width(), snapshot.frame.height());
-            rows.push(HeldRender { depth: snapshot.depth, stack, crop: rect, solve, stack_sigma, renders });
+            let noise_window = analysis.noise_window();
+            rows.push(HeldRender { depth: snapshot.depth, stack, crop: rect, solve, stack_sigma, noise_window, renders });
         }
         deepest = Some(snapshot);
     });

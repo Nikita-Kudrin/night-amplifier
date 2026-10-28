@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::{save_stacked_result, StackCrop};
 use crate::capture::context::{LiveStacker, StackSettings, StackingContext};
-use crate::state::{AppState, CameraRole, CaptureSettings, ConnectedCameraInfo};
+use crate::state::{AppState, CameraRole, CaptureSettings, ConnectedCameraInfo, ShownStack};
 use night_amplifier_core::disk_writer::WritingSessionType;
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::registration::AffineTransform;
@@ -70,8 +70,8 @@ fn save(ctx: &StackingContext, on: bool) -> (Saved, CaptureSettings) {
     save_through(ctx, on, None)
 }
 
-/// [`save`], the render task having shown the stack through noise `window`.
-fn save_through(ctx: &StackingContext, on: bool, window: Option<f32>) -> (Saved, CaptureSettings) {
+/// [`save`], the render task having shown the stack as `shown`.
+fn save_through(ctx: &StackingContext, on: bool, shown: Option<ShownStack>) -> (Saved, CaptureSettings) {
     let (state, writer) = AppState::new_for_testing();
     let state = Arc::new(state);
     let writer = std::thread::spawn(move || writer.run());
@@ -95,8 +95,8 @@ fn save_through(ctx: &StackingContext, on: bool, window: Option<f32>) -> (Saved,
     state.frame_captured(true, true, None);
     state.disk_writer.start_session(WritingSessionType::IndividualFrames, "-stacking").unwrap();
 
-    if let Some(window) = window {
-        state.stack_noise.publish(0, window);
+    if let Some(shown) = shown {
+        state.stack_noise.publish(0, shown.crop, shown.window);
     }
     save_stacked_result(&state, Some(ctx as &dyn LiveStacker), &mut StackCrop::new(), 0);
 
@@ -151,16 +151,21 @@ fn the_saved_stack_is_whole_with_the_setting_off() {
     assert!(saved.png.as_raw() == &expected, "the saved PNG is not the uncropped stack's render");
 }
 
-/// The saved PNG is the live view's picture: rendered through the noise window the render
-/// task carried the stack's figure through as its crop moved, not the final crop's own MAD.
+/// The saved stack is the live view's picture: cut to the crop the render task last showed
+/// (here not the one the tracker would decide, at x 8), and rendered through the noise window
+/// it carried the stack's figure through as that crop moved, not the final crop's own MAD.
 #[test]
-fn the_saved_png_renders_through_the_live_view_s_noise_window() {
+fn the_saved_stack_is_the_live_view_s_crop_through_its_noise_window() {
+    use night_amplifier_core::stacking::CropRect;
     let ctx = drifted_stack();
-    let (plain, settings) = save_through(&ctx, false, None);
-    let (through, _) = save_through(&ctx, false, Some(0.8));
+    let crop = CropRect { x: 16, y: 8, width: 96, height: 112 };
+    let (plain, settings) = save_through(&ctx, true, Some(ShownStack { crop: Some(crop), window: 1.0 }));
+    let (through, _) = save_through(&ctx, true, Some(ShownStack { crop: Some(crop), window: 0.8 }));
+    assert_eq!((through.origin, through.png.dimensions()), (Some((16, 8)), (96, 112)), "the crop the live view showed");
     assert!(plain.png.as_raw() != through.png.as_raw(), "the window did not reach the saved PNG");
 
-    let (whole, coverage) = ctx.snapshot().unwrap();
+    let (mut whole, coverage) = ctx.snapshot().unwrap();
+    let coverage = crate::capture::stack_crop::crop_stack(&mut whole, coverage.as_ref(), &crop).unwrap();
     let plugins = night_amplifier_core::plugins::Plugins::installed();
     let (expected, _, _) =
         crate::capture::storage::render_stacked_png(whole, &settings, &plugins, ctx.depth() as u32, coverage, 0.8).unwrap();

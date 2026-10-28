@@ -97,6 +97,25 @@ pub fn cut_display_frame(frame: &mut Arc<Frame>, rect: Option<&CropRect>, bin: u
     Ok(false)
 }
 
+/// Rows 0, `stride`, ... of `frame` cut to `rect` and binned by `bin`, each as
+/// [`cut_display_frame`] cuts it, without cutting the rest: a moved crop's probe reads the
+/// noise of the crop it left on a fraction of its rows (`PreviewAnalysis::note_left_window`).
+pub fn cut_rows(frame: &Frame, rect: &CropRect, bin: usize, stride: usize) -> Result<Frame> {
+    let bin = bin.max(1);
+    rect.check(frame.width(), frame.height())?;
+    let (width, channels) = (rect.width / bin, frame.channels());
+    let rows: Vec<usize> = (0..rect.height / bin).step_by(stride.max(1)).collect();
+    let plane = width * rows.len();
+    let mut data = vec![0.0; plane * channels];
+    for (i, &r) in rows.iter().enumerate() {
+        let row = frame.downsample_region(&CropRect { y: rect.y + r * bin, height: bin, ..*rect }, bin)?;
+        for c in 0..channels {
+            data[c * plane + i * width..][..width].copy_from_slice(row.channel_data(c));
+        }
+    }
+    Frame::from_f32_vec(data, width, rows.len(), channels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +131,34 @@ mod tests {
     const CROPPED: CropRect = CropRect { x: 8, y: 0, width: 56, height: 64 };
     /// A depth the tracker crops at.
     const DEEP: usize = night_amplifier_core::stacking::MIN_CROP_DEPTH;
+
+    /// A crop's rows cut alone are the render task's cut's rows, bit for bit, binned or not.
+    #[test]
+    fn rows_cut_alone_are_the_rows_of_the_whole_cut() {
+        let mut frame = Frame::zeros(64, 48, 3).unwrap();
+        for c in 0..3 {
+            for y in 0..48 {
+                for x in 0..64 {
+                    frame.set_pixel(x, y, c, ((x * 7 + y * 13 + c * 5) % 17) as f32 / 17.0);
+                }
+            }
+        }
+        let rect = CropRect { x: 6, y: 4, width: 50, height: 41 };
+        for bin in [1, 2, 3] {
+            let mut whole = Arc::new(frame.clone());
+            cut_display_frame(&mut whole, Some(&rect), bin).unwrap();
+            for stride in [1, 3] {
+                let rows = cut_rows(&frame, &rect, bin, stride).unwrap();
+                assert_eq!((rows.width(), rows.height()), (whole.width(), whole.height().div_ceil(stride)), "bin {bin} stride {stride}");
+                for (i, y) in (0..whole.height()).step_by(stride).enumerate() {
+                    for c in 0..3 {
+                        let (got, want) = (&rows.channel_data(c)[i * rows.width()..][..rows.width()], &whole.channel_data(c)[y * whole.width()..][..whole.width()]);
+                        assert_eq!(got, want, "bin {bin} stride {stride}: row {y} channel {c}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn nothing_is_cropped_while_the_setting_is_off() {

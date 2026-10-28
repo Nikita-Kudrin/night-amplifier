@@ -6,7 +6,7 @@
 
 use tracing::{debug, instrument, warn};
 
-use super::analysis::{AnalysisContext, PreviewAnalysis, WindowProbe};
+use super::analysis::{AnalysisContext, PreviewAnalysis, ProbeRows, WindowProbe};
 use super::context::{create_live_stacker, LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::plugins::Plugins;
 use super::frame_gate::{FrameAdmission, RejectionReason};
@@ -225,27 +225,36 @@ pub struct PreviewRender {
     pub solve: Option<night_amplifier_core::render::AutoStretchResult>,
 }
 
-/// The noise a frame cut to a moved crop reads through the last window's white balance and
-/// model (`PreviewAnalysis::take_window_probe`): stages 0-1.5 below on a copy, then its MAD.
-/// What it changed is the window alone, which the frame's own refit is then served through.
-/// One extra pass, on the frames whose crop moved.
+/// A moved crop's two sides, `(left, entered)` (`PreviewAnalysis::take_window_probe`): the
+/// stack's rows on the crop it left and the frame's on the one it entered, each through
+/// stages 0-1.5 below with the last window's estimates, then the MAD of every pixel read.
+/// Their ratio is what the window changed, which the frame's own refit is then served
+/// through. Rows, not the whole frame: one pass over about `PROBE_PIXELS` a side.
 fn probe_window_noise(
     frame: &Frame,
     config: &night_amplifier_core::render::RenderPipelineConfig,
-    probe: &WindowProbe,
-) -> Option<f32> {
+    probe: WindowProbe,
+) -> Option<(f32, f32)> {
+    use night_amplifier_core::statistics::{compute_image_stats_with_config, StatsConfig};
     let _span = tracing::info_span!("window_probe").entered();
-    let mut copy = frame.clone();
-    if config.background_subtraction && copy.channels() == 3 {
-        night_amplifier_core::render::neutralize_background(&mut copy, &probe.white_balance?).ok()?;
-    }
-    if config.background_subtraction {
-        probe.background.as_ref()?.subtract_from(&mut copy);
-    }
-    if config.scnr && copy.channels() == 3 {
-        night_amplifier_core::render::scnr::apply_scnr(&mut copy, config.scnr_amount).ok()?;
-    }
-    Some(night_amplifier_core::statistics::compute_image_stats(&copy).ok()?.mean_sigma())
+    let measure = |mut rows: Frame, model: Option<&night_amplifier_core::background::BackgroundModel>| {
+        if config.background_subtraction && rows.channels() == 3 {
+            night_amplifier_core::render::neutralize_background(&mut rows, &probe.white_balance?).ok()?;
+        }
+        if config.background_subtraction {
+            model?.subtract_from(&mut rows);
+        }
+        if config.scnr && rows.channels() == 3 {
+            night_amplifier_core::render::scnr::apply_scnr(&mut rows, config.scnr_amount).ok()?;
+        }
+        let every = StatsConfig { max_samples: rows.width() * rows.height(), ..StatsConfig::default() };
+        Some(compute_image_stats_with_config(&rows, every).ok()?.mean_sigma())
+    };
+    let ProbeRows { first, stride } = probe.entered;
+    let rows = night_amplifier_core::stacking::CropRect { x: 0, y: first, width: frame.width(), height: frame.height().checked_sub(first)? };
+    let entered = super::stack_crop::cut_rows(frame, &rows, 1, stride).ok()?;
+    let left = measure(probe.left, probe.left_background.as_ref())?;
+    Some((left, measure(entered, probe.entered_background.as_ref())?))
 }
 
 /// Process a frame for preview display using the unified render pipeline.
@@ -313,8 +322,8 @@ pub fn process_preview_frame_with_analysis(
     );
     tracing::Span::current().record("analysis_reused", reused);
     if let Some(probe) = analysis.take_window_probe() {
-        let sigma = pipeline_config.auto_stretch.then(|| probe_window_noise(frame, &pipeline_config, &probe)).flatten();
-        analysis.probe_window(sigma);
+        let sigmas = pipeline_config.auto_stretch.then(|| probe_window_noise(frame, &pipeline_config, probe)).flatten();
+        analysis.probe_window(sigmas);
     }
 
     // Stage 0: Background Neutralization (Pre-subtraction)
