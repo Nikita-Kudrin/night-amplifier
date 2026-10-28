@@ -28,18 +28,28 @@ const TAIL_FRACTION = 0.3125
 const INFO_TAIL_GAP_PX = 20
 
 /**
- * How far one screen reaches along the arrow, in image heights: the frame's chord through
- * its centre at `angleDeg`. Sideways on a 16:9 guide frame that is 1.76 heights, so counting
- * heights alone told the observer up to 1.76x the screens there were (2026-10-12). A circular
- * eyepiece shows the circle inscribed in the frame, the same reach every way.
+ * How far one frame of the camera's image reaches along the arrow, in image heights: its chord
+ * through the centre at `angleDeg`. Sideways on a 16:9 guide frame that is 1.76 heights, so
+ * counting heights alone told the observer up to 1.76x the screens there were (2026-10-12).
+ * The readout counts these on every page, the round eyepiece too: counting its circle there
+ * read up to 2x `/`'s number for the same push (2026-10-24).
  */
-export function frameSpan(angleDeg: number, aspect: number, isCircular = false): number {
+export function frameSpan(angleDeg: number, aspect: number): number {
     if (!(aspect > 0)) return 1
-    if (isCircular) return Math.min(1, aspect)
     const angleRad = (angleDeg * Math.PI) / 180
     const across = Math.abs(Math.sin(angleRad))
     const along = Math.abs(Math.cos(angleRad))
     return Math.min(across > 1e-9 ? aspect / across : Infinity, along > 1e-9 ? 1 / along : Infinity)
+}
+
+/**
+ * How far the view itself reaches along the arrow, in image heights: the frame, or on a
+ * circular eyepiece the circle inscribed in it, the same every way. It places the arrow, since
+ * a target inside the frame but outside the circle is hidden; it is never the readout.
+ */
+export function viewSpan(angleDeg: number, aspect: number, isCircular: boolean): number {
+    if (!isCircular) return frameSpan(angleDeg, aspect)
+    return aspect > 0 ? Math.min(1, aspect) : 1
 }
 
 /**

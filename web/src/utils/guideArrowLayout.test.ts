@@ -8,6 +8,7 @@ import {
     infoOffset,
     isOffScreen,
     screensAway,
+    viewSpan,
 } from './guideArrowLayout'
 
 describe('guideArrowLayout', () => {
@@ -40,16 +41,31 @@ describe('guideArrowLayout', () => {
             expect(frameSpan(75, GUIDE_ASPECT)).toBeCloseTo(GUIDE_ASPECT / Math.sin((75 * Math.PI) / 180))
         })
 
+        it('falls back to one height without a frame', () => {
+            expect(frameSpan(90, 0)).toBe(1)
+            expect(frameSpan(90, Number.NaN)).toBe(1)
+        })
+    })
+
+    describe('viewSpan', () => {
+        const GUIDE_ASPECT = 2712 / 1538
+
         it('is the inscribed circle\'s diameter on a circular eyepiece, any way', () => {
             for (const angleDeg of [0, 45, 90, 268]) {
-                expect(frameSpan(angleDeg, GUIDE_ASPECT, true)).toBe(1)
-                expect(frameSpan(angleDeg, 0.5, true)).toBe(0.5)
+                expect(viewSpan(angleDeg, GUIDE_ASPECT, true)).toBe(1)
+                expect(viewSpan(angleDeg, 0.5, true)).toBe(0.5)
+            }
+        })
+
+        it('is the frame\'s chord off the circular view', () => {
+            for (const angleDeg of [0, 45, 75, 268]) {
+                expect(viewSpan(angleDeg, GUIDE_ASPECT, false)).toBe(frameSpan(angleDeg, GUIDE_ASPECT))
             }
         })
 
         it('falls back to one height without a frame', () => {
-            expect(frameSpan(90, 0)).toBe(1)
-            expect(frameSpan(90, Number.NaN)).toBe(1)
+            expect(viewSpan(90, 0, true)).toBe(1)
+            expect(viewSpan(90, Number.NaN, true)).toBe(1)
         })
     })
 

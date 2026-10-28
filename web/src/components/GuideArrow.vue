@@ -12,14 +12,22 @@ import {
   infoOffset,
   isOffScreen,
   screensAway,
+  viewSpan,
 } from '../utils/guideArrowLayout'
 import type {ClientPushDirection} from '../composables/events/pushToEvents'
 import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
 import type {ScreenRect} from '../composables/useCometRoi'
+import type {FrameSize} from '../composables/useImageStream'
 
 const props = withDefaults(defineProps<{
   /** `pushDirection` from the event stream. */
   direction: ClientPushDirection
+  /**
+   * The streamed frame's size, which the screens count is measured on. Not `bounds`: a
+   * circular eyepiece's canvas is square whatever the frame, and before the first frame `/`
+   * hands over its container, so the count followed the phone's shape.
+   */
+  frame: FrameSize
   /** Where the image sits in the arrow's positioned parent, in CSS pixels. */
   bounds?: ScreenRect
   fovDeg?: number
@@ -44,13 +52,15 @@ const directionHint = computed(() => props.direction.directionHint)
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
 
+const frameAspect = computed(() => props.frame.width / props.frame.height)
+// The readout counts frames, the same on every page; placement follows what this view shows.
 // Another camera's angle says nothing about which way this view's frame runs.
-const span = computed(() => props.otherCamera
-    ? 1
-    : frameSpan(angleDeg.value, props.bounds.width / props.bounds.height, props.isCircular))
-const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg, span.value))
-const offScreen = computed(() => isOffScreen(screenSizes.value))
-const arrowScale = computed(() => scaleFor(distanceDeg.value, screenSizes.value))
+const screenSizes = computed(() => screensAway(
+    distanceDeg.value, props.fovDeg, props.otherCamera ? 1 : frameSpan(angleDeg.value, frameAspect.value)))
+const viewScreens = computed(() => screensAway(
+    distanceDeg.value, props.fovDeg, props.otherCamera ? 1 : viewSpan(angleDeg.value, frameAspect.value, props.isCircular)))
+const offScreen = computed(() => isOffScreen(viewScreens.value))
+const arrowScale = computed(() => scaleFor(distanceDeg.value, viewScreens.value))
 const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bounds.height, offScreen.value))
 const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 

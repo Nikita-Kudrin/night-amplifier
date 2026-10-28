@@ -1,11 +1,15 @@
+import {nextTick} from 'vue'
 import {setupMocks, mountLiveView} from './setup'
+import type {Mocks} from './setup'
 import {camera, clientDirection} from '../../../test/fixtures'
 import type {PushToTarget} from '../../../composables/api.events'
 
 describe('LiveView - Guide Arrow Integration', () => {
+    let mocks: Mocks
+
     beforeEach(() => {
         vi.clearAllMocks()
-        setupMocks()
+        mocks = setupMocks()
     })
 
     describe('visibility', () => {
@@ -67,6 +71,21 @@ describe('LiveView - Guide Arrow Integration', () => {
     })
 
     describe('props passing', () => {
+        // The screens count is measured on the frame, which the eyepiece pages share; the
+        // canvas box is the container's until the first frame lands.
+        it('hands the arrow the streamed frame\'s size', async () => {
+            const wrapper = mountLiveView({
+                pushDirection: clientDirection({angleDeg: 90, distanceDeg: 10, directionHint: 'W', isClose: false}),
+                currentTarget: {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+            })
+            const frame = () => wrapper.findComponent({name: 'GuideArrow'}).props('frame')
+
+            expect(frame()).toEqual({width: 0, height: 0})
+            mocks.mockImageStream.dimensions.value = {width: 2712, height: 1538}
+            await nextTick()
+            expect(frame()).toEqual({width: 2712, height: 1538})
+        })
+
         it('passes correct angle to GuideArrow', () => {
             const wrapper = mountLiveView({
                 pushDirection: clientDirection({
