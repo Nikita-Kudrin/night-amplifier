@@ -9,7 +9,7 @@ import {useOverlayVisibility} from '../composables/useOverlayVisibility'
 import {useCometRoi} from '../composables/useCometRoi'
 import {useTimeouts} from '../composables/useTimeouts'
 import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming'
-import {CAPTURE_STATES, FIT_MARGIN, isCaptureRunning, liveStreamEndpoint, SOLVING_HOLD_MS} from '../constants'
+import {CAPTURE_STATES, FIT_MARGIN, isCaptureRunning, liveStreamEndpoint} from '../constants'
 import {fitScale} from '../utils/viewGeometry'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
@@ -24,8 +24,8 @@ import {
   useMainCamera,
   useSettings,
 } from '../composables/appContext'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
-import {useHeldFlag} from '../composables/useHeldFlag'
+import {useDisplayedFov, useDisplayedFrame, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useSolveIndicator} from '../composables/useSolveIndicator'
 import {setViewedCamera} from '../composables/api'
 import type {ScreenRect} from '../composables/useCometRoi'
 
@@ -81,8 +81,8 @@ const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
-const plateSolving = computed(() => eventStream?.plateSolving.value ?? null)
-const solving = useHeldFlag(() => plateSolving.value?.inProgress ?? false, SOLVING_HOLD_MS)
+const arrowFrame = useDisplayedFrame(dimensions, displayedCamera)
+const {solving, stage: solveStage} = useSolveIndicator(() => eventStream?.plateSolving.value ?? null)
 // While a target's first solve runs there is no direction yet, only the solving compass.
 const showGuideArrow = computed(() => currentTarget.value !== null && (pushDirection.value !== null || solving.value))
 
@@ -399,12 +399,12 @@ onUnmounted(() => {
     <GuideArrow
         v-if="showGuideArrow"
         :direction="pushDirection"
-        :frame="dimensions"
+        :frame="arrowFrame"
         :bounds="canvasBounds"
         :fov-deg="displayedFovDeg"
         :other-camera="arrowCamera"
         :solving="solving"
-        :solve-stage="plateSolving?.stage ?? null"
+        :solve-stage="solveStage"
     />
 
     <!-- Comet ROI Overlay -->

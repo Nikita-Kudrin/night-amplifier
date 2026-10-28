@@ -57,6 +57,8 @@ const props = withDefaults(defineProps<{
 const angleDeg = computed(() => props.direction?.angleDeg ?? 0)
 const distanceDeg = computed(() => props.direction?.distanceDeg ?? 0)
 const directionHint = computed(() => props.direction?.directionHint ?? null)
+// The last solve failed: the readout is the fix before it, dimmed and named so.
+const stale = computed(() => props.direction?.stale ?? false)
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
@@ -137,7 +139,9 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
 
 <template>
   <div class="guide-arrow-container" :style="containerStyle">
-    <PushToSolving v-if="!direction" :stage="solveStage"/>
+    <template v-if="!direction">
+      <PushToSolving v-if="solving" :stage="solveStage"/>
+    </template>
 
     <div v-else-if="isOnTarget" class="on-target">
       <svg viewBox="0 0 100 100" :width="responsiveBaseSize * 0.8" :height="responsiveBaseSize * 0.8">
@@ -197,7 +201,8 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
           :style="distanceInfoStyle"
           :stage="solveStage"
       />
-      <div v-else class="hud-chip distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
+      <div v-else class="hud-chip distance-info" :class="{centered: otherCamera, stale}" :style="distanceInfoStyle">
+        <span v-if="stale" class="last-fix">last fix</span>
         <span class="distance">{{ formatAngle(distanceDeg) }}</span>
         <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
         <span class="hint">{{ directionHint }}</span>
@@ -292,6 +297,18 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
 .hint {
   font-size: var(--fs-base);
   color: var(--text-secondary);
+}
+
+/* The numbers of a fix the last solve could not confirm. */
+.distance-info.stale {
+  opacity: 0.5;
+}
+
+.last-fix {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* No chevron to sit behind: the box itself marks the centre of the view. */

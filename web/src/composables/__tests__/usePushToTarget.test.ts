@@ -19,7 +19,7 @@ describe('usePushToTarget', () => {
     it('shows the target and direction the event stream holds', () => {
         eventStream.currentTarget.value = catalogEntry({designation: 'M31'})
         eventStream.pushDirection.value = {
-            angleDeg: 0, distanceDeg: 10, directionHint: 'N', isClose: false, fovDeg: 1, solvedCamera: null,
+            angleDeg: 0, distanceDeg: 10, directionHint: 'N', isClose: false, fovDeg: 1, solvedCamera: null, stale: false,
         }
         const {currentTarget, pushDirection} = usePushToTarget({eventStream})
 

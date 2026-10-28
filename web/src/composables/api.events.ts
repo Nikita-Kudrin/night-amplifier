@@ -355,6 +355,7 @@ export interface PushDirectionUpdatedEvent {
     is_close: boolean
     fov_deg: number | null
     solved_camera: string | null
+    stale: boolean
 }
 
 /** No push direction: no target, or none computed for the current one yet. */
@@ -596,7 +597,9 @@ export type InstallStage = (typeof INSTALL_STAGE_VALUES)[number]
 /**
  * A push direction as announced: the plugin's answer plus the solved field of view.
  * `solved_camera` names the camera whose solve oriented `angle_deg` — see
- * [`PushToDirectionResponse::solved_camera`].
+ * [`PushToDirectionResponse::solved_camera`]. `stale`: the last solve failed, so these are
+ * the numbers of the fix before it — stamped by `PushToAnnouncer`, which re-sends a held
+ * direction marked when a solve fails, so a client's dismissed verdict cannot unmark it.
  */
 export interface PushDirection {
     angle_deg: number
@@ -605,6 +608,7 @@ export interface PushDirection {
     is_close: boolean
     fov_deg: number | null
     solved_camera: string | null
+    stale: boolean
 }
 
 /** The target clients were told about. */

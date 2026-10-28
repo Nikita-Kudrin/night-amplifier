@@ -7,11 +7,11 @@ import {useHeldFlag} from '../useHeldFlag'
 const HOLD_MS = 1000
 
 /** `useHeldFlag` inside a component, so its hold belongs to something that can unmount. */
-function mountHeld(source: Ref<boolean>) {
+function mountHeld(source: Ref<boolean>, holdMs: () => number = () => HOLD_MS) {
     let held: Readonly<Ref<boolean>> | undefined
     const wrapper = mount(defineComponent({
         setup() {
-            held = useHeldFlag(source, HOLD_MS)
+            held = useHeldFlag(source, holdMs)
             return () => h('div')
         },
     }))
@@ -67,6 +67,23 @@ describe('useHeldFlag', () => {
         await nextTick()
         vi.advanceTimersByTime(HOLD_MS - 1)
         expect(held.value).toBe(true)
+        vi.advanceTimersByTime(1)
+        expect(held.value).toBe(false)
+    })
+
+    // The compass holds longer after a failed solve: the hold is read as the source falls.
+    it('holds for the length it reads as its source falls', async () => {
+        const source = ref(true)
+        const holdMs = ref(HOLD_MS)
+        const {held} = mountHeld(source, () => holdMs.value)
+
+        holdMs.value = 3 * HOLD_MS
+        source.value = false
+        await nextTick()
+        holdMs.value = HOLD_MS
+        vi.advanceTimersByTime(3 * HOLD_MS - 1)
+        expect(held.value).toBe(true)
+
         vi.advanceTimersByTime(1)
         expect(held.value).toBe(false)
     })

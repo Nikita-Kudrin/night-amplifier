@@ -17,7 +17,9 @@ pub struct PushToTarget {
 
 /// A push direction as announced: the plugin's answer plus the solved field of view.
 /// `solved_camera` names the camera whose solve oriented `angle_deg` — see
-/// [`PushToDirectionResponse::solved_camera`].
+/// [`PushToDirectionResponse::solved_camera`]. `stale`: the last solve failed, so these are
+/// the numbers of the fix before it — stamped by `PushToAnnouncer`, which re-sends a held
+/// direction marked when a solve fails, so a client's dismissed verdict cannot unmark it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PushDirection {
@@ -27,6 +29,7 @@ pub struct PushDirection {
     pub is_close: bool,
     pub fov_deg: Option<f64>,
     pub solved_camera: Option<String>,
+    pub stale: bool,
 }
 
 impl PushDirection {
@@ -38,13 +41,15 @@ impl PushDirection {
             is_close: direction.is_close,
             fov_deg,
             solved_camera: direction.solved_camera,
+            stale: false,
         }
     }
 
     /// Rounded to the precision a person can act on: the direction is recomputed from
     /// floating-point spherical geometry every frame, so an exact comparison would let the
     /// per-frame spam straight back through. The solving camera is part of it: the same
-    /// numbers from the other camera's solve point a different way on screen.
+    /// numbers from the other camera's solve point a different way on screen, and a fresh
+    /// fix of the stale numbers is news.
     pub fn same_as(&self, other: &Self) -> bool {
         let key = |d: &Self| {
             (
@@ -53,7 +58,7 @@ impl PushDirection {
                 d.is_close,
             )
         };
-        key(self) == key(other) && self.solved_camera == other.solved_camera
+        key(self) == key(other) && self.solved_camera == other.solved_camera && self.stale == other.stale
     }
 }
 

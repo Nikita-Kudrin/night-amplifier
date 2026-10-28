@@ -3,7 +3,11 @@ import type {CatalogEntry, Coordinate, DirectionHint, SolveVerdict} from '../api
 import type {PushDirection, PushToTarget} from '../api.events'
 import type {EventHandlers} from './handlers'
 
-/** A push direction in the client's casing; `fovDeg` is 0 until a solve measured one. */
+/**
+ * A push direction in the client's casing; `fovDeg` is 0 until a solve measured one. `stale`:
+ * the last solve failed, so these are the fix before it — the server's mark, which a dismissed
+ * verdict leaves alone.
+ */
 export interface ClientPushDirection {
     angleDeg: number
     distanceDeg: number
@@ -11,6 +15,7 @@ export interface ClientPushDirection {
     isClose: boolean
     fovDeg: number
     solvedCamera: string | null
+    stale: boolean
 }
 
 /** The solve as the status bar shows it; `stage` is the step a multi-strategy solve is on. */
@@ -26,6 +31,11 @@ export type CurrentTarget = PushToTarget | CatalogEntry | Coordinate
 
 export const NOT_SOLVING: Readonly<PlateSolving> = Object.freeze({inProgress: false, targetName: null, lastResult: null, stage: null})
 
+/** "step 2/3" for a multi-strategy solve, `null` for a single one: it tells a slow solve from a hung one. */
+export function solveStep(stage: PlateSolving['stage']): string | null {
+    return stage && stage.total > 1 ? `step ${stage.attempt}/${stage.total}` : null
+}
+
 /**
  * The client's push direction from a `push_direction_updated` event or the REST
  * status' `direction`.
@@ -38,6 +48,7 @@ export function pushDirectionFrom(direction: PushDirection): ClientPushDirection
         isClose: direction.is_close,
         fovDeg: direction.fov_deg ?? 0,
         solvedCamera: direction.solved_camera,
+        stale: direction.stale,
     }
 }
 
@@ -66,9 +77,8 @@ export function createPushToEvents() {
             // status bar and pushed the one thing the user is looking for -- the object
             // name -- off the end. It stays in `stage.label` and in the server log.
             // The counter alone still separates a slow solve from a hung one.
-            if (stage && stage.total > 1) {
-                return `Searching (step ${stage.attempt}/${stage.total})${targetSuffix}`
-            }
+            const step = solveStep(stage)
+            if (step) return `Searching (${step})${targetSuffix}`
             return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
 
