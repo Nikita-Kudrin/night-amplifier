@@ -1,7 +1,8 @@
 import {describe, it, expect} from 'vitest'
 import {ref} from 'vue'
-import {useDisplayedFov, useOtherSolvedCamera} from '../useDisplayedFov'
+import {useDisplayedFov, useDisplayedFrame, useOtherSolvedCamera} from '../useDisplayedFov'
 import type {TelescopeSettings} from '../api.types'
+import {camera} from '../../test/fixtures'
 
 /** Optics with only `fields` known. */
 function optics(fields: Partial<TelescopeSettings>): TelescopeSettings {
@@ -99,5 +100,33 @@ describe('useOtherSolvedCamera', () => {
         expect(useOtherSolvedCamera(ref({name: 'Ares-C PRO'}), ref({solvedCamera: null}), BOTH).value).toBeNull()
         expect(useOtherSolvedCamera(ref(null), ref({solvedCamera: 'Neptune-C II'}), BOTH).value).toBeNull()
         expect(useOtherSolvedCamera(ref({name: 'Ares-C PRO'}), ref(null), BOTH).value).toBeNull()
+    })
+})
+
+describe('useDisplayedFrame', () => {
+    const GUIDE_CAM = camera({name: 'Guide Cam', info: {max_width: 2712, max_height: 1538}})
+
+    it('is the streamed frame while there is one', () => {
+        const frame = useDisplayedFrame(ref({width: 1356, height: 769}), ref(GUIDE_CAM))
+        expect(frame.value).toEqual({width: 1356, height: 769})
+    })
+
+    // A Start's `no_frame` or a reconnect zeroes the stream until its next frame.
+    it('falls back to the displayed camera\'s sensor while the stream has no frame', () => {
+        const dimensions = ref({width: 1356, height: 769})
+        const shown = ref(GUIDE_CAM)
+        const frame = useDisplayedFrame(dimensions, shown)
+
+        dimensions.value = {width: 0, height: 0}
+        expect(frame.value).toEqual({width: 2712, height: 1538})
+
+        shown.value = camera({info: {max_width: 3008, max_height: 3008}})
+        expect(frame.value).toEqual({width: 3008, height: 3008})
+    })
+
+    it('stays empty with neither a frame nor a camera that knows its sensor', () => {
+        const none = {width: 0, height: 0}
+        expect(useDisplayedFrame(ref(none), ref(null)).value).toEqual(none)
+        expect(useDisplayedFrame(ref(none), ref(camera({info: {max_width: 0, max_height: 0}}))).value).toEqual(none)
     })
 })

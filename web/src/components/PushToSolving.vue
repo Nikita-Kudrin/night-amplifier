@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {computed} from 'vue'
+import {solveStep} from '../composables/events/pushToEvents'
 import type {PlateSolving} from '../composables/events/pushToEvents'
 import {CompassIcon} from './ui'
 
@@ -10,10 +11,7 @@ const props = withDefaults(defineProps<{
   stage: null,
 })
 
-const step = computed(() => {
-  const {stage} = props
-  return stage && stage.total > 1 ? `step ${stage.attempt}/${stage.total}` : null
-})
+const step = computed(() => solveStep(props.stage))
 </script>
 
 <template>

@@ -109,6 +109,7 @@ impl ServerEvent {
                 is_close: false,
                 fov_deg: Some(1.45),
                 solved_camera: Some("ASI533MC Pro".into()),
+                stale: false,
             }),
             E::PushDirectionCleared,
             E::PlateSolvingStatus(SolveStatus {

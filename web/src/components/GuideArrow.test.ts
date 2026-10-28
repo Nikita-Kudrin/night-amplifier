@@ -12,7 +12,7 @@ type ArrowProps = InstanceType<typeof GuideArrow>['$props']
  * The arrow's props as the tables below spell them: the direction's fields and the image box,
  * flat. `frame` defaults to the box's size, as a canvas off the circular view takes the frame's.
  */
-type FlatProps = Partial<Pick<ClientPushDirection, 'angleDeg' | 'distanceDeg' | 'isClose' | 'directionHint'>> &
+type FlatProps = Partial<Pick<ClientPushDirection, 'angleDeg' | 'distanceDeg' | 'isClose' | 'directionHint' | 'stale'>> &
     Omit<ArrowProps, 'direction' | 'bounds' | 'frame'> & {
         frame?: FrameSize
         imageLeft?: number
@@ -37,9 +37,9 @@ const IMAGE_PROPS = {
 
 /** Mounts from flat props, as the tables below spell them: direction and image box split out. */
 function mountArrow(propsOverrides: FlatProps = {}) {
-    const {angleDeg, distanceDeg, isClose, directionHint, imageLeft, imageTop, imageWidth, imageHeight, frame, ...rest} =
+    const {angleDeg, distanceDeg, isClose, directionHint, stale = false, imageLeft, imageTop, imageWidth, imageHeight, frame, ...rest} =
         {...DEFAULT_PROPS, ...propsOverrides}
-    const direction: ClientPushDirection = {angleDeg, distanceDeg, isClose, directionHint, fovDeg: 0, solvedCamera: null}
+    const direction: ClientPushDirection = {angleDeg, distanceDeg, isClose, directionHint, fovDeg: 0, solvedCamera: null, stale}
     const bounds = imageWidth !== undefined && imageHeight !== undefined
         ? {left: imageLeft ?? 0, top: imageTop ?? 0, width: imageWidth, height: imageHeight}
         : undefined
@@ -226,6 +226,46 @@ describe('GuideArrow', () => {
             expect(wrapper.find('.on-target').exists()).toBe(false)
             expect(wrapper.find('.distance-info').exists()).toBe(false)
             expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
+        })
+
+        // Its parents mount it so only while solving; a hold that ended must not leave one turning.
+        it('draws nothing with neither a direction nor a solve', () => {
+            const wrapper = mount(GuideArrow, {props: {direction: null, frame: {width: 800, height: 600}}})
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.distance-info').exists()).toBe(false)
+        })
+    })
+
+    // The server keeps the direction through a failed solve, so the readout that comes
+    // back is the fix before it; it once looked exactly like a fresh one.
+    describe('after a failed solve', () => {
+        it('dims the readout and names it the last fix', () => {
+            const fresh = mountArrow({...IMAGE_PROPS, fovDeg: 1})
+            const stale = mountArrow({...IMAGE_PROPS, fovDeg: 1, stale: true})
+
+            expect(fresh.find('.distance-info').classes()).not.toContain('stale')
+            expect(fresh.find('.last-fix').exists()).toBe(false)
+            expect(stale.find('.distance-info').classes()).toContain('stale')
+            expect(stale.find('.last-fix').text()).toBe('last fix')
+            expect(stale.find('.distance').text()).toBe(fresh.find('.distance').text())
+            expect(stale.find('.screen-size').text()).toBe(fresh.find('.screen-size').text())
+        })
+
+        it('lets the compass stand in for a stale readout while the next solve runs', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, stale: true, solving: true})
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+            expect(wrapper.find('.last-fix').exists()).toBe(false)
+        })
+
+        it('marks another camera\'s readout too', () => {
+            const wrapper = mountArrow({
+                ...IMAGE_PROPS, stale: true, otherCamera: {name: 'Neptune-C II', connected: true},
+            })
+
+            expect(wrapper.find('.distance-info').classes()).toEqual(expect.arrayContaining(['centered', 'stale']))
         })
     })
 

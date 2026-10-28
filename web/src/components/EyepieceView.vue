@@ -16,11 +16,11 @@ import {
   useSettings,
 } from '../composables/appContext'
 import {fetchEyepieceSnapshot} from '../composables/api'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
-import {useHeldFlag} from '../composables/useHeldFlag'
+import {useDisplayedFov, useDisplayedFrame, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useSolveIndicator} from '../composables/useSolveIndicator'
 import {saveBlob} from '../utils/saveBlob'
 import {offsetBounds} from '../utils/viewGeometry'
-import {eyepieceStreamEndpoint, PAGES, SOLVING_HOLD_MS} from '../constants'
+import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
 import type {ScreenRect} from '../composables/useCometRoi'
@@ -42,8 +42,7 @@ const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
-const plateSolving = computed(() => eventStream?.plateSolving.value ?? null)
-const solving = useHeldFlag(() => plateSolving.value?.inProgress ?? false, SOLVING_HOLD_MS)
+const {solving, stage: solveStage} = useSolveIndicator(() => eventStream?.plateSolving.value ?? null)
 // While a target's first solve runs there is no direction yet, only the solving compass.
 const showGuideArrow = computed(() => currentTarget.value !== null && (pushDirection.value !== null || solving.value))
 
@@ -51,6 +50,7 @@ const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'gui
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
+const arrowFrame = useDisplayedFrame(dimensions, displayedCamera)
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
@@ -300,13 +300,13 @@ onUnmounted(() => {
           <GuideArrow
               v-if="showGuideArrow"
               :direction="pushDirection"
-              :frame="dimensions"
+              :frame="arrowFrame"
               :bounds="eyeBounds[eye] ?? NO_BOUNDS"
               :fov-deg="displayedFovDeg"
               :other-camera="arrowCamera"
               :is-circular="isCircularView"
               :solving="solving"
-              :solve-stage="plateSolving?.stage ?? null"
+              :solve-stage="solveStage"
           />
         </div>
       </div>

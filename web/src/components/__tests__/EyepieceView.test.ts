@@ -73,7 +73,7 @@ import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility'
 import {contextProvides} from '../../composables/appContext'
 import { createEventStreamStub } from '../../test/eventStream'
 import { camera, capabilities, catalogEntry, clientDirection, settings } from '../../test/fixtures'
-import { SOLVING_HOLD_MS } from '../../constants'
+import { FAILED_SOLVE_HOLD_MS, SOLVING_HOLD_MS } from '../../constants'
 import { NOT_SOLVING } from '../../composables/events/pushToEvents'
 import type { PlateSolving } from '../../composables/events/pushToEvents'
 
@@ -1105,10 +1105,46 @@ describe('EyepieceView.vue Push-To solving', () => {
 
     plateSolving.value = { ...NOT_SOLVING, targetName: 'M31', lastResult: 'failed' }
     await nextTick()
-    vi.advanceTimersByTime(SOLVING_HOLD_MS)
+    // Longer than after a success: the next attempt follows about 2 s after a failure.
+    vi.advanceTimersByTime(FAILED_SOLVE_HOLD_MS - 1)
     await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
 
+    vi.advanceTimersByTime(1)
+    await nextTick()
     expect(wrapper.findComponent({ name: 'GuideArrow' }).exists()).toBe(false)
+  })
+
+  it('dims the readout as the last fix once a solve failed, in each eye', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: {
+        currentTarget: catalogEntry(),
+        pushDirection: { ...POINTING, stale: true },
+        plateSolving: { ...NOT_SOLVING, targetName: 'M31', lastResult: 'failed' },
+      },
+    })
+
+    expect(wrapper.findAll('.last-fix')).toHaveLength(2)
+    expect(wrapper.findAll('.distance-info.stale')).toHaveLength(2)
+  })
+
+  // `no_frame` on a camera switch zeroes the stream; the count measures the sensor till a frame lands.
+  it('hands the arrow the viewed camera\'s sensor while the stream has no frame', async () => {
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { viewedCamera: ref<CameraRole>('guide'), currentTarget: catalogEntry(), pushDirection: POINTING },
+      provide: {
+        guideCamera: ref(camera({ name: 'Guide Cam', info: { max_width: 2712, max_height: 1538 } })),
+        mainCamera: ref(camera({ name: 'Imaging Cam' })),
+      },
+    })
+    const arrowFrame = () => wrapper.findComponent({ name: 'GuideArrow' }).props('frame')
+
+    expect(arrowFrame()).toEqual({ width: 2712, height: 1538 })
+    lastStream().dimensions.value = { width: 1356, height: 769 }
+    await nextTick()
+    expect(arrowFrame()).toEqual({ width: 1356, height: 769 })
   })
 
   it('turns a compass in each eye of a binoview', async () => {

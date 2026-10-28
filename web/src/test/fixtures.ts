@@ -214,6 +214,7 @@ export function clientDirection(overrides: Partial<ClientPushDirection> = {}): C
         isClose: false,
         fovDeg: 0,
         solvedCamera: null,
+        stale: false,
         ...overrides,
     }
 }
