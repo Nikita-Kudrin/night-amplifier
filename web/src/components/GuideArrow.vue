@@ -14,14 +14,15 @@ import {
   screensAway,
   viewSpan,
 } from '../utils/guideArrowLayout'
-import type {ClientPushDirection} from '../composables/events/pushToEvents'
+import type {ClientPushDirection, PlateSolving} from '../composables/events/pushToEvents'
 import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
 import type {ScreenRect} from '../composables/useCometRoi'
 import type {FrameSize} from '../composables/useImageStream'
+import PushToSolving from './PushToSolving.vue'
 
 const props = withDefaults(defineProps<{
-  /** `pushDirection` from the event stream. */
-  direction: ClientPushDirection
+  /** `pushDirection` from the event stream; `null` before a target's first solve, drawn only while solving. */
+  direction: ClientPushDirection | null
   /**
    * The streamed frame's size, which the screens count is measured on. Not `bounds`: a
    * circular eyepiece's canvas is square whatever the frame, and before the first frame `/`
@@ -38,16 +39,24 @@ const props = withDefaults(defineProps<{
    * named only while connected — a disconnected guide is nowhere to look.
    */
   otherCamera?: OtherSolvedCamera | null
+  /**
+   * Push-To is plate solving: a turning compass stands in for the readout, whose numbers
+   * are the last solve's, while the chevrons keep pointing the last known way.
+   */
+  solving?: boolean
+  solveStage?: PlateSolving['stage']
 }>(), {
   bounds: () => ({left: 0, top: 0, width: 400, height: 300}),
   fovDeg: 0,
   isCircular: false,
   otherCamera: null,
+  solving: false,
+  solveStage: null,
 })
 
-const angleDeg = computed(() => props.direction.angleDeg)
-const distanceDeg = computed(() => props.direction.distanceDeg)
-const directionHint = computed(() => props.direction.directionHint)
+const angleDeg = computed(() => props.direction?.angleDeg ?? 0)
+const distanceDeg = computed(() => props.direction?.distanceDeg ?? 0)
+const directionHint = computed(() => props.direction?.directionHint ?? null)
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
@@ -65,7 +74,7 @@ const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bou
 const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 
 const isOnTarget = computed(() => {
-  return distanceDeg.value < 0.1 || directionHint.value === 'OK'
+  return props.direction !== null && (distanceDeg.value < 0.1 || directionHint.value === 'OK')
 })
 
 const containerStyle = computed((): CSSProperties => {
@@ -128,7 +137,9 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
 
 <template>
   <div class="guide-arrow-container" :style="containerStyle">
-    <div v-if="isOnTarget" class="on-target">
+    <PushToSolving v-if="!direction" :stage="solveStage"/>
+
+    <div v-else-if="isOnTarget" class="on-target">
       <svg viewBox="0 0 100 100" :width="responsiveBaseSize * 0.8" :height="responsiveBaseSize * 0.8">
         <circle
             cx="50"
@@ -179,7 +190,14 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
         </svg>
       </div>
 
-      <div class="hud-chip distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
+      <PushToSolving
+          v-if="solving"
+          class="distance-info"
+          :class="{centered: otherCamera}"
+          :style="distanceInfoStyle"
+          :stage="solveStage"
+      />
+      <div v-else class="hud-chip distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
         <span class="distance">{{ formatAngle(distanceDeg) }}</span>
         <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
         <span class="hint">{{ directionHint }}</span>

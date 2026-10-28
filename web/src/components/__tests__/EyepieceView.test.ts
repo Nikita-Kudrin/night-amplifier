@@ -73,6 +73,9 @@ import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility'
 import {contextProvides} from '../../composables/appContext'
 import { createEventStreamStub } from '../../test/eventStream'
 import { camera, capabilities, catalogEntry, clientDirection, settings } from '../../test/fixtures'
+import { SOLVING_HOLD_MS } from '../../constants'
+import { NOT_SOLVING } from '../../composables/events/pushToEvents'
+import type { PlateSolving } from '../../composables/events/pushToEvents'
 
 const fetchEyepieceSnapshot = vi.mocked(api.fetchEyepieceSnapshot)
 
@@ -284,7 +287,7 @@ describe('EyepieceView.vue Layout', () => {
     expect(arrows.length).toBe(1)
   })
 
-  it('does not render GuideArrow when pushDirection is null', async () => {
+  it('does not render GuideArrow when pushDirection is null and nothing is solving', async () => {
     installResizeObserverStub()
 
     const EyepieceView = (await import('../EyepieceView.vue')).default
@@ -1023,5 +1026,99 @@ describe('EyepieceView.vue Teardown', () => {
     wrapper.unmount()
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+/**
+ * The eyepiece has no status bar, so the compass over the chevrons is the only sign that
+ * Push-To is solving rather than stopped.
+ */
+describe('EyepieceView.vue Push-To solving', () => {
+  const SOLVING: PlateSolving = { ...NOT_SOLVING, inProgress: true, targetName: 'M31' }
+  const POINTING = clientDirection({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE' })
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    setPath('/eyepiece')
+    installResizeObserverStub()
+    await loadEyepieceView()
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('shows the compass alone while a new target\'s first solve runs', () => {
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving: SOLVING },
+    })
+
+    const arrow = wrapper.findComponent({ name: 'GuideArrow' })
+    expect(arrow.props('direction')).toBeNull()
+    expect(arrow.props('solving')).toBe(true)
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+  })
+
+  it('shows nothing for a solve with no target', () => {
+    const wrapper = mountEyepiece(undefined, { eventStream: { plateSolving: SOLVING } })
+
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).exists()).toBe(false)
+  })
+
+  it('turns the compass in place of the readout, and hands it the step', () => {
+    const stage = { label: 'blind', attempt: 2, total: 3 }
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), pushDirection: POINTING, plateSolving: { ...SOLVING, stage } },
+    })
+
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).props('solveStage')).toEqual(stage)
+    expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
+    expect(wrapper.find('.step').text()).toBe('step 2/3')
+    expect(wrapper.find('.distance').exists()).toBe(false)
+  })
+
+  it('keeps the compass one turn after the solve ends, then gives the readout back', async () => {
+    vi.useFakeTimers()
+    const plateSolving = ref<PlateSolving>(SOLVING)
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), pushDirection: POINTING, plateSolving },
+    })
+
+    plateSolving.value = { ...NOT_SOLVING, targetName: 'M31', lastResult: 'success' }
+    await nextTick()
+    vi.advanceTimersByTime(SOLVING_HOLD_MS - 1)
+    await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+
+    vi.advanceTimersByTime(1)
+    await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+    expect(wrapper.find('.distance').exists()).toBe(true)
+  })
+
+  it('drops a first solve\'s compass once the hold is over, when the solve found nothing', async () => {
+    vi.useFakeTimers()
+    const plateSolving = ref<PlateSolving>(SOLVING)
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving },
+    })
+
+    plateSolving.value = { ...NOT_SOLVING, targetName: 'M31', lastResult: 'failed' }
+    await nextTick()
+    vi.advanceTimersByTime(SOLVING_HOLD_MS)
+    await nextTick()
+
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).exists()).toBe(false)
+  })
+
+  it('turns a compass in each eye of a binoview', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving: SOLVING },
+    })
+
+    expect(wrapper.find('.left-eye .push-to-solving').exists()).toBe(true)
+    expect(wrapper.find('.right-eye .push-to-solving').exists()).toBe(true)
   })
 })
