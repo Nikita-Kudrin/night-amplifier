@@ -97,21 +97,19 @@ function savedFiles(role: CameraRole, n: number) {
  * Whether what a camera's last capture saved is on the storage device, not just in the OS's
  * cache: 2026-10-16's Orange Pi lost power seconds after a Stop and kept an empty stack. One
  * per camera, since each syncs when it stops. Saving is not dismissible — the observer must
- * wait it out — and outranks Push-To while it lasts.
+ * wait it out — and outranks Push-To while it lasts. A finished save shows nothing: the
+ * chip going away is the all-clear.
  */
 const storageChip = (role: CameraRole): Chip | null => {
   const sync = eventStream.storageSync.value[role]
   if (!sync) return null
   const kind = `storage-sync ${role} ${sync.state}`
-  const dismiss = () => eventStream.clearStorageSync(role)
   if (sync.state === 'syncing') {
     const what = role === 'guide' ? 'Saving guide frames' : 'Saving'
     return {kind, tone: 'primary', spinner: true, text: `${what} to disk — keep the power on`}
   }
-  if (sync.state === 'synced') {
-    return {kind, tone: 'success', icon: 'check', text: `Saved ${savedFiles(role, sync.files)} to disk`, dismiss}
-  }
   if (sync.state === 'failed') {
+    const dismiss = () => eventStream.clearStorageSync(role)
     // No count when the sync itself never answered (the drive stopped responding): which
     // files made it is unknown, so none is named lost.
     const what = sync.failed > 0

@@ -185,10 +185,10 @@ stack every time the telescope moves, so there is no single result to write.
 A file the computer has "saved" can still be waiting in memory for up to half a minute before it
 reaches the card or drive, and cutting the power then leaves it empty. So when you press **Stop**,
 the status bar first shows **Saving to disk — keep the power on**, while the stack, its PNG, the
-raw frames or the SER video are pushed onto the device. Then it shows **Saved N files to disk**,
-and it is safe to power off. If something did not make it, it says how many files and why instead.
-The guide camera's saved frames get their own notice when the guide camera stops — **Saved N
-guide frames to disk** — so wait for both if both were saving. Settings are written the same way
+raw frames or the SER video are pushed onto the device. Once the notice goes away it is safe to
+power off. If something did not make it, it says how many files and why instead. The guide camera's
+saved frames get their own notice when the guide camera stops — **Saving guide frames to disk** —
+so wait for both if both were saving. Settings are written the same way
 each time you change them.
 
 On a slow card **Stop** can take a while: the camera is free again at once (a disconnect starts
