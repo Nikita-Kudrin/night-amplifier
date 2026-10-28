@@ -4,12 +4,17 @@ import GuideArrow from './GuideArrow.vue'
 import type {pushDirectionFrom, ClientPushDirection} from '../composables/events/pushToEvents'
 import type {PushDirection} from '../composables/api.events'
 import {DIRECTION_HINT_VALUES} from '../composables/api.types'
+import type {FrameSize} from '../composables/useImageStream'
 
 type ArrowProps = InstanceType<typeof GuideArrow>['$props']
 
-/** The arrow's props as the tables below spell them: the direction's fields and the image box, flat. */
+/**
+ * The arrow's props as the tables below spell them: the direction's fields and the image box,
+ * flat. `frame` defaults to the box's size, as a canvas off the circular view takes the frame's.
+ */
 type FlatProps = Partial<Pick<ClientPushDirection, 'angleDeg' | 'distanceDeg' | 'isClose' | 'directionHint'>> &
-    Omit<ArrowProps, 'direction' | 'bounds'> & {
+    Omit<ArrowProps, 'direction' | 'bounds' | 'frame'> & {
+        frame?: FrameSize
         imageLeft?: number
         imageTop?: number
         imageWidth?: number
@@ -32,13 +37,18 @@ const IMAGE_PROPS = {
 
 /** Mounts from flat props, as the tables below spell them: direction and image box split out. */
 function mountArrow(propsOverrides: FlatProps = {}) {
-    const {angleDeg, distanceDeg, isClose, directionHint, imageLeft, imageTop, imageWidth, imageHeight, ...rest} =
+    const {angleDeg, distanceDeg, isClose, directionHint, imageLeft, imageTop, imageWidth, imageHeight, frame, ...rest} =
         {...DEFAULT_PROPS, ...propsOverrides}
     const direction: ClientPushDirection = {angleDeg, distanceDeg, isClose, directionHint, fovDeg: 0, solvedCamera: null}
     const bounds = imageWidth !== undefined && imageHeight !== undefined
         ? {left: imageLeft ?? 0, top: imageTop ?? 0, width: imageWidth, height: imageHeight}
         : undefined
-    const props: ArrowProps = {direction, ...rest, ...(bounds && {bounds})}
+    const props: ArrowProps = {
+        direction,
+        frame: frame ?? {width: bounds?.width ?? 400, height: bounds?.height ?? 300},
+        ...rest,
+        ...(bounds && {bounds}),
+    }
     return mount(GuideArrow, {props})
 }
 
@@ -438,6 +448,50 @@ describe('GuideArrow', () => {
         it('counts screens in heights for a vertical push on the same frame', () => {
             const wrapper = mountArrow({distanceDeg: 22.22, fovDeg: 1.45, imageWidth: 2539, imageHeight: 1440})
             expect(wrapper.find('.screen-size').text()).toBe('15× screen')
+        })
+
+        describe('the same on every page (2026-10-24)', () => {
+            // The guide's 2712x1538 frame, first push of the night at 60.1°, 10° off: `/` read
+            // 3.4 screens, the round eyepiece 6.9 — it counted its circle, one height every way.
+            const GUIDE_FRAME = {width: 2712, height: 1538}
+            const PUSH = {angleDeg: 60.14, distanceDeg: 10, directionHint: 'NW', fovDeg: 1.45, frame: GUIDE_FRAME} satisfies FlatProps
+            const label = (props: FlatProps) => mountArrow({...PUSH, ...props}).find('.screen-size').text()
+
+            it('counts frames on the circular eyepiece as `/` does', () => {
+                const liveView = label({imageWidth: 844, imageHeight: 479})
+                const eyepiece = label({imageWidth: 800, imageHeight: 800, isCircular: true})
+
+                expect(liveView).toBe('3.4× screen')
+                expect(eyepiece).toBe(liveView)
+            })
+
+            it('measures the frame, not the box it is drawn in', () => {
+                // `/` before its first frame: the phone's portrait container
+                expect(label({imageWidth: 390, imageHeight: 844})).toBe('3.4× screen')
+            })
+
+            it('still pins the arrow at the circle when the target is in the frame but off it', () => {
+                // Sideways 0.6° on a 1.45° frame: 23 % of a frame across, past 0.4 of the circle
+                const sideways = {...PUSH, angleDeg: 90, distanceDeg: 0.6, directionHint: 'W', imageWidth: 800, imageHeight: 800} satisfies FlatProps
+                const circular = mountArrow({...sideways, isCircular: true})
+                const rectangular = mountArrow(sideways)
+
+                expect(circular.find('.screen-size').text()).toBe('23% screen')
+                expect(rectangular.find('.screen-size').text()).toBe('23% screen')
+                expect(getPosition(circular).left).toBeGreaterThan(400)
+                expect(getPosition(rectangular)).toEqual({left: 400, top: 400})
+            })
+
+            it('places against a portrait frame\'s narrower circle', () => {
+                // The circle is the frame's width across, half its height: 0.3 heights is 0.6 of it
+                const portrait = {
+                    angleDeg: 0, distanceDeg: 0.3, fovDeg: 1, frame: {width: 1000, height: 2000},
+                    imageWidth: 800, imageHeight: 800,
+                } satisfies FlatProps
+
+                expect(getPosition(mountArrow({...portrait, isCircular: true})).top).toBeLessThan(400)
+                expect(getPosition(mountArrow(portrait))).toEqual({left: 400, top: 400})
+            })
         })
 
         it('counts in heights when the angle belongs to another camera', () => {

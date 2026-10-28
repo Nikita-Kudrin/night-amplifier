@@ -51,7 +51,9 @@ names it; the imaging camera's own first solve brings the arrow back.
 
 The readout beside an arrow gives the distance in degrees and in screens: how many frames
 you would push across, measured the way the arrow points, so a sideways push on a wide
-guide frame counts widths and a push up or down counts heights. The screens count needs
+guide frame counts widths and a push up or down counts heights. Every page gives the same
+count, the round eyepiece too: it counts frames of the camera image, not the circle, though
+the arrow still moves to the circle's edge once the target is hidden behind it. The screens count needs
 the field of the camera on screen: its focal length under **Push-To → Equipment**, or a
 plate solve on that same camera. Without either, only the degrees are shown.
 

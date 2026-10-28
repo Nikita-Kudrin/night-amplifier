@@ -296,6 +296,7 @@ onUnmounted(() => {
           <GuideArrow
               v-if="showGuideArrow && pushDirection"
               :direction="pushDirection"
+              :frame="dimensions"
               :bounds="eyeBounds[eye] ?? NO_BOUNDS"
               :fov-deg="displayedFovDeg"
               :other-camera="arrowCamera"
