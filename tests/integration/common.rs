@@ -826,17 +826,13 @@ pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToRes
     })?;
 
     let status = response.status();
-    let is_html = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.contains("text/html"));
 
     // Google Drive can return the virus scan warning as either a non-success
     // status or as a 200 with Content-Type: text/html (for large files via
     // drive.usercontent.google.com).
-    if !status.is_success() || is_html {
-        let body = response.text().await.unwrap_or_default();
+    if !status.is_success() || is_html(&response) {
+        let body = read_unexpected(response).await;
+        let title = page_title(&body).unwrap_or("untitled");
         if body.contains("Google Drive") || body.contains("virus scan") || body.contains("confirm=")
         {
             info!("Hit Google Drive virus scan warning page");
@@ -846,26 +842,72 @@ pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToRes
                     format!("Confirmation download request failed: {}", e)
                 })?;
 
-                if !response.status().is_success() {
-                    return Err(format!(
-                        "Confirmation download failed: HTTP {}",
-                        response.status()
-                    ));
+                let status = response.status();
+                if !status.is_success() || is_html(&response) {
+                    let body = read_unexpected(response).await;
+                    let title = page_title(&body).unwrap_or("untitled");
+                    return Err(format!("Confirmation download failed: HTTP {status}, page \"{title}\""));
                 }
                 return download_with_progress(response, dest, component).await;
             }
-            return Err(
-                "Google Drive virus scan page: could not extract download link".to_string(),
-            );
+            return Err(format!("Google Drive page with no download link: \"{title}\""));
         }
 
         if !status.is_success() {
-            return Err(format!("Download failed: HTTP {}", status));
+            return Err(format!("Download failed: HTTP {status}, page \"{title}\""));
         }
-        return Err("Download returned HTML instead of binary content".to_string());
+        return Err(format!("Download returned HTML instead of binary content: \"{title}\""));
     }
 
     download_with_progress(response, dest, component).await
+}
+
+fn is_html(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/html"))
+}
+
+/// Reads a response that is not the archive and prints it: Drive refuses with a page, not
+/// an error code, and a test's output is all CI keeps of why (2026-10-28 lost 71 tests to a
+/// page nobody saw).
+async fn read_unexpected(response: reqwest::Response) -> String {
+    let status = response.status();
+    let url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("no content type")
+        .to_string();
+    let body = response.text().await.unwrap_or_default();
+    eprintln!("{}", unexpected_page_report(&url, status, &content_type, &body));
+    body
+}
+
+/// A page longer than this is cut: the reason sits near the top, and every retry prints it.
+pub(crate) const MAX_LOGGED_PAGE: usize = 64 * 1024;
+
+pub(crate) fn unexpected_page_report(
+    url: &str,
+    status: reqwest::StatusCode,
+    content_type: &str,
+    body: &str,
+) -> String {
+    let shown = &body[..body.floor_char_boundary(MAX_LOGGED_PAGE)];
+    let cut = if shown.len() < body.len() { "\n[truncated]" } else { "" };
+    format!(
+        "{url} answered HTTP {status} ({content_type}, {} bytes) instead of the archive:\n{shown}{cut}",
+        body.len()
+    )
+}
+
+pub(crate) fn page_title(html: &str) -> Option<&str> {
+    let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
+    let title = re.captures(html)?.get(1)?.as_str().trim();
+    (!title.is_empty()).then_some(title)
 }
 
 async fn download_with_progress(
