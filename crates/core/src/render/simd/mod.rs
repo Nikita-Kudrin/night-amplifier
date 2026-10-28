@@ -7,6 +7,7 @@
 //! NEON's stride-3 gather/scatter may trade differently and deleting on x86 evidence alone
 //! would be a guess. Planar is proven: `apply_fused_stretch_frame` runs 12.5M samples in 2.4ms.
 
+use crate::render::stretch::scale_lut_position;
 use wide::f32x4;
 
 const SIMD_MIN_LEN: usize = 8;
@@ -99,24 +100,31 @@ pub fn multiply_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
     }
 }
 
-/// Linearly interpolated lookup into a scale LUT indexed by luminance in `[0, 1]`.
-///
-/// Interpolation matters because tone curves are steepest where the sky sits: with an
-/// 8192-entry table, truncation is off by up to ~8 LSB of 8-bit output at aggressive
-/// midtones (m ≈ 0.001), while interpolation keeps the worst case below 0.15 LSB.
-///
-/// `lum` is clamped into the table: a luminance above 1.0 (calibration overshoot)
-/// saturates at the last entry instead of extrapolating, and NaN resolves there too.
+/// Linearly interpolated lookup into a scale LUT, at [`scale_lut_position`]: entries
+/// 0.39 % of the luminance apart at every level, so interpolation keeps the worst case
+/// within 0.15 of an 8-bit level of the curve from 1e-9 to 1, at any curve the solver
+/// returns (`stretch::tests`). Above 1.0 (calibration overshoot) and NaN read the last
+/// entry; a table shorter than [`crate::render::stretch::SCALE_LUT_SIZE`] reads its last
+/// interval rather than past its end.
 #[inline(always)]
-fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
-    let lut_max = (scale_lut.len() - 1) as f32;
-    let pos = (lum * lut_max).min(lut_max);
-    // len >= 2 is guaranteed by the callers; clamping to len-2 keeps `i0 + 1` in range
-    // and turns pos == lut_max into frac == 1.0, i.e. exactly the last entry.
-    let i0 = (pos as usize).min(scale_lut.len() - 2);
-    let frac = pos - i0 as f32;
+pub(crate) fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
+    let (i, frac) = scale_lut_position(lum);
+    let i0 = i.min(scale_lut.len() - 2);
     let lo = scale_lut[i0];
     lo + (scale_lut[i0 + 1] - lo) * frac
+}
+
+/// [`scale_lut_lookup`] for four luminances. A gather either way: per lane it costs what the
+/// evenly spread table's multiply and convert did.
+#[inline(always)]
+pub(crate) fn scale_lut_lookup_x4(scale_lut: &[f32], lum: f32x4) -> f32x4 {
+    let [a, b, c, d] = lum.to_array();
+    f32x4::new([
+        scale_lut_lookup(scale_lut, a),
+        scale_lut_lookup(scale_lut, b),
+        scale_lut_lookup(scale_lut, c),
+        scale_lut_lookup(scale_lut, d),
+    ])
 }
 
 #[cfg(test)]
@@ -127,6 +135,7 @@ mod tests {
     //! the contract *between* the two.
 
     use super::*;
+    use crate::render::stretch::scale_lut_from;
 
     /// Deterministic pseudo-random samples in [0, 1).
     fn noise(n: usize, seed_init: u32) -> Vec<f32> {
@@ -183,8 +192,7 @@ mod tests {
 
     #[test]
     fn test_scale_lut_planar_matches_interleaved() {
-        const N: usize = 256;
-        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + (i as f32 / N as f32) * 3.0).collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + l * 3.0);
 
         // 4099 pixels: exercises many full 4-wide blocks plus a 3-pixel scalar tail.
         for pixels in [4usize, 7, 64, 4099] {
@@ -206,8 +214,7 @@ mod tests {
 
     #[test]
     fn test_scale_lut_planar_simd_matches_scalar() {
-        const N: usize = 256;
-        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + (i as f32 / N as f32) * 3.0).collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + l * 3.0);
 
         for pixels in [4usize, 7, 4096, 4099] {
             let base = noise(pixels * 3, 0xDEAD_BEEF);
@@ -227,8 +234,7 @@ mod tests {
 
     #[test]
     fn test_scale_lut_planar_whole_matches_per_row() {
-        const N: usize = 256;
-        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + i as f32 / N as f32).collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + l);
 
         // 7 pixels per row exercises both the 4-pixel block and the scalar tail.
         let (row_pixels, rows) = (7usize, 5usize);
@@ -290,8 +296,7 @@ mod tests {
 
     #[test]
     fn test_planar_handles_out_of_range_and_nan() {
-        const N: usize = 256;
-        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + i as f32).collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + 255.0 * l);
 
         // Luminance far above 1.0 must clamp, not extrapolate off the table.
         let mut r = vec![5.0f32; 8];

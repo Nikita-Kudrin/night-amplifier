@@ -257,7 +257,7 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
         0.2, 0.05, 0.9, 0.0,
     ];
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
-    let scale_lut = std::sync::Arc::new(vec![2.0f32; 8192]); // flat 2x scale
+    let scale_lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|_| 2.0)); // flat 2x scale
     let ready = to_ready_frame_with_stretch(&frame, 0.1, scale_lut);
 
     let rgb8 = expand_to_rgb8_fused(&ready, &mut Default::default());
@@ -280,15 +280,8 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
 /// real asinh/MTF curves.
 #[test]
 fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample() {
-    const N: usize = 8192;
     // scale_lut(l) * l == sqrt(l), i.e. scale_lut(l) = 1/sqrt(l).
-    let scale_lut: Vec<f32> = (0..N)
-        .map(|i| {
-            let l = (i as f32 / (N - 1) as f32).max(1e-6); // avoid 1/0 at index 0
-            1.0 / l.sqrt()
-        })
-        .collect();
-    let scale_lut = std::sync::Arc::new(scale_lut);
+    let scale_lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|l| 1.0 / l.sqrt()));
 
     // 2x2 box: two dim (0.0) pixels, two bright (0.8) pixels. R=G=B per pixel.
     let data = vec![

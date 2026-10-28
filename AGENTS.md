@@ -588,6 +588,14 @@ Optional shadow saturation boost, then the core asinh/MTF stretch. **Asinh** sol
 solves algebraically for `m`. Steps: compute statistics → black point `= Median - c×Sigma` → solve the tone
 parameter → subtract black point → apply the stretch.
 
+**The gap's sigma stays the frame's MAD**, though under structure it lies flat (M33's read 1.39x the sky's noise at
+34 subs, the 106-sub M27 crop's 1.85x) and the depth gain then spends depth on nothing. Counting the gap in the sky's
+noise was tried and dropped: calibrated on six sky-dominated sessions (0.88-1.05x the MAD), it put the grain back on
+the curve (M33 0.59x a sub's, the deep dumbbell 0.60x against 0.46x), but the structure's MAD was also what kept
+bright targets in range — M27's core burned (197 -> 251 levels) and M31 at 250 mm, whose MAD is 4.5x its faint
+disk's noise, rendered core/mid/outer at 241/241/241 against 239/181/117. It needs a re-tuned depth curve and a way
+to tell a frame with no sky from one with a sky ring.
+
 ### Phase 13: Final Output Mapping & Contrast
 
 Everything below runs in the streaming encoders at display resolution, not in the pipeline proper.
@@ -614,7 +622,12 @@ matrix, since an 8x8 Bayer tile once quantised a smooth sky into a visible latti
 since JPEG takes most of it back. `black_point_sigma` is scale-invariant; `depth_grain_gain` scales it by `N^s`, so
 **any** renderer of a stack must pass `stack_depth` through `AnalysisContext`, never `stacked_count`. The fused
 scale LUT's cache key is quantised *relatively*, not by an absolute step — the latter once let two tone curves 3%
-apart collide, so whichever rendered *second* silently reused the first's curve.
+apart collide, so whichever rendered *second* silently reused the first's curve. **The table is indexed by the
+luminance's float bits** (`stretch::scale_lut_position`: 512 entries an octave from 2^-24 to 1, 12289 entries,
+0.2 % apart at every level; within 0.15 of a level of the exact curve at any solve, `stretch::tests`). Spread evenly,
+its 8192 entries stepped 2 ADU of a 14-bit sensor: once the gap fell under a step the sky was interpolated from the
+curve's limit at zero and sank with depth (Cat's Eye 10.9 -> 6.2 levels by 27 subs, Ring-2 and Globular 64 too),
+its grain with it. Build tables through `scale_lut_from`; `asinh` takes a series under 0.01, as f32's `ln` loses it.
 
 **The darkening half of the black floor** (`black_floor` negative) is a spatial gain from a 3x3 local mean — the
 sky itself is measured in-kernel as the *darkest* histogram peak holding ≥20% of samples, not the median, or a

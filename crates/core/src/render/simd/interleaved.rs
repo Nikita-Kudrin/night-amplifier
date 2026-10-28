@@ -4,16 +4,16 @@
 //! the streaming encoder assembles per row in `render::display`. For the planar
 //! `Frame` equivalents see [`super::planar`].
 
-use super::{luminance_x4, scale_lut_lookup};
+use super::{luminance_x4, scale_lut_lookup, scale_lut_lookup_x4};
 use crate::frame::luminance;
 use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
 ///
 /// Fuses black point subtraction, luminance calculation, and tone mapping/contrast
-/// scaling into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a
-/// scale factor and hold at least two entries; `scale_lut[0]` must be the `L → 0` limit
-/// of the curve's scale factor, not zero, or the faintest signal crushes to pure black.
+/// scaling into a single pass. The `scale_lut` holds the curve's scale at each
+/// `stretch::scale_lut_luminance`, as `stretch::cached_scale_lut` builds it, and at least
+/// two entries.
 ///
 /// Operates on whatever slice it is given — callers drive it over `par_chunks_mut` of whole rows; see `apply_fused_stretch_frame`.
 #[inline]
@@ -61,32 +61,7 @@ pub fn apply_luminance_scale_lut_simd(
 
         let lum = luminance_x4(r_sub, g_sub, b_sub);
 
-        let lut_max = f32x4::splat((scale_lut.len() - 1) as f32);
-        let pos = (lum * lut_max).min(lut_max);
-
-        let pos_arr = pos.to_array();
-        let i0_0 = (pos_arr[0] as usize).min(scale_lut.len() - 2);
-        let i0_1 = (pos_arr[1] as usize).min(scale_lut.len() - 2);
-        let i0_2 = (pos_arr[2] as usize).min(scale_lut.len() - 2);
-        let i0_3 = (pos_arr[3] as usize).min(scale_lut.len() - 2);
-
-        let i0_vec = f32x4::new([i0_0 as f32, i0_1 as f32, i0_2 as f32, i0_3 as f32]);
-        let frac = pos - i0_vec;
-
-        let lo = f32x4::new([
-            scale_lut[i0_0],
-            scale_lut[i0_1],
-            scale_lut[i0_2],
-            scale_lut[i0_3],
-        ]);
-        let hi = f32x4::new([
-            scale_lut[i0_0 + 1],
-            scale_lut[i0_1 + 1],
-            scale_lut[i0_2 + 1],
-            scale_lut[i0_3 + 1],
-        ]);
-
-        let scale = lo + (hi - lo) * frac;
+        let scale = scale_lut_lookup_x4(scale_lut, lum);
 
         let lum_stretched = lum * scale;
         let base_add = lum_stretched * one_minus_ci;
@@ -280,6 +255,7 @@ fn apply_luminance_preserving_scalar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::stretch::scale_lut_from;
 
     #[test]
     fn test_luminance_preserving_identity() {
@@ -358,7 +334,7 @@ mod tests {
         ];
 
         let black_point = 0.1;
-        let scale_lut = vec![2.0; 8192];
+        let scale_lut = scale_lut_from(|_| 2.0);
 
         apply_luminance_scale_lut_simd(&mut data, black_point, &scale_lut, 1.0);
 
@@ -393,20 +369,19 @@ mod tests {
     /// instead of the interpolated value.
     #[test]
     fn test_luminance_scale_lut_interpolates_between_entries() {
-        const N: usize = 8192;
-        // scale_lut[i] = i, so the exact scale at luminance L is L * (N - 1).
-        let scale_lut: Vec<f32> = (0..N).map(|i| i as f32).collect();
+        use crate::render::stretch::{scale_lut_luminance, SCALE_LUT_SIZE};
+        let scale_lut: Vec<f32> = (0..SCALE_LUT_SIZE).map(|i| i as f32 / SCALE_LUT_SIZE as f32).collect();
 
-        // Land exactly halfway between entry 10 and 11.
-        let lum = 10.5 / (N - 1) as f32;
+        // Halfway between entries 5000 and 5001, in luminance (0.05 % apart there).
+        let lum = (scale_lut_luminance(5000) + scale_lut_luminance(5001)) / 2.0;
         // A grey pixel has luminance equal to its channel value (weights sum to 1.0).
         let mut data = vec![lum; 3];
         apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut, 1.0);
 
-        let interpolated = (lum * 10.5).min(1.0);
-        let truncated = (lum * 10.0).min(1.0);
+        let interpolated = lum * 5000.5 / SCALE_LUT_SIZE as f32;
+        let truncated = lum * 5000.0 / SCALE_LUT_SIZE as f32;
         assert!(
-            (data[0] - interpolated).abs() < 1e-6,
+            (data[0] / interpolated - 1.0).abs() < 1e-5,
             "expected interpolated {interpolated}, got {} (truncated would be {truncated})",
             data[0]
         );
@@ -416,17 +391,11 @@ mod tests {
     /// limit of the curve, not 0.0, or every pixel below one bin width goes pure black.
     #[test]
     fn test_luminance_scale_lut_does_not_crush_faint_signal() {
-        const N: usize = 8192;
         // A steep MTF-like scale curve: large near zero, falling to 1.0 at white.
-        let scale_lut: Vec<f32> = (0..N)
-            .map(|i| {
-                let l = (i as f32 / (N - 1) as f32).max(1e-7);
-                (0.02f32 / l).clamp(1.0, 200.0)
-            })
-            .collect();
+        let scale_lut = scale_lut_from(|l| (0.02f32 / l).clamp(1.0, 200.0));
 
-        // Half a bin width: below the first entry, where truncation used to hit index 0.
-        let lum = 0.5 / (N - 1) as f32;
+        // Under the first entry's luminance, which every darker pixel reads.
+        let lum = 0.5 * crate::render::stretch::scale_lut_luminance(0);
         let mut data = vec![lum; 3];
         apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut, 1.0);
 
@@ -443,10 +412,7 @@ mod tests {
     /// parallelisation of `apply_fused_stretch_frame`.
     #[test]
     fn test_luminance_scale_lut_is_invariant_to_row_splitting() {
-        const N: usize = 4096;
-        let scale_lut: Vec<f32> = (0..N)
-            .map(|i| 1.0 + (i as f32 / (N - 1) as f32) * 3.0)
-            .collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + l * 3.0);
 
         // 7 pixels per row exercises both the 4-pixel SIMD block and the scalar tail.
         let row_pixels = 7;
@@ -474,8 +440,7 @@ mod tests {
     /// extrapolate off the end or wrap to index 0.
     #[test]
     fn test_luminance_scale_lut_handles_out_of_range_input() {
-        const N: usize = 256;
-        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + i as f32).collect();
+        let scale_lut = scale_lut_from(|l| 1.0 + 255.0 * l);
 
         // Luminance well above 1.0 must clamp to the last entry, not extrapolate.
         let mut data = vec![5.0f32; 3];

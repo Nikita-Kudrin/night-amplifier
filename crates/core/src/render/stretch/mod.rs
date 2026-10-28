@@ -49,12 +49,50 @@ pub fn apply_tone_mapping(
     }
 }
 
-/// Entries in the fused stretch+contrast scale LUT.
+/// Mantissa bits of a luminance that pick its table entry: 512 entries an octave, 0.2 % of
+/// the value apart at every level (256 left asinh with contrast 0.16 of a level off at its
+/// bright end). The rest of the mantissa is the interpolation's fraction. A half-float
+/// table's trick: entries are evenly spaced within an octave, so linear interpolation
+/// holds, and consecutive across octaves, so the table is seamless.
+const SCALE_LUT_MANTISSA_BITS: u32 = 9;
+
+/// The darkest luminance with an entry of its own, 2^-24 (0.004 ADU of a 14-bit sensor);
+/// darker reads it. There every curve's ratio to its input is its limit at zero within
+/// 0.06 %, even MTF at the solver's clamp floor (`m ≈ 1e-4`).
+const SCALE_LUT_FLOOR_BITS: u32 = (127 - 24) << 23;
+
+/// Entries in the fused stretch+contrast scale LUT: 24 octaves of 512, and 1.0 (48 KB).
 ///
-/// 8192 entries (32 KB) with linear interpolation, per the live-view performance plan:
-/// small enough to stay cache-resident, and interpolation keeps the worst-case error
-/// below 0.15 LSB of 8-bit output even at the most aggressive midtones.
-const SCALE_LUT_SIZE: usize = 8192;
+/// Spread evenly over [0, 1], 8192 entries stepped 2 ADU of a 14-bit sensor, and once the
+/// black point's gap fell under a step the sky was interpolated from the curve's limit at
+/// zero and sank with depth (Cat's Eye 10.9 -> 6.2 levels by 27 subs); 16x finer only put
+/// it off (the 110-sub Cat's Eye still sank). Indexed by the float's top bits the step is
+/// relative, so a deeper stack never runs out of resolution.
+pub const SCALE_LUT_SIZE: usize = ((0x3F80_0000 - SCALE_LUT_FLOOR_BITS) >> (23 - SCALE_LUT_MANTISSA_BITS)) as usize + 1;
+
+/// The luminance scale-table entry `i` stands for: the curve's scale there is `lut[i]`.
+#[inline]
+pub fn scale_lut_luminance(i: usize) -> f32 {
+    f32::from_bits(SCALE_LUT_FLOOR_BITS + ((i as u32) << (23 - SCALE_LUT_MANTISSA_BITS)))
+}
+
+/// A scale table holding `scale(L)` at every entry's luminance.
+pub fn scale_lut_from(scale: impl Fn(f32) -> f32) -> Vec<f32> {
+    (0..SCALE_LUT_SIZE).map(|i| scale(scale_lut_luminance(i))).collect()
+}
+
+/// Where luminance `lum` falls in the scale table: the entry below it (at most
+/// `SCALE_LUT_SIZE - 2`) and the fraction of the way to the next. Under 2^-24 (negatives,
+/// -0.0 and denormals too) is the bottom; above 1.0 and NaN of either sign the top, as
+/// x86's default NaN carries the sign bit.
+#[inline(always)]
+pub fn scale_lut_position(lum: f32) -> (usize, f32) {
+    const SHIFT: u32 = 23 - SCALE_LUT_MANTISSA_BITS;
+    #[allow(clippy::manual_clamp)] // `clamp` keeps NaN; `min` sends it to the top entry
+    let bits = (lum.min(1.0).max(0.0).to_bits() & 0x7FFF_FFFF).max(SCALE_LUT_FLOOR_BITS) - SCALE_LUT_FLOOR_BITS;
+    let i = ((bits >> SHIFT) as usize).min(SCALE_LUT_SIZE - 2);
+    (i, (bits - ((i as u32) << SHIFT)) as f32 * (1.0 / (1u32 << SHIFT) as f32))
+}
 
 /// Identifies a cached scale LUT.
 ///
@@ -132,50 +170,6 @@ thread_local! {
     static LUT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Limit of `curve(L) / L` as `L → 0`, used to seed `scale_lut[0]`. Both tone curves pass
-/// linearly through the origin, so the ratio converges — but derived analytically, not by
-/// evaluating near zero: `asinh(x) = ln(x + sqrt(x² + 1))`, and in f32 the `1.0 +` swallows
-/// most of the significand for tiny `x`, giving a limit several percent wrong.
-///
-/// Only fixes the *value* at entry 0 — when the solver bottoms out at its clamp floor (`m
-/// ≈ 1e-4`, near-black frame) the first bin spans over half the output range, which no
-/// table this size can represent (the 65536-entry table this replaced had the same limit).
-fn scale_limit_at_zero(
-    algorithm: ToneMappingAlgorithm,
-    strength: f32,
-    contrast: Option<&crate::render::output::ContrastConfig>,
-    floor: ShadowFloor,
-) -> f32 {
-    // `asinh_stretch` returns its input unchanged for a non-positive strength, so the limit
-    // is 1.0. MTF has no meaningful limit there, but `solve_mtf_midtone` clamps the midtone
-    // into (0, 1), so for MTF this branch is only a defensive fallback.
-    let tone_limit = if strength <= 0.0 {
-        1.0
-    } else {
-        match algorithm {
-            // asinh(sL) / asinh(s) / L  →  s / asinh(s)
-            ToneMappingAlgorithm::Asinh => strength / asinh::asinh(strength),
-            // ((m-1)L) / ((2m-1)L - m) / L  →  (1-m)/m
-            ToneMappingAlgorithm::Mtf => (1.0 - strength) / strength,
-        }
-    };
-
-    // apply_s_curve(y) = y + strength·(y - mid)·4y(1 - y), clamped to [0, 1],
-    // so s_curve(y) / y → 1 - 4·strength·mid. The clamp makes a negative slope mean the
-    // curve genuinely floors at zero there, so saturating at 0 is faithful.
-    let contrast_slope = match contrast {
-        Some(config) if !config.is_disabled() => {
-            (1.0 - 4.0 * config.strength * config.midpoint).max(0.0)
-        }
-        _ => 1.0,
-    };
-
-    // The floor's own limit, which for the clipping form is genuinely zero —
-    // the one case where a zero at entry 0 is faithful rather than a bug, since
-    // "everything under the floor is black" is exactly what was asked for.
-    tone_limit * contrast_slope * floor.slope_at_zero()
-}
-
 fn build_scale_lut(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
@@ -202,15 +196,7 @@ fn build_scale_lut(
         floor.apply(contrasted)
     };
 
-    let mut lut = vec![0.0f32; SCALE_LUT_SIZE];
-    // Entry 0 is the limit, not zero: a hard 0 here forces every pixel below one bin
-    // width to pure black, discarding up to ~28 LSB of the faintest signal.
-    lut[0] = scale_limit_at_zero(algorithm, strength, contrast, floor);
-    for (i, entry) in lut.iter_mut().enumerate().skip(1) {
-        let l_in = i as f32 / (SCALE_LUT_SIZE - 1) as f32;
-        *entry = curve(l_in) / l_in;
-    }
-    lut
+    scale_lut_from(|l| curve(l) / l)
 }
 
 pub fn cached_scale_lut(
@@ -412,6 +398,145 @@ mod tests {
             max_delta <= 1,
             "asinh fused path drifts by {max_delta} LSB from the exact per-pixel stretch"
         );
+    }
+
+    /// Limit of `curve(L) / L` as `L → 0`, derived analytically: what entry 0, read at
+    /// 2^-24, must hold. Both tone curves pass linearly through the origin.
+    fn scale_limit_at_zero(
+        algorithm: ToneMappingAlgorithm,
+        strength: f32,
+        contrast: Option<&crate::render::output::ContrastConfig>,
+        floor: ShadowFloor,
+    ) -> f32 {
+        // `asinh_stretch` returns its input unchanged for a non-positive strength, so the limit
+        // is 1.0. MTF has no meaningful limit there, but `solve_mtf_midtone` clamps the midtone
+        // into (0, 1), so for MTF this branch is only a defensive fallback.
+        let tone_limit = if strength <= 0.0 {
+            1.0
+        } else {
+            match algorithm {
+                // asinh(sL) / asinh(s) / L  →  s / asinh(s)
+                ToneMappingAlgorithm::Asinh => strength / asinh::asinh(strength),
+                // ((m-1)L) / ((2m-1)L - m) / L  →  (1-m)/m
+                ToneMappingAlgorithm::Mtf => (1.0 - strength) / strength,
+            }
+        };
+
+        // apply_s_curve(y) = y + strength·(y - mid)·4y(1 - y), clamped to [0, 1],
+        // so s_curve(y) / y → 1 - 4·strength·mid. The clamp makes a negative slope mean the
+        // curve genuinely floors at zero there, so saturating at 0 is faithful.
+        let contrast_slope = match contrast {
+            Some(config) if !config.is_disabled() => {
+                (1.0 - 4.0 * config.strength * config.midpoint).max(0.0)
+            }
+            _ => 1.0,
+        };
+
+        // The floor's own limit, which for the clipping form is genuinely zero —
+        // the one case where a zero at entry 0 is faithful rather than a bug, since
+        // "everything under the floor is black" is exactly what was asked for.
+        tone_limit * contrast_slope * floor.slope_at_zero()
+    }
+
+    /// Entry 0 stands for 2^-24 and everything darker, so it must hold the curve's limit at
+    /// zero, the darkest sky's scale, for every curve and floor the solver can ask for: to
+    /// 0.06 % for the tone curves, 1.4 % with contrast at MTF's clamp floor (the S-curve's
+    /// ratio converges slowest), a thousandth of a level at 2^-24 either way.
+    #[test]
+    fn the_first_entry_holds_the_curve_s_limit_at_zero() {
+        let contrast = crate::render::output::ContrastConfig::default();
+        for (algorithm, strength) in [(ToneMappingAlgorithm::Mtf, 1e-4f32), (ToneMappingAlgorithm::Mtf, 0.2), (ToneMappingAlgorithm::Asinh, 1.0), (ToneMappingAlgorithm::Asinh, 1e4)] {
+            for contrast in [None, Some(&contrast)] {
+                for floor in [ShadowFloor::NONE, ShadowFloor { depth: 0.02 }] {
+                    let (entry, limit) = (build_scale_lut(algorithm, strength, contrast, floor)[0], scale_limit_at_zero(algorithm, strength, contrast, floor));
+                    let tolerance = if contrast.is_some() { 0.015 } else { 6e-4 };
+                    assert!((entry - limit).abs() <= tolerance * limit, "{algorithm:?} {strength}: entry 0 is {entry}, the limit {limit}");
+                    assert!((entry - limit).abs() * scale_lut_luminance(0) * 255.0 < 1e-3);
+                }
+            }
+        }
+    }
+
+    /// Each entry is read back exactly at its own luminance, consecutive entries stand for
+    /// rising luminances evenly spaced within an octave and doubling their step across one,
+    /// and what they render never falls as the luminance rises.
+    #[test]
+    fn the_table_is_read_exactly_at_its_entries_and_seamlessly_across_octaves() {
+        let lut = build_scale_lut(ToneMappingAlgorithm::Mtf, 0.01, None, ShadowFloor::NONE);
+        for i in 0..SCALE_LUT_SIZE {
+            let l = scale_lut_luminance(i);
+            assert_eq!(crate::render::simd::scale_lut_lookup(&lut, l), lut[i], "entry {i} at {l:e}");
+            let (at, frac) = scale_lut_position(l);
+            assert_eq!((at.min(i), frac), (i.min(SCALE_LUT_SIZE - 2), if i == SCALE_LUT_SIZE - 1 { 1.0 } else { 0.0 }));
+        }
+        assert_eq!((scale_lut_luminance(0), scale_lut_luminance(SCALE_LUT_SIZE - 1)), (2f32.powi(-24), 1.0));
+        let step = |i: usize| scale_lut_luminance(i + 1) - scale_lut_luminance(i);
+        for i in 0..SCALE_LUT_SIZE - 2 {
+            let ratio = step(i + 1) / step(i);
+            assert!(ratio == 1.0 || ratio == 2.0, "entries {i}..{}: the step changed {ratio}x", i + 2);
+            assert!(scale_lut_luminance(i + 1) * lut[i + 1] > scale_lut_luminance(i) * lut[i], "the render fell after entry {i}");
+        }
+    }
+
+    /// Zero, -0.0, denormals and anything under 2^-24 read the first entry; above 1.0,
+    /// infinity and NaN the last; nothing reads outside the table.
+    #[test]
+    fn out_of_range_luminance_lands_at_the_table_s_ends() {
+        let (bottom, top) = ((0, 0.0), (SCALE_LUT_SIZE - 2, 1.0));
+        for lum in [0.0f32, -0.0, f32::from_bits(1), f32::MIN_POSITIVE, 2f32.powi(-25), -0.5, f32::NEG_INFINITY] {
+            assert_eq!(scale_lut_position(lum), bottom, "{lum:e}");
+        }
+        for lum in [1.0f32, 1.5, 1e30, f32::INFINITY, f32::NAN, -f32::NAN] {
+            assert_eq!(scale_lut_position(lum), top, "{lum:e}");
+        }
+        let (i, frac) = scale_lut_position(f32::from_bits(0x3F7F_FFFF));
+        assert!(i == SCALE_LUT_SIZE - 2 && frac < 1.0 && frac > 0.99, "just under 1.0: {i} {frac}");
+    }
+
+    /// The curve the table stands for, in f64: what the kernel would render with no table.
+    fn exact(algorithm: ToneMappingAlgorithm, strength: f32, contrast: Option<&crate::render::output::ContrastConfig>, floor: ShadowFloor, l: f64) -> f64 {
+        let s = f64::from(strength);
+        let toned = match algorithm {
+            ToneMappingAlgorithm::Asinh => (s * l).asinh() / s.asinh(),
+            ToneMappingAlgorithm::Mtf if l >= 1.0 => 1.0,
+            ToneMappingAlgorithm::Mtf => ((s - 1.0) * l) / ((2.0 * s - 1.0) * l - s),
+        };
+        let contrasted = contrast.map_or(toned, |c| {
+            let (x, st, mid) = (toned.clamp(0.0, 1.0), f64::from(c.strength), f64::from(c.midpoint));
+            (x + st * (x - mid) * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0)
+        });
+        let depth = f64::from(floor.depth);
+        if floor.is_none() { contrasted } else { ((contrasted - depth) / (1.0 - depth)).max(0.0) }
+    }
+
+    /// The table renders every luminance a frame can hold within 0.15 of an 8-bit level of
+    /// the curve it stands for, from 1e-9 to 1, at every tone curve the solver can return
+    /// (MTF down to its 1e-4 clamp, asinh to its 10000 cap), contrast on and off, floors
+    /// on and off. An evenly spread table fails it under its first step (2 ADU of a 14-bit
+    /// sensor): there the sky is interpolated from the curve's limit at zero, and on Cat's
+    /// Eye and M13 it sank with depth as the black point closed in on it.
+    #[test]
+    fn the_scale_table_renders_every_luminance_within_a_fraction_of_a_level() {
+        let contrast = crate::render::output::ContrastConfig::default();
+        let curves = [(ToneMappingAlgorithm::Mtf, [1e-4f32, 1e-3, 1e-2, 0.05, 0.25]), (ToneMappingAlgorithm::Asinh, [1.0, 10.0, 100.0, 1000.0, 10000.0])];
+        let configs = curves
+            .into_iter()
+            .flat_map(|(algorithm, strengths)| strengths.map(|s| (algorithm, s)))
+            .flat_map(|(algorithm, s)| [None, Some(&contrast)].map(|c| (algorithm, s, c)))
+            .flat_map(|(algorithm, s, c)| [ShadowFloor::NONE, ShadowFloor { depth: 0.02 }, ShadowFloor { depth: 0.06 }].map(|f| (algorithm, s, c, f)));
+        let mut worst = (0.0f64, String::new());
+        for (algorithm, strength, contrast, floor) in configs {
+            let lut = build_scale_lut(algorithm, strength, contrast, floor);
+            for k in 0..=9000 {
+                let lum = 10f64.powf(-9.0 + k as f64 / 1000.0) as f32;
+                let table = (lum * crate::render::simd::scale_lut_lookup(&lut, lum)).clamp(0.0, 1.0);
+                let error = (f64::from(table) - exact(algorithm, strength, contrast, floor, f64::from(lum))).abs() * 255.0;
+                if error > worst.0 {
+                    worst = (error, format!("{algorithm:?} {strength} contrast {} floor {} at L = {lum:e}", contrast.is_some(), floor.depth));
+                }
+            }
+        }
+        assert!(worst.0 <= 0.15, "the table is {:.3} levels off the curve: {}", worst.0, worst.1);
     }
 
     /// The faintest signal must survive the LUT. Before the fix, `scale_lut[0] = 0.0` sent
