@@ -3,6 +3,7 @@ import {setupMocks, mountLiveView} from './setup'
 import type {Mocks} from './setup'
 import {camera, clientDirection} from '../../../test/fixtures'
 import type {PushToTarget} from '../../../composables/api.events'
+import {NOT_SOLVING} from '../../../composables/events/pushToEvents'
 
 describe('LiveView - Guide Arrow Integration', () => {
     let mocks: Mocks
@@ -22,7 +23,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             expect(wrapper.findComponent({name: 'GuideArrow'}).exists()).toBe(false)
         })
 
-        it('does not show guide arrow when target is set but no direction', () => {
+        it('does not show guide arrow when target is set but no direction and nothing is solving', () => {
             const wrapper = mountLiveView({
                 pushDirection: null,
                 currentTarget: {
@@ -67,6 +68,32 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             expect(wrapper.findComponent({name: 'GuideArrow'}).exists()).toBe(true)
+        })
+    })
+
+    describe('while Push-To is solving', () => {
+        const TARGET: PushToTarget = {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}
+        const STAGE = {label: 'blind', attempt: 2, total: 3}
+        const SOLVING = {...NOT_SOLVING, inProgress: true, targetName: 'M31', stage: STAGE}
+
+        it('shows the compass alone while a new target\'s first solve runs', () => {
+            const wrapper = mountLiveView({currentTarget: TARGET, eventStream: {plateSolving: SOLVING}})
+
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('direction')).toBeNull()
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+        })
+
+        it('hands the arrow the solve and its step', () => {
+            const wrapper = mountLiveView({
+                currentTarget: TARGET,
+                pushDirection: clientDirection({angleDeg: 45, distanceDeg: 10, directionHint: 'NE'}),
+                eventStream: {plateSolving: SOLVING},
+            })
+
+            const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
+            expect(guideArrow.props('solving')).toBe(true)
+            expect(guideArrow.props('solveStage')).toEqual(STAGE)
+            expect(wrapper.find('.distance').exists()).toBe(false)
         })
     })
 

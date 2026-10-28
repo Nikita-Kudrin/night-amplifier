@@ -17,9 +17,10 @@ import {
 } from '../composables/appContext'
 import {fetchEyepieceSnapshot} from '../composables/api'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useHeldFlag} from '../composables/useHeldFlag'
 import {saveBlob} from '../utils/saveBlob'
 import {offsetBounds} from '../utils/viewGeometry'
-import {eyepieceStreamEndpoint, PAGES} from '../constants'
+import {eyepieceStreamEndpoint, PAGES, SOLVING_HOLD_MS} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
 import type {ScreenRect} from '../composables/useCometRoi'
@@ -41,7 +42,10 @@ const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
-const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+const plateSolving = computed(() => eventStream?.plateSolving.value ?? null)
+const solving = useHeldFlag(() => plateSolving.value?.inProgress ?? false, SOLVING_HOLD_MS)
+// While a target's first solve runs there is no direction yet, only the solving compass.
+const showGuideArrow = computed(() => currentTarget.value !== null && (pushDirection.value !== null || solving.value))
 
 const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'guide')
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
@@ -294,13 +298,15 @@ onUnmounted(() => {
               :class="['live-canvas', {circular: isCircularView}]"
           ></canvas>
           <GuideArrow
-              v-if="showGuideArrow && pushDirection"
+              v-if="showGuideArrow"
               :direction="pushDirection"
               :frame="dimensions"
               :bounds="eyeBounds[eye] ?? NO_BOUNDS"
               :fov-deg="displayedFovDeg"
               :other-camera="arrowCamera"
               :is-circular="isCircularView"
+              :solving="solving"
+              :solve-stage="plateSolving?.stage ?? null"
           />
         </div>
       </div>

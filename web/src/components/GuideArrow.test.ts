@@ -107,7 +107,7 @@ function expectSvgWithinImage(wrapper: VueWrapper, {imageLeft = 0, imageTop = 0,
 describe('GuideArrow', () => {
     // The camelCase object `pushDirectionFrom` builds, not the wire's snake_case one.
     it('takes the direction as the event stream holds it', () => {
-        expectTypeOf<ArrowProps['direction']>().toEqualTypeOf<ReturnType<typeof pushDirectionFrom>>()
+        expectTypeOf<ArrowProps['direction']>().toEqualTypeOf<ReturnType<typeof pushDirectionFrom> | null>()
         expectTypeOf<PushDirection>().not.toExtend<ArrowProps['direction']>()
     })
 
@@ -152,6 +152,80 @@ describe('GuideArrow', () => {
 
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
             expect(wrapper.find('.other-camera').exists()).toBe(false)
+        })
+    })
+
+    describe('while Push-To is solving', () => {
+        const STAGE = {label: 'blind', attempt: 2, total: 3}
+
+        it('turns a compass in place of the readout, whose numbers are the last solve\'s', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, solving: true})
+
+            expect(wrapper.find('.push-to-solving').attributes('role')).toBe('status')
+            expect(wrapper.find('.needle').classes()).toContain('spinning')
+            expect(wrapper.find('.distance').exists()).toBe(false)
+            expect(wrapper.find('.hint').exists()).toBe(false)
+        })
+
+        it('keeps the chevrons pointing the last known way', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, angleDeg: 135, solving: true})
+
+            expect(wrapper.find('.arrow-wrapper').attributes('style')).toContain('rotate(135deg)')
+            expect(wrapper.findAll('.arrow-wrapper path')).toHaveLength(5)
+        })
+
+        it('puts the compass where the readout sits', () => {
+            const props = {...IMAGE_PROPS, angleDeg: 60, distanceDeg: 3, fovDeg: 1}
+            const readout = mountArrow(props).find('.distance-info')
+            const compass = mountArrow({...props, solving: true}).find('.distance-info')
+
+            expect(compass.classes()).toContain('push-to-solving')
+            expect(compass.attributes('style')).toBe(readout.attributes('style'))
+        })
+
+        it('counts the steps of a multi-strategy solve, and only of one', () => {
+            expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: STAGE}).find('.step').text()).toBe('step 2/3')
+            expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: {...STAGE, attempt: 1, total: 1}})
+                .find('.step').exists()).toBe(false)
+            expect(mountArrow({...IMAGE_PROPS, solving: true}).find('.step').exists()).toBe(false)
+        })
+
+        it('centres the compass over another camera, as it centres the readout', () => {
+            const wrapper = mountArrow({
+                ...IMAGE_PROPS, fovDeg: 1.45, solving: true, otherCamera: {name: 'Neptune-C II', connected: true},
+            })
+
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.push-to-solving').classes()).toContain('centered')
+            expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
+        })
+
+        it('leaves On Target as it is', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, distanceDeg: 0.05, isClose: true, directionHint: 'OK', solving: true})
+
+            expect(wrapper.find('.on-target').exists()).toBe(true)
+            expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+        })
+
+        // `aimAt` clears the direction, so a new target's first solve, up to minutes on the
+        // blind rung, had nothing on screen at all.
+        it('before a target\'s first solve, shows only the compass, at the centre of the view', () => {
+            const wrapper = mount(GuideArrow, {
+                props: {
+                    direction: null,
+                    frame: {width: 800, height: 600},
+                    bounds: {left: 0, top: 0, width: 800, height: 600},
+                    solving: true,
+                    solveStage: STAGE,
+                },
+            })
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+            expect(wrapper.find('.step').text()).toBe('step 2/3')
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.on-target').exists()).toBe(false)
+            expect(wrapper.find('.distance-info').exists()).toBe(false)
+            expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
         })
     })
 

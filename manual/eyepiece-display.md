@@ -57,6 +57,12 @@ the arrow still moves to the circle's edge once the target is hidden behind it. 
 the field of the camera on screen: its focal length under **Push-To → Equipment**, or a
 plate solve on that same camera. Without either, only the degrees are shown.
 
+While Push-To is plate solving, a turning compass — the header's Push-To icon — takes the
+readout's place, with the step a long search is on (*step 2/3*); the arrow keeps pointing
+the last known way. When the compass stops and the readout returns, the numbers are fresh.
+Right after you pick a target there is no arrow yet, so the compass turns alone in the
+middle of the view until the first solve lands.
+
 ## Running it as a dedicated display
 
 A tablet or a small panel left on `/eyepiece_quality` all night needs nothing from
