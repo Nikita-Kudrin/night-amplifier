@@ -5,26 +5,25 @@
 //! `Frame` equivalents see [`super::planar`].
 
 use super::{luminance_x4, scale_lut_lookup, scale_lut_lookup_x4};
+use crate::render::stretch::ScaleLut;
 use crate::frame::luminance;
 use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
 ///
 /// Fuses black point subtraction, luminance calculation, and tone mapping/contrast
-/// scaling into a single pass. The `scale_lut` holds the curve's scale at each
-/// `stretch::scale_lut_luminance`, as `stretch::cached_scale_lut` builds it, and at least
-/// two entries.
+/// scaling into a single pass, through `stretch::cached_scale_lut`'s table.
 ///
 /// Operates on whatever slice it is given — callers drive it over `par_chunks_mut` of whole rows; see `apply_fused_stretch_frame`.
 #[inline]
 pub fn apply_luminance_scale_lut_simd(
     data: &mut [f32],
     black_point: f32,
-    scale_lut: &[f32],
+    scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
     let len = data.len();
-    if len < 12 || scale_lut.len() < 2 {
+    if len < 12 {
         apply_luminance_scale_lut_scalar(data, black_point, scale_lut, color_intensity);
         return;
     }
@@ -101,13 +100,9 @@ pub fn apply_luminance_scale_lut_simd(
 pub fn apply_luminance_scale_lut_scalar(
     data: &mut [f32],
     black_point: f32,
-    scale_lut: &[f32],
+    scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
-    if scale_lut.len() < 2 {
-        return;
-    }
-
     for pixel in data.as_chunks_mut::<3>().0 {
         let r = (pixel[0] - black_point).max(0.0);
         let g = (pixel[1] - black_point).max(0.0);
@@ -370,7 +365,7 @@ mod tests {
     #[test]
     fn test_luminance_scale_lut_interpolates_between_entries() {
         use crate::render::stretch::{scale_lut_luminance, SCALE_LUT_SIZE};
-        let scale_lut: Vec<f32> = (0..SCALE_LUT_SIZE).map(|i| i as f32 / SCALE_LUT_SIZE as f32).collect();
+        let scale_lut = ScaleLut::from_entries(|i| i as f32 / SCALE_LUT_SIZE as f32);
 
         // Halfway between entries 5000 and 5001, in luminance (0.05 % apart there).
         let lum = (scale_lut_luminance(5000) + scale_lut_luminance(5001)) / 2.0;

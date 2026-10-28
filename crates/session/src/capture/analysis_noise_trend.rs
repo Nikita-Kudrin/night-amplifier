@@ -13,6 +13,10 @@ const MAX_NOISE_EXPONENT: f32 = 0.5;
 /// 18 sessions.
 const MAX_WINDOW_STEP: f32 = 1.5;
 
+/// The most all of a stack's moves may scale its noise figure, either way: a backstop, as
+/// each is measured two-sided. The 106-sub dumbbell's five moves reached 0.83.
+const MAX_WINDOW: f32 = 2.0;
+
 /// How the stack's noise falls with depth, from its last two measurements.
 ///
 /// Between refreshes a reused MAD is carried from the depth it was measured at to the
@@ -60,18 +64,16 @@ impl NoiseTrend {
         self.window
     }
 
-    /// The crop moved, and the frame cut to it read `sigma` at `depth` through the estimates
-    /// the last window was measured with: what the window alone changed. That is served where
-    /// the trend had it, and the ratio kept: the frame MAD reads the target's structure as well
-    /// as noise, so a crop cutting sky rose +14 % in one sub (the 106-sub dumbbell at 41, 3.55
-    /// -> 4.05 ADU) and gave back 3 levels of the target's contrast. Then a rebase: the refit
-    /// that frame is served is the stack's own change, not the window's.
-    pub(super) fn move_window(&mut self, depth: u32, sigma: f32) {
-        if let Some((_, carried)) = self.latest.filter(|_| sigma.is_finite() && sigma > 0.0) {
-            let step = carried * self.scale_to(depth) / (sigma * self.window);
-            if (1.0 / MAX_WINDOW_STEP..=MAX_WINDOW_STEP).contains(&step) {
-                self.window *= step;
-            }
+    /// The crop moved, and the stack read `left` on the crop it left and `entered` on the one
+    /// it moved to, through the same estimates: what the window alone changed. The figure is
+    /// kept where it was, and the ratio with it: the frame MAD reads the target's structure as
+    /// well as noise, so a crop cutting sky rose +14 % in one sub (the 106-sub dumbbell at 41,
+    /// 3.55 -> 4.05 ADU) and gave back 3 levels of the target's contrast. Then a rebase: the
+    /// refit that frame is served is the stack's own change, not the window's.
+    pub(super) fn move_window(&mut self, left: f32, entered: f32) {
+        let step = left / entered;
+        if (1.0 / MAX_WINDOW_STEP..=MAX_WINDOW_STEP).contains(&step) {
+            self.window = (self.window * step).clamp(1.0 / MAX_WINDOW, MAX_WINDOW);
         }
         self.rebase();
     }
@@ -126,44 +128,58 @@ mod tests {
         assert_eq!(t.observe(40, 0.0029), 1.0);
     }
 
-    /// The deep dumbbell at 41: the window moves and the frame reads 14 % more noise through
-    /// the same estimates. The figure is served where the trend had it, and the measurements
-    /// after keep that ratio, a refit's own step included but not bridged.
+    /// The deep dumbbell at 41: the window moves and the stack reads 14 % more noise on the
+    /// crop it entered than on the one it left. The figure keeps the ratio, and the
+    /// measurements after keep it too, a refit's own step included but not bridged.
     #[test]
-    fn a_moved_window_keeps_the_noise_figure_where_the_trend_had_it() {
+    fn a_moved_window_keeps_the_noise_figure_where_it_was() {
         let mut t = falling();
-        let predicted = 0.004 * (16.0f32 / 25.0).powf(0.3) * (25.0f32 / 30.0).powf(0.3);
-        t.move_window(30, predicted * 1.14);
+        t.move_window(0.0036, 0.0036 * 1.14);
         assert!((t.window() - 1.0 / 1.14).abs() < 1e-5, "window {}", t.window());
 
-        let refit = predicted * 1.14 * 0.9;
+        let refit = 0.0036 * 1.14 * 0.9;
         assert_eq!(t.observe(30, refit), t.window(), "the refit is served through the window");
         assert!((t.exponent - 0.3).abs() < 1e-4, "the refit's step bent the trend: {}", t.exponent);
         assert!((t.scale_to(36) - (30.0f32 / 36.0).powf(0.3)).abs() < 1e-6);
 
         let window = t.window();
-        t.move_window(40, refit * (30.0f32 / 40.0).powf(0.3) * 0.94);
+        t.move_window(0.0031, 0.0031 * 0.94);
         assert!((t.window() - window / 0.94).abs() < 1e-5, "windows compound: {} after {window}", t.window());
     }
 
-    /// A move with nothing measured to carry (a stack's first), or one the probe misread by
-    /// more than any window does, keeps the window it had.
+    /// A stack's first move needs nothing measured before it: both sides are read now.
     #[test]
-    fn a_move_with_nothing_measured_or_misread_keeps_the_window() {
+    fn a_first_move_needs_no_measurement_before_it() {
         let mut t = NoiseTrend::default();
-        t.move_window(20, 0.004);
-        assert_eq!(t.observe(20, 0.004), 1.0);
+        t.move_window(0.004, 0.005);
+        assert_eq!(t.observe(20, 0.005), 0.004 / 0.005);
+    }
+
+    /// A move the probe misread by more than any window does, or could not read, keeps the
+    /// window it had; and no run of moves takes the window past `MAX_WINDOW` either way.
+    #[test]
+    fn a_misread_move_keeps_the_window_and_moves_stay_bounded() {
         let mut t = falling();
-        t.move_window(30, 0.004 * 2.0);
-        assert_eq!(t.window(), 1.0);
+        for (left, entered) in [(0.004, 0.008), (0.004, 0.0), (f32::NAN, 0.004), (0.004, f32::INFINITY)] {
+            t.move_window(left, entered);
+            assert_eq!(t.window(), 1.0, "{left} / {entered}");
+        }
         assert_eq!(t.scale_to(31), 1.0, "a misread move still rebases");
+        for _ in 0..10 {
+            t.move_window(0.003, 0.004);
+        }
+        assert_eq!(t.window(), 1.0 / MAX_WINDOW);
+        for _ in 0..20 {
+            t.move_window(0.004, 0.003);
+        }
+        assert_eq!(t.window(), MAX_WINDOW);
     }
 
     /// A crop starting or ending, or a trend reset, serves what it measures again.
     #[test]
     fn a_crop_starting_or_ending_serves_the_frame_as_measured() {
         let mut t = falling();
-        t.move_window(30, 0.0042);
+        t.move_window(0.004, 0.0042);
         assert!(t.observe(30, 0.004) < 1.0);
         t.unwindow();
         assert_eq!(t.observe(31, 0.004), 1.0);

@@ -2,7 +2,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::render::display::RenderReadyFrame;
+use night_amplifier_core::stacking::CropRect;
 use crate::state::{AppState, Resolution};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
@@ -40,7 +42,6 @@ pub fn run_render_task(
     // stack, not the frame, so a frame of the same stack can be served the previous
     // frame's measurements. `analysis` decides that per frame; see `capture::analysis`.
     let mut analysis = PreviewAnalysis::new();
-    state.stack_noise.clear();
 
     // Same lifetime, and for a stronger reason: the factor decides what the tone-curve
     // solve measures, so it must not move under a viewer. See `SessionBinFactor`.
@@ -106,29 +107,7 @@ pub fn run_render_task(
         // too, so a crop can never outlive the setting. A rect the frame cannot hold is shown
         // whole rather than costing the frame.
         let requested = crop.filter(|_| settings.auto_crop);
-        let (crop, binned) = {
-            let _span = tracing::info_span!("crop_and_bin", factor = bin, cropped = requested.is_some()).entered();
-            let cut = requested.and_then(|rect| {
-                let attempt = stack_crop::crop_coverage(noise.as_ref(), &rect).and_then(|map| {
-                    Ok((map, stack_crop::cut_display_frame(&mut display_frame, Some(&rect), bin)?))
-                });
-                match attempt {
-                    Ok((map, binned)) => {
-                        noise = map;
-                        Some((rect, binned))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Auto crop failed, showing the stack whole");
-                        None
-                    }
-                }
-            });
-            match cut {
-                Some((rect, binned)) => (Some(rect), binned),
-                None => (None, stack_crop::cut_display_frame(&mut display_frame, None, bin).unwrap_or(false)),
-            }
-        };
-        analysis.note_crop(crop);
+        let (crop, binned) = cut_for_render(&mut display_frame, &mut noise, requested, bin, &mut analysis);
         analysis.note_stack(stack_generation);
         // The stack's catalog footprints, carried onto the frame as cut and binned. Only
         // a stack is registered to the frame they were solved on, and only one its size.
@@ -142,11 +121,6 @@ pub fn run_render_task(
                 })
                 .map(Arc::new),
         );
-        // The map describes the frame, so it follows every geometry change the frame makes,
-        // and only where the frame really was binned.
-        if binned {
-            noise = noise.and_then(|field| field.binned(bin).ok());
-        }
 
         // Process frame through unified render pipeline
         let rendered = {
@@ -168,7 +142,7 @@ pub fn run_render_task(
                 }
             }
         };
-        state.stack_noise.publish(stack_generation, analysis.noise_window());
+        state.stack_noise.publish(stack_generation, crop, analysis.noise_window());
 
         // Use max parallel chunks for live view, single chunk during stacking.
         // Keyed on what is being displayed, not on whether this frame joined the
@@ -315,6 +289,53 @@ impl SessionBinFactor {
         self.factor = factor;
         factor
     }
+}
+
+/// The stack as the pipeline measures it, and `analysis` told so: cut to `requested` (the
+/// auto crop) and binned by `bin` in one pass, `noise` with it. A crop moving from another
+/// first hands the analysis the stack's rows on the one it left, for the move's two-sided
+/// probe (`PreviewAnalysis::left_window`). Returns the crop applied (`None` when the stack
+/// could not be cut to it) and whether the frame was binned. Public so the integration tests
+/// replay a stack through the render task's own cut.
+pub fn cut_for_render(
+    frame: &mut Arc<Frame>,
+    noise: &mut Option<NoiseField>,
+    requested: Option<CropRect>,
+    bin: usize,
+    analysis: &mut PreviewAnalysis,
+) -> (Option<CropRect>, bool) {
+    let _span = tracing::info_span!("crop_and_bin", factor = bin, cropped = requested.is_some()).entered();
+    let left = analysis
+        .left_window(requested, bin)
+        .and_then(|(rect, stride)| stack_crop::cut_rows(frame, &rect, bin, stride).ok());
+    let cut = requested.and_then(|rect| {
+        let attempt = stack_crop::crop_coverage(noise.as_ref(), &rect)
+            .and_then(|map| Ok((map, stack_crop::cut_display_frame(frame, Some(&rect), bin)?)));
+        match attempt {
+            Ok((map, binned)) => {
+                *noise = map;
+                Some((rect, binned))
+            }
+            Err(e) => {
+                warn!(error = %e, "Auto crop failed, showing the stack whole");
+                None
+            }
+        }
+    });
+    let (crop, binned) = match cut {
+        Some((rect, binned)) => (Some(rect), binned),
+        None => (None, stack_crop::cut_display_frame(frame, None, bin).unwrap_or(false)),
+    };
+    analysis.note_crop(crop);
+    if let Some(rows) = left {
+        analysis.note_left_window(rows);
+    }
+    // The map describes the frame, so it follows every geometry change the frame makes, and
+    // only where the frame really was binned.
+    if binned {
+        *noise = noise.take().and_then(|field| field.binned(bin).ok());
+    }
+    (crop, binned)
 }
 
 /// The factor a `width x height` stack is binned by before the pipeline at Processing
@@ -490,18 +511,19 @@ mod tests {
 
         let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
         let binned_lut = binned_stretch.expect("binned stretch").scale_lut;
-        assert_eq!(full_lut.len(), binned_lut.len());
-
         let worst = full_lut
+            .entries()
             .iter()
-            .zip(binned_lut.iter())
+            .zip(binned_lut.entries())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
 
         // Measured on this fixture: gain 2.7351 -> 3.4380 at the 1 % input point
         // (+25.7 %) and 5.0621 -> 5.8775 at 10 % (+16.1 %), with the curve unchanged by
         // mid-tones. Shadows are exactly where an EAA viewer is looking.
-        let sample = |lut: &[f32], t: f32| lut[((lut.len() - 1) as f32 * t) as usize];
+        let sample = |lut: &night_amplifier_core::render::stretch::ScaleLut, t: f32| {
+            lut[night_amplifier_core::render::stretch::scale_lut_position(t).0]
+        };
         eprintln!(
             "curve at 1%/10%/50%: full {:.4}/{:.4}/{:.4}  binned {:.4}/{:.4}/{:.4}  worst {worst:.4}",
             sample(&full_lut, 0.01),

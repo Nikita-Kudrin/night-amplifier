@@ -113,7 +113,8 @@ plugin slot's type (`Plugins::implementations`), not the plugin's state. An entr
 entries stay until the next run. CI runs every module reading it on one runner (`REPLAY_MODULES` in `ci.yml`); the
 other partitions set `NA_REPLAY_CACHE=elsewhere`, which fails a test that reaches it (`off` turns it off; any other
 value moves it). A test rendering a stack's depths renders every one through `instruments::replay_held`
-(one `PreviewAnalysis` and `StackCrop` per order, as the render task holds them), never a fresh analysis per depth:
+(one `PreviewAnalysis` and `StackCrop` per order, cut by `cut_for_render` as the render task holds and cuts them,
+so its crop moves are probed), never a fresh analysis per depth:
 fresh renders gave M33 back 4 levels production never shows, and hid the deep dumbbell's 3 at an auto-crop change.
 Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
 count calls at runtime), not a hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and
@@ -541,12 +542,14 @@ the two travel on different sockets, and reframing an old frame still in flight 
 
 **A crop move is not a change in the noise** (`capture::analysis`, `NoiseTrend::move_window`). The frame MAD reads
 the target's structure too, so a move that cut sky rose it +14 % in one sub (the 106-sub dumbbell at 41) and gave
-back 3 levels of target contrast by 64. The frame cut to a moved crop is measured once through the last window's
-white balance and model (`BackgroundModel::windowed`, reaching ≤ 3.5 % past it), and the noise figure is served
-where the trend had it: the ratio is kept for the stack, which the saved PNG reads too (`StackNoiseWindow`). The
-frame still refits on schedule and that step is served, not bridged: refits of consecutive subs read 1.3-2.8 ADU on
-Fireworks and 6.1-8.7 on M31, so carrying the model to a later refit swapped one sample of that for another.
-Over 18 sessions every move now steps ≤ 4 %; refit steps (Fireworks +17 %, M33 -28 %) are as before.
+back 3 levels of target contrast by 64. Each move is measured **two-sided**: the stack's rows on the crop it left
+(`render_task::cut_for_render` hands them over) and the frame's on the one it entered, through the last window's white
+balance and model (`BackgroundModel::windowed`, ≤ 3.5 % past it; `every_nth_row`), ~400k pixels a side on rows of the
+stack's grid, so the overlap reads the same pixels (~10 ms a move). Their ratio sets the window, kept for the stack
+across settings and Processing Resolution changes, and by the saved PNG with the crop it was measured on
+(`StackNoiseWindow`). Measured against the trend instead, each move took the trend's error once its exponent froze
+(0.61 by 300 subs; the dumbbell 0.81, now 0.87). The frame still refits on schedule and that step is served, not
+bridged: refits of consecutive subs read 1.3-2.8 ADU on Fireworks and 6.1-8.7 on M31.
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
@@ -649,7 +652,8 @@ luminance's float bits** (`stretch::scale_lut_position`: 512 entries an octave f
 0.2 % apart at every level; within 0.15 of a level of the exact curve at any solve, `stretch::tests`). Spread evenly,
 its 8192 entries stepped 2 ADU of a 14-bit sensor: once the gap fell under a step the sky was interpolated from the
 curve's limit at zero and sank with depth (Cat's Eye 10.9 -> 6.2 levels by 27 subs, Ring-2 and Globular 64 too),
-its grain with it. Build tables through `scale_lut_from`; `asinh` takes a series under 0.01, as f32's `ln` loses it.
+its grain with it. A table is a `ScaleLut` (`scale_lut_from`), whose fixed length rules out one of another
+layout (a short one read silently wrong); `asinh` takes a series under 0.01, as f32's `ln` loses it.
 
 **The darkening half of the black floor** (`black_floor` negative) is a spatial gain from a 3x3 local mean — the
 sky itself is measured in-kernel as the *darkest* histogram peak holding ≥20% of samples, not the median, or a

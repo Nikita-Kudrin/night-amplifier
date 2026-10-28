@@ -76,9 +76,36 @@ pub fn scale_lut_luminance(i: usize) -> f32 {
     f32::from_bits(SCALE_LUT_FLOOR_BITS + ((i as u32) << (23 - SCALE_LUT_MANTISSA_BITS)))
 }
 
+/// The fused stretch+contrast scale table: entry `i` holds the curve's scale at
+/// [`scale_lut_luminance`]`(i)`. A type, not a slice of any length: an 8192-entry table of the
+/// evenly spread layout this replaced was read silently wrong, and its fixed length keeps the
+/// lookup's `i + 1` in bounds by construction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScaleLut(Box<[f32; SCALE_LUT_SIZE]>);
+
+impl ScaleLut {
+    /// A table holding `entry(i)` at entry `i`.
+    pub fn from_entries(entry: impl Fn(usize) -> f32) -> Self {
+        let entries: Box<[f32]> = (0..SCALE_LUT_SIZE).map(entry).collect();
+        Self(entries.try_into().expect("SCALE_LUT_SIZE entries"))
+    }
+
+    pub fn entries(&self) -> &[f32; SCALE_LUT_SIZE] {
+        &self.0
+    }
+}
+
+impl std::ops::Index<usize> for ScaleLut {
+    type Output = f32;
+
+    fn index(&self, i: usize) -> &f32 {
+        &self.0[i]
+    }
+}
+
 /// A scale table holding `scale(L)` at every entry's luminance.
-pub fn scale_lut_from(scale: impl Fn(f32) -> f32) -> Vec<f32> {
-    (0..SCALE_LUT_SIZE).map(|i| scale(scale_lut_luminance(i))).collect()
+pub fn scale_lut_from(scale: impl Fn(f32) -> f32) -> ScaleLut {
+    ScaleLut::from_entries(|i| scale(scale_lut_luminance(i)))
 }
 
 /// Where luminance `lum` falls in the scale table: the entry below it (at most
@@ -146,20 +173,15 @@ impl LutCacheKey {
     }
 }
 
-struct LutCache {
-    key: Option<LutCacheKey>,
-    lut: Arc<Vec<f32>>,
-}
+/// The last table built on this thread, and its key.
+struct LutCache(Option<(LutCacheKey, Arc<ScaleLut>)>);
 
 thread_local! {
     /// Per-thread rather than global: the live-view render task and the session-teardown
     /// stacked-PNG render run concurrently on different threads with different stretch
     /// parameters, and a single shared slot would let them evict each other every frame.
     /// Thread-local also removes the mutex from the hot path and the poisoning hazard.
-    static SCALE_LUT_CACHE: RefCell<LutCache> = RefCell::new(LutCache {
-        key: None,
-        lut: Arc::new(Vec::new()),
-    });
+    static SCALE_LUT_CACHE: RefCell<LutCache> = const { RefCell::new(LutCache(None)) };
 }
 
 #[cfg(test)]
@@ -175,7 +197,7 @@ fn build_scale_lut(
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
     floor: ShadowFloor,
-) -> Vec<f32> {
+) -> ScaleLut {
     #[cfg(test)]
     LUT_BUILDS.with(|c| c.set(c.get() + 1));
 
@@ -204,15 +226,14 @@ pub fn cached_scale_lut(
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
     floor: ShadowFloor,
-) -> Arc<Vec<f32>> {
+) -> Arc<ScaleLut> {
     let key = LutCacheKey::new(algorithm, strength, contrast, floor);
     SCALE_LUT_CACHE.with(|cell| {
-        let mut cache = cell.borrow_mut();
-        if cache.key != Some(key) {
-            cache.lut = Arc::new(build_scale_lut(algorithm, strength, contrast, floor));
-            cache.key = Some(key);
+        let cache = &mut cell.borrow_mut().0;
+        match cache {
+            Some((cached, lut)) if *cached == key => Arc::clone(lut),
+            _ => Arc::clone(&cache.insert((key, Arc::new(build_scale_lut(algorithm, strength, contrast, floor)))).1),
         }
-        Arc::clone(&cache.lut)
     })
 }
 
@@ -254,7 +275,7 @@ pub fn apply_fused_stretch_frame(
 pub fn apply_scale_lut_frame(
     frame: &mut Frame,
     black_point: f32,
-    scale_lut: &[f32],
+    scale_lut: &ScaleLut,
     color_intensity: f32,
 ) -> Result<()> {
     if frame.channels() != 3 {
