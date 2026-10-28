@@ -12,10 +12,7 @@ use std::time::Duration;
 fn bench_scale_lut(c: &mut Criterion) {
     let data = vec![0.5f32; 2712 * 1538 * 3];
 
-    let mut scale_lut = vec![0.0f32; 8192];
-    for (i, v) in scale_lut.iter_mut().enumerate() {
-        *v = 1.0 + (i as f32 / 8191.0);
-    }
+    let scale_lut = night_amplifier::render::stretch::scale_lut_from(|l| 1.0 + l);
 
     let mut group = c.benchmark_group("scale_lut");
     // Every case here is >= 100 ms, and criterion's default linear scheme wants

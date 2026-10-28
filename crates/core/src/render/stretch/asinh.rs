@@ -11,8 +11,16 @@ use rayon::prelude::*;
 /// - Linear near zero: asinh(x) ≈ x for small x
 /// - Logarithmic for large x: asinh(x) ≈ ln(2x) for large x
 /// - Preserves color ratios when applied to luminance
+///
+/// Under 0.01 the series `x - x³/6 + 3x⁵/40`, exact in f32 there: the logarithm's `1.0 +`
+/// swallows a tiny `x`'s significand (off by half at 1e-7), and the scale table reads the
+/// curve down to 2^-24.
 #[inline]
 pub fn asinh(x: f32) -> f32 {
+    if x.abs() < 1e-2 {
+        let x2 = x * x;
+        return x * (1.0 - x2 * (1.0 / 6.0 - x2 * (3.0 / 40.0)));
+    }
     (x + (x * x + 1.0).sqrt()).ln()
 }
 
