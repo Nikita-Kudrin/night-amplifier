@@ -249,7 +249,7 @@ pub fn stack_snapshots(
     depths: &[usize],
     load: &dyn Fn(&Path) -> RawSub,
 ) -> Vec<(usize, Frame)> {
-    with_stack(files, depths, load, |ctx| ctx.compute().unwrap())
+    with_stack(files, depths, load, |ctx, _| ctx.compute().unwrap())
 }
 
 /// One depth of a stack, with everything the accumulator knows about it.
@@ -262,6 +262,8 @@ pub struct AccumulatorSnapshot {
     pub measured: night_amplifier::NoiseField,
     /// `count / frame_count` per pixel: how much of the stack each pixel really holds.
     pub coverage: Frame,
+    /// `StackedFrame::stack_generation`: the stack's rebuilds so far (a probation's commit).
+    pub generation: u64,
 }
 
 /// The accumulator at each requested depth: the display copy, the field the render task
@@ -272,30 +274,41 @@ pub fn accumulator_snapshots(
     load: &dyn Fn(&Path) -> RawSub,
 ) -> Vec<AccumulatorSnapshot> {
     let mut out = Vec::new();
-    with_stack(files, depths, load, |ctx| {
+    for_each_snapshot(files, depths, load, |snapshot| out.push(snapshot));
+    out
+}
+
+/// [`accumulator_snapshots`] handed to `visit` one depth at a time and then dropped: a sweep
+/// over every depth of a 64-sub 3008² session would otherwise hold 7 GB of stacks.
+pub fn for_each_snapshot(
+    files: &[PathBuf],
+    depths: &[usize],
+    load: &dyn Fn(&Path) -> RawSub,
+    mut visit: impl FnMut(AccumulatorSnapshot),
+) {
+    with_stack(files, depths, load, |ctx, generation| {
         let (frame, noise) = ctx.compute_with_coverage().unwrap();
-        out.push(AccumulatorSnapshot {
+        visit(AccumulatorSnapshot {
             depth: ctx.frame_count(),
-            frame: frame.clone(),
+            frame,
             noise,
             measured: ctx.stacker.noise_field(),
             coverage: ctx.stacker.coverage_map(),
+            generation,
         });
-        frame
     });
-    out
 }
 
 /// Drives a `StackingContext` through the calls `stack_frame` makes (`set_reference`,
 /// `apply_settings`, `offer`), holding the concrete context so `snapshot` can read the
 /// accumulator diagnostics the `LiveStacker` trait hides. Subs come from `load` rather
 /// than the simulated camera so callers can stack any subset of a session.
-fn with_stack(
+fn with_stack<T>(
     files: &[PathBuf],
     depths: &[usize],
     load: &dyn Fn(&Path) -> RawSub,
-    mut snapshot: impl FnMut(&night_amplifier::session::capture::StackingContext) -> Frame,
-) -> Vec<(usize, Frame)> {
+    mut snapshot: impl FnMut(&night_amplifier::session::capture::StackingContext, u64) -> T,
+) -> Vec<(usize, T)> {
     use night_amplifier::session::capture::pipeline::{
         build_cfa_pipeline, correct_and_demosaic, debayer_algorithm,
     };
@@ -332,13 +345,16 @@ fn with_stack(
 
     let mut snapshots = Vec::new();
     let mut next = 0;
+    let mut generation = 0u64;
     for path in files.iter().skip(1) {
         while next < depths.len() && ctx.frame_count() >= depths[next] {
-            snapshots.push((ctx.frame_count(), snapshot(&ctx)));
+            snapshots.push((ctx.frame_count(), snapshot(&ctx, generation)));
             next += 1;
         }
         ctx.apply_settings(&stack_settings);
-        match ctx.offer(&prepare(path), &stack_settings) {
+        let offered = ctx.offer(&prepare(path), &stack_settings);
+        generation += u64::from(offered.as_ref().is_ok_and(|a| a.restacked.is_some()));
+        match offered {
             Ok(a) if !a.added => println!(
                 "  {} not stacked: {:?} ({} stars matched, residual {:.1} px)",
                 path.display(),
@@ -351,7 +367,7 @@ fn with_stack(
         }
     }
     if snapshots.last().map(|s| s.0) != Some(ctx.frame_count()) {
-        snapshots.push((ctx.frame_count(), snapshot(&ctx)));
+        snapshots.push((ctx.frame_count(), snapshot(&ctx, generation)));
     }
     snapshots
 }
@@ -382,6 +398,33 @@ pub fn render(
 /// threshold ladder without a per-variant rebuild. `noise` is what the encoder hands the
 /// filters; passing `None` is how the global-estimate path stays reachable for an A/B.
 pub fn render_with(
+    frame: Frame,
+    settings: &night_amplifier::session::state::CaptureSettings,
+    denoise: bool,
+    max: (u32, u32),
+    stack_depth: u32,
+    noise: Option<night_amplifier::NoiseField>,
+    tweak: impl FnOnce(&mut night_amplifier::render::RenderPipelineConfig),
+) -> (Vec<u8>, usize, usize) {
+    let (frame, noise) = cut_for_pipeline(frame, noise, None, settings);
+    render_cut(frame, settings, denoise, max, stack_depth, noise, tweak)
+}
+
+/// [`render`] unbinned, whatever `preview_resolution` or `PROCESSING_RESOLUTION` asks: for an instrument
+/// that must see one picture in every order. The ring test's stars, found on each order's own
+/// render, were 8 others of 25 binned first, whose surround read +1.12 levels un-denoised
+/// against +0.28 on the Native list (+0.24 at Native).
+pub fn render_unbinned(
+    frame: Frame,
+    settings: &night_amplifier::session::state::CaptureSettings,
+    max: (u32, u32),
+    stack_depth: u32,
+) -> (Vec<u8>, usize, usize) {
+    render_cut(frame, settings, false, max, stack_depth, None, |_| {})
+}
+
+/// [`render_with`] on a frame already cut as [`cut_for_pipeline`] cuts it.
+fn render_cut(
     mut frame: Frame,
     settings: &night_amplifier::session::state::CaptureSettings,
     denoise: bool,
@@ -395,6 +438,7 @@ pub fn render_with(
     let night_amplifier::session::capture::pipeline::PreviewRender {
         mut pipeline_config,
         stretch_result,
+        ..
     } = night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
@@ -421,6 +465,40 @@ pub fn render_with(
     (bytes, w as usize, h as usize)
 }
 
+/// `frame` and its coverage map as the render task hands them to the pipeline: cut to the
+/// auto crop's `rect` and binned first when `settings.preview_resolution` (Processing
+/// Resolution) asks, in one pass, the factor resolved on the uncropped size — the render
+/// task's own calls. At the default Native and no crop nothing changes, and the stream box
+/// alone shrinks the picture, in the encoder, after the stretch.
+///
+/// `PROCESSING_RESOLUTION` (`4K`, `1440p`, `1080p`) overrides a Native setting, so a whole
+/// suite can be rerun in the other order without editing its tests.
+pub fn cut_for_pipeline(
+    frame: Frame,
+    noise: Option<night_amplifier::NoiseField>,
+    rect: Option<&night_amplifier::stacking::CropRect>,
+    settings: &night_amplifier::session::state::CaptureSettings,
+) -> (Frame, Option<night_amplifier::NoiseField>) {
+    use night_amplifier::session::capture::stack_crop;
+    use night_amplifier::session::state::Resolution;
+    let resolution = match settings.preview_resolution {
+        Resolution::Native => std::env::var("PROCESSING_RESOLUTION")
+            .ok()
+            .and_then(|v| [Resolution::Uhd2160, Resolution::Qhd1440, Resolution::Hd1080].into_iter().find(|r| r.label() == v))
+            .unwrap_or(Resolution::Native),
+        chosen => chosen,
+    };
+    let bin = night_amplifier::session::capture::preview_bin(frame.width(), frame.height(), resolution);
+    let noise = match rect {
+        Some(rect) => stack_crop::crop_coverage(noise.as_ref(), rect).unwrap(),
+        None => noise,
+    };
+    let mut shared = std::sync::Arc::new(frame);
+    let binned = stack_crop::cut_display_frame(&mut shared, rect, bin).unwrap();
+    let noise = if binned { noise.and_then(|field| field.binned(bin).ok()) } else { noise };
+    (std::sync::Arc::into_inner(shared).expect("the only handle"), noise)
+}
+
 /// Render an accumulator snapshot the way the render task does: with the stack's coverage
 /// map attached whenever it has something to say, as production passes it. A guard that
 /// renders the mean alone guards a picture no observer sees.
@@ -439,6 +517,122 @@ pub fn render_snapshot(
         snapshot.noise.is_usable().then(|| snapshot.noise.clone()),
         |_| {},
     )
+}
+
+/// FNV-1a over a render's bytes: two renders compare equal by hash only if identical.
+pub fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// One depth of a [`replay_held`] session, as the render task showed it.
+pub struct HeldRender {
+    pub depth: usize,
+    /// The stack's own size, before any crop or bin.
+    pub stack: (usize, usize),
+    /// The auto crop the frame was cut to, in stack pixels.
+    pub crop: Option<night_amplifier::stacking::CropRect>,
+    /// `None` with auto stretch off.
+    pub solve: Option<night_amplifier::render::AutoStretchResult>,
+    /// The stack's MAD sigma, before the pipeline.
+    pub stack_sigma: f32,
+    /// One `(rgb8, w, h)` per `denoise` mode at the depths [`replay_held`] encodes, else empty.
+    pub renders: Vec<(Vec<u8>, usize, usize)>,
+}
+
+impl HeldRender {
+    /// Stack pixel `(x, y)` on this depth's render, `w` px wide.
+    pub fn to_render(&self, (x, y): (f64, f64), w: usize) -> (f64, f64) {
+        let (x0, y0, cut) = self.window();
+        let scale = w as f64 / cut as f64;
+        ((x - x0) * scale, (y - y0) * scale)
+    }
+
+    /// Render pixel `(x, y)`, of a render `w` px wide, in stack pixels.
+    pub fn to_stack(&self, (x, y): (f64, f64), w: usize) -> (f64, f64) {
+        let (x0, y0, cut) = self.window();
+        let scale = cut as f64 / w as f64;
+        (x0 + x * scale, y0 + y * scale)
+    }
+
+    /// Block `b` of `from`'s render (`from_w` px wide) on this depth's `w x h` render: the
+    /// same place on the sky, the same size.
+    pub fn block_from(&self, b: PixelBox, from: &HeldRender, from_w: usize, (w, h): (usize, usize)) -> PixelBox {
+        let centre = ((b.0 + b.2) as f64 / 2.0, (b.1 + b.3) as f64 / 2.0);
+        let (x, y) = self.to_render(from.to_stack(centre, from_w), w);
+        box_at((x / w as f64, y / h as f64), w, h)
+    }
+
+    fn window(&self) -> (f64, f64, usize) {
+        self.crop.map_or((0.0, 0.0, self.stack.0), |r| (r.x as f64, r.y as f64, r.width))
+    }
+}
+
+/// What [`replay_held`] hands back: each order's depths, and the deepest snapshot.
+pub struct Replayed {
+    pub orders: Vec<Vec<HeldRender>>,
+    pub deepest: AccumulatorSnapshot,
+}
+
+/// Every depth of `files` as the render task shows a stack: per order one `PreviewAnalysis`
+/// and one `StackCrop` held across depths, the stack's generation noted, every depth solved.
+/// A fresh analysis per depth ([`render_snapshot`]) has no cached model, noise trend or held
+/// gate, and production never renders so. The `encode` depths, and every depth past the last
+/// of them (so the deepest), are encoded in their order's stream box once per `denoise` mode,
+/// with the coverage map production passes; of the depths past the last, only the deepest
+/// keeps its renders.
+pub fn replay_held(
+    files: &[PathBuf],
+    load: &dyn Fn(&Path) -> RawSub,
+    orders: &[RenderOrder],
+    encode: &[usize],
+    denoise: &[bool],
+) -> Replayed {
+    use night_amplifier::session::capture::stack_crop::StackCrop;
+    use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
+    let plugins = night_amplifier::plugins::Plugins::installed();
+    let last_asked = encode.iter().copied().max().unwrap_or(0);
+    let depths: Vec<usize> = (1..=files.len()).collect();
+    let mut held: Vec<_> = orders.iter().map(|o| (o.settings(), PreviewAnalysis::new(), StackCrop::new(), Vec::<HeldRender>::new())).collect();
+    let mut deepest = None;
+    for_each_snapshot(files, &depths, load, |snapshot| {
+        let stack_sigma = night_amplifier::statistics::compute_image_stats(&snapshot.frame).unwrap().mean_sigma();
+        for (order, (settings, analysis, crop, rows)) in orders.iter().zip(&mut held) {
+            let noise = snapshot.noise.is_usable().then(|| snapshot.noise.clone());
+            let rect = crop.decide(settings.auto_crop, snapshot.depth, noise.as_ref());
+            analysis.note_crop(rect);
+            analysis.note_stack(snapshot.generation);
+            let (mut frame, noise) = cut_for_pipeline(snapshot.frame.clone(), noise, rect.as_ref(), settings);
+            let ctx = AnalysisContext { showing_stack: snapshot.depth > 1, stack_depth: snapshot.depth as u32 };
+            let night_amplifier::session::capture::pipeline::PreviewRender { pipeline_config, stretch_result, solve } =
+                night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(&mut frame, settings, &plugins, ctx, analysis)
+                    .unwrap();
+            let mut renders = Vec::new();
+            if snapshot.depth > last_asked || encode.contains(&snapshot.depth) {
+                let ready = night_amplifier::render::display::RenderReadyFrame {
+                    noise: noise.map(std::sync::Arc::new),
+                    linear_frame: std::sync::Arc::new(frame),
+                    pipeline_config,
+                    stretch_result,
+                };
+                let max = order.stream.bounding_box();
+                for &on in denoise {
+                    let mut ready = ready.clone();
+                    if !on {
+                        ready.pipeline_config.denoise = night_amplifier::render::DenoiseConfig::OFF;
+                    }
+                    let (bytes, w, h) = night_amplifier::render::display::frame_to_rgb8_downsampled(&ready, max.0, max.1).unwrap();
+                    renders.push((bytes, w as usize, h as usize));
+                }
+            }
+            if let Some(previous) = rows.last_mut().filter(|r| r.depth > last_asked) {
+                previous.renders.clear();
+            }
+            let stack = (snapshot.frame.width(), snapshot.frame.height());
+            rows.push(HeldRender { depth: snapshot.depth, stack, crop: rect, solve, stack_sigma, renders });
+        }
+        deepest = Some(snapshot);
+    });
+    Replayed { orders: held.into_iter().map(|(_, _, _, rows)| rows).collect(), deepest: deepest.expect("a stack") }
 }
 
 // ---------------------------------------------------------------------------
@@ -1370,7 +1564,7 @@ pub fn preview_parts(
     stack_depth: u32,
 ) -> (Frame, night_amplifier::render::RenderPipelineConfig, Option<night_amplifier::render::display::StretchResult>) {
     use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
-    let mut frame = stack.clone();
+    let (mut frame, _) = cut_for_pipeline(stack.clone(), None, None, settings);
     let render = night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
@@ -1388,13 +1582,22 @@ pub fn encode_preview(
     pipeline_config: &night_amplifier::render::RenderPipelineConfig,
     stretch_result: &Option<night_amplifier::render::display::StretchResult>,
 ) -> (Vec<u8>, usize, usize) {
+    encode_preview_at(frame, pipeline_config, stretch_result, stream())
+}
+
+/// [`encode_preview`] into the box `(max_w, max_h)`.
+pub fn encode_preview_at(
+    frame: Frame,
+    pipeline_config: &night_amplifier::render::RenderPipelineConfig,
+    stretch_result: &Option<night_amplifier::render::display::StretchResult>,
+    (max_w, max_h): (u32, u32),
+) -> (Vec<u8>, usize, usize) {
     let ready = night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: pipeline_config.clone(),
         stretch_result: stretch_result.clone(),
     };
-    let (max_w, max_h) = stream();
     let (bytes, w, h) =
         night_amplifier::render::display::frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
     (bytes, w as usize, h as usize)
@@ -1864,22 +2067,47 @@ pub fn measure_real_session(
             .with_test_writer()
             .try_init();
     }
-    // The accumulator at every depth, so the filtered half renders with the noise map the
-    // render task would attach. With denoising off the map has nothing to act on.
-    let snapshots = accumulator_snapshots(files, depths, load);
-    for (stream, stream_box) in STREAM_BOXES {
-        measure_snapshots_at(&format!("{label} @ {stream}"), &snapshots, denoise_modes, give_back, stream_box());
+    // Every depth through one held analysis, as the render task shows a stack; the filtered
+    // half renders with the noise map it attaches. The boxes are located on a plain render.
+    let modes: Vec<bool> = std::iter::once(false).chain(denoise_modes.iter().copied().filter(|&d| d)).collect();
+    let replayed = replay_held(files, load, &RENDER_ORDERS, depths, &modes);
+    for (order, rows) in RENDER_ORDERS.iter().zip(&replayed.orders) {
+        let shown: Vec<&HeldRender> = rows.iter().filter(|r| !r.renders.is_empty()).collect();
+        for &denoise in denoise_modes {
+            let mode = modes.iter().position(|&m| m == denoise).unwrap();
+            measure_held_at(&format!("{label} @ {}", order.label), &shown, mode, denoise, give_back);
+        }
     }
 }
 
-type StreamBox = fn() -> (u32, u32);
+/// A Processing Resolution (`preview_resolution`: binned before the pipeline) and a
+/// Streaming Resolution (shrunk in the encoder, after the stretch) a stack is rendered at.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderOrder {
+    pub label: &'static str,
+    pub processing: night_amplifier::session::state::Resolution,
+    pub stream: night_amplifier::session::state::Resolution,
+}
 
-/// The stream sizes a real session is measured at: 1440p, which the filters were tuned on,
+impl RenderOrder {
+    /// The default settings at this order's Processing Resolution.
+    pub fn settings(&self) -> night_amplifier::session::state::CaptureSettings {
+        night_amplifier::session::state::CaptureSettings { preview_resolution: self.processing, ..Default::default() }
+    }
+}
+
+/// What a real session is rendered at: a 1440p stream at the default Native processing,
+/// which the filters were tuned on; the same with 1440p processing, binned before the
+/// stretch as the render task does then;
 /// and the default Native (up to `MAX_STREAM_EDGE`), where every processed pixel is shown.
-const STREAM_BOXES: [(&str, StreamBox); 2] = [
-    ("1440p", || night_amplifier::session::state::Resolution::Qhd1440.bounding_box()),
-    ("Native", || night_amplifier::session::state::Resolution::Native.bounding_box()),
-];
+pub const RENDER_ORDERS: [RenderOrder; 3] = {
+    use night_amplifier::session::state::Resolution::{Native, Qhd1440};
+    [
+        RenderOrder { label: "1440p", processing: Native, stream: Qhd1440 },
+        RenderOrder { label: "1440p-binned", processing: Qhd1440, stream: Qhd1440 },
+        RenderOrder { label: "Native", processing: Native, stream: Native },
+    ]
+};
 
 /// How [`measure_real_session`] judges a target's contrast against a shallower stack's.
 #[derive(Clone, Copy, Debug)]
@@ -1903,50 +2131,56 @@ pub struct NamedTarget {
 impl NamedTarget {
     /// The target's [`box_at`] block in `stack` rendered at `w x h`.
     pub fn block(&self, stack: &Frame, (w, h): (usize, usize)) -> PixelBox {
-        let size = (stack.width(), stack.height());
-        assert_eq!(size, self.frame, "the target was located on another frame size; plate-solve this stack");
+        self.check((stack.width(), stack.height()));
         box_at(self.centre, w, h)
+    }
+
+    /// [`Self::block`] on `held`'s `w x h` render, through its crop.
+    pub fn block_on(&self, held: &HeldRender, (w, h): (usize, usize)) -> PixelBox {
+        self.check(held.stack);
+        let (x, y) = held.to_render((self.centre.0 * self.frame.0 as f64, self.centre.1 * self.frame.1 as f64), w);
+        box_at((x / w as f64, y / h as f64), w, h)
+    }
+
+    fn check(&self, stack: (usize, usize)) {
+        assert_eq!(stack, self.frame, "the target was located on another frame size; plate-solve this stack");
     }
 }
 
-/// [`measure_real_session`]'s assertions on its snapshots rendered into `stream_box`.
-fn measure_snapshots_at(
-    label: &str,
-    snapshots: &[AccumulatorSnapshot],
-    denoise_modes: &[bool],
-    give_back: GiveBack,
-    stream_box: (u32, u32),
-) {
-    let settings = night_amplifier::session::state::CaptureSettings::default();
-    let deepest = snapshots.last().unwrap();
-    let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, stream_box, deepest.depth as u32);
-    let (sky, mut target) = locate_boxes(&deep_rgb, w, h);
+/// [`measure_real_session`]'s assertions on one order's `shown` depths, read from each one's
+/// `mode`th render, the boxes found on the deepest's plain render and moved through each crop.
+fn measure_held_at(label: &str, shown: &[&HeldRender], mode: usize, denoise: bool, give_back: GiveBack) {
+    let deepest = shown.last().unwrap();
+    let (deep_rgb, w, h) = &deepest.renders[0];
+    let (sky, mut target) = locate_boxes(deep_rgb, *w, *h);
     if let GiveBack::Named(named) = give_back {
-        target = named.block(&deepest.frame, (w, h));
+        target = named.block_on(deepest, (*w, *h));
     }
 
-    for &denoise in denoise_modes {
+    {
         println!(
-            "\n=== {label}, denoise {} (sky {sky:?}, target {target:?}) ===",
-            if denoise { "default" } else { "off" }
+            "\n=== {label}, denoise {} (sky {sky:?}, target {target:?} at {} subs) ===",
+            if denoise { "default" } else { "off" },
+            deepest.depth
         );
-        println!("   N   sigma(ADU)  sky lvl  grain(lvl)  target(lvl)  target/grain  N^-1/4");
+        println!("   N   sigma(ADU)  sky lvl  grain(lvl)  target(lvl)  target/grain  N^-1/4  crop");
         let mut rows = Vec::new();
-        for snapshot in snapshots {
-            let (n, stack) = (&snapshot.depth, &snapshot.frame);
-            let stats = night_amplifier::statistics::compute_image_stats(stack).unwrap();
-            let (rgb8, w, _) = render_snapshot(snapshot, &settings, denoise, stream_box);
-            let m = measure_sky_and_target(&rgb8, w, sky, target);
+        for held in shown {
+            let (rgb8, rw, rh) = &held.renders[mode];
+            let at = |b| held.block_from(b, deepest, *w, (*rw, *rh));
+            let m = measure_sky_and_target(rgb8, *rw, at(sky), at(target));
             println!(
-                "{n:>4}   {:>9.2}   {:>6.1}   {:>9.2}   {:>10.1}   {:>11.2}   {:>7.2}",
-                stats.mean_sigma() * 65535.0,
+                "{:>4}   {:>9.2}   {:>6.1}   {:>9.2}   {:>10.1}   {:>11.2}   {:>7.2}  {}",
+                held.depth,
+                held.stack_sigma * 65535.0,
                 m.sky_level,
                 m.sky_grain,
                 m.target_contrast,
                 m.target_contrast / m.sky_grain.max(1e-9),
-                expected_grain_ratio(*n)
+                expected_grain_ratio(held.depth),
+                held.crop.map_or("-".to_string(), |r| format!("{}x{}", r.width, r.height))
             );
-            rows.push((*n, m));
+            rows.push((held.depth, m));
         }
 
         let (n0, first) = &rows[0];

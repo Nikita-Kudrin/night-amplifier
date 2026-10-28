@@ -268,6 +268,7 @@ fn the_saved_stack_is_cropped_like_the_live_view() {
         &night_amplifier::plugins::Plugins::installed(),
         session.depth as u32,
         coverage,
+        1.0,
     )
     .unwrap();
     assert_eq!((w as usize, h as usize), (shown.width, shown.height));

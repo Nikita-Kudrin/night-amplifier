@@ -263,7 +263,7 @@ async fn the_saved_png_of_a_cropped_stack_is_what_the_live_view_streams() {
     let saved_coverage = crate::capture::stack_crop::crop_stack(&mut saved, Some(&coverage), &crop).unwrap();
     assert!(saved_coverage.is_some(), "the kept 90 % patch should leave the crop a map");
     let (exported, ew, eh) =
-        crate::capture::storage::render_stacked_png(saved, &settings, &state.plugins, 40, saved_coverage).unwrap();
+        crate::capture::storage::render_stacked_png(saved, &settings, &state.plugins, 40, saved_coverage, state.stack_noise.of(0)).unwrap();
 
     assert_eq!((ew, eh), (w, h));
     assert_eq!((w, h), (240, 256));

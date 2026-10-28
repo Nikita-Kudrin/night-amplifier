@@ -105,7 +105,9 @@ contents too. Coordinates measured on a stack name its size (`NamedTarget::frame
 Measurement instruments (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
 A stacking test replays a fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` →
 `stack_frame`), never a re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
-production stacks at 87 %.
+production stacks at 87 %. A test rendering a stack's depths renders every one through `instruments::replay_held`
+(one `PreviewAnalysis` and `StackCrop` per order, as the render task holds them), never a fresh analysis per depth:
+fresh renders gave M33 back 4 levels production never shows, and hid the deep dumbbell's 3 at an auto-crop change.
 Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
 count calls at runtime), not a hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and
 `AppState::new_for_testing` via `test-support`.
@@ -530,6 +532,15 @@ the stretch is solved from by 13-20 %. The bin is resolved on the uncropped size
 `stack_crop_changed` names the live frame size the cut arrives at, and the live view waits for that frame:
 the two travel on different sockets, and reframing an old frame still in flight lost the zoom.
 
+**A crop move is not a change in the noise** (`capture::analysis`, `NoiseTrend::move_window`). The frame MAD reads
+the target's structure too, so a move that cut sky rose it +14 % in one sub (the 106-sub dumbbell at 41) and gave
+back 3 levels of target contrast by 64. The frame cut to a moved crop is measured once through the last window's
+white balance and model (`BackgroundModel::windowed`, reaching ≤ 3.5 % past it), and the noise figure is served
+where the trend had it: the ratio is kept for the stack, which the saved PNG reads too (`StackNoiseWindow`). The
+frame still refits on schedule and that step is served, not bridged: refits of consecutive subs read 1.3-2.8 ADU on
+Fireworks and 6.1-8.7 on M31, so carrying the model to a later refit swapped one sample of that for another.
+Over 18 sessions every move now steps ≤ 4 %; refit steps (Fireworks +17 %, M33 -28 %) are as before.
+
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
 **One node classifier for both models** (`background::classify`; monotone cubic (PCHIP) here, Pro's TPS through the
@@ -580,6 +591,10 @@ target — **the binned peak picks the region; the value is refined** by re-binn
 level comes from the **samples** the refined peak points at, whose own spread uses the samples **below** the peak
 only (their *lower quartile*) — safe *upwards* against a frame-filling target and *downwards* against a population
 darker than the sky.
+
+**Where a target fills the frame the mode is the target** (M33 at 250 mm: its disk), and the real sky at the edges
+sinks under a black point that closes in with depth (10 -> 5 output levels by 34 subs). Open: a real-sky anchor
+(8b43910, reverted 2026-10-28) lifted M33 3 levels on average but coarsened its disk and lost its outer halo.
 
 ### Phase 10-12: Saturation Boost, Tone Mapping & Autostretch Solver
 

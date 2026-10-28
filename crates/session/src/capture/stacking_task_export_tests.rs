@@ -67,6 +67,11 @@ fn file_ending(dir: &Path, suffix: &str) -> PathBuf {
 
 /// Ends a stacking session the way the stacking task does, with `auto_crop` set to `on`.
 fn save(ctx: &StackingContext, on: bool) -> (Saved, CaptureSettings) {
+    save_through(ctx, on, None)
+}
+
+/// [`save`], the render task having shown the stack through noise `window`.
+fn save_through(ctx: &StackingContext, on: bool, window: Option<f32>) -> (Saved, CaptureSettings) {
     let (state, writer) = AppState::new_for_testing();
     let state = Arc::new(state);
     let writer = std::thread::spawn(move || writer.run());
@@ -90,7 +95,10 @@ fn save(ctx: &StackingContext, on: bool) -> (Saved, CaptureSettings) {
     state.frame_captured(true, true, None);
     state.disk_writer.start_session(WritingSessionType::IndividualFrames, "-stacking").unwrap();
 
-    save_stacked_result(&state, Some(ctx as &dyn LiveStacker), &mut StackCrop::new());
+    if let Some(window) = window {
+        state.stack_noise.publish(0, window);
+    }
+    save_stacked_result(&state, Some(ctx as &dyn LiveStacker), &mut StackCrop::new(), 0);
 
     let settings = (*state.settings.snapshot()).clone();
     state.disk_writer.end_session();
@@ -136,8 +144,26 @@ fn the_saved_stack_is_whole_with_the_setting_off() {
         &night_amplifier_core::plugins::Plugins::installed(),
         ctx.depth() as u32,
         coverage,
+        1.0,
     )
     .unwrap();
     assert_eq!(saved.png.dimensions(), (w, h));
     assert!(saved.png.as_raw() == &expected, "the saved PNG is not the uncropped stack's render");
 }
+
+/// The saved PNG is the live view's picture: rendered through the noise window the render
+/// task carried the stack's figure through as its crop moved, not the final crop's own MAD.
+#[test]
+fn the_saved_png_renders_through_the_live_view_s_noise_window() {
+    let ctx = drifted_stack();
+    let (plain, settings) = save_through(&ctx, false, None);
+    let (through, _) = save_through(&ctx, false, Some(0.8));
+    assert!(plain.png.as_raw() != through.png.as_raw(), "the window did not reach the saved PNG");
+
+    let (whole, coverage) = ctx.snapshot().unwrap();
+    let plugins = night_amplifier_core::plugins::Plugins::installed();
+    let (expected, _, _) =
+        crate::capture::storage::render_stacked_png(whole, &settings, &plugins, ctx.depth() as u32, coverage, 0.8).unwrap();
+    assert!(through.png.as_raw() == &expected, "the saved PNG is not the stack's render through its window");
+}
+

@@ -317,6 +317,60 @@ fn test_nebulosity_pruning_with_inpaint() {
     );
 }
 
+/// A window on the model subtracts from a frame cut there exactly what the whole model
+/// subtracts from those pixels.
+#[test]
+fn a_windowed_model_subtracts_what_the_whole_one_did_there() {
+    let mut frame = Frame::zeros(200, 160, 3).unwrap();
+    for c in 0..3 {
+        for y in 0..160 {
+            for x in 0..200 {
+                frame.set_pixel(x, y, c, 0.1 + 0.002 * x as f32 + 0.001 * y as f32 + 0.01 * c as f32);
+            }
+        }
+    }
+    let config = BackgroundConfig::default().with_grid_size(8, 8).with_gradient_only(false);
+    let model = BackgroundExtractor::new(config).estimate(&frame).unwrap();
+    let mut whole = frame.clone();
+    model.subtract_from(&mut whole);
+
+    let (x0, y0, w, h) = (30usize, 20usize, 150, 120);
+    let windowed = model.windowed(x0 as isize, y0 as isize, w, h).unwrap();
+    let mut cut = Frame::zeros(w, h, 3).unwrap();
+    for c in 0..3 {
+        for y in 0..h {
+            for x in 0..w {
+                cut.set_pixel(x, y, c, frame.get_pixel(x0 + x, y0 + y, c));
+            }
+        }
+    }
+    windowed.subtract_from(&mut cut);
+    // The pedestal is the frame's own (its centre), so compare differences from one pixel.
+    let at = |f: &Frame, x: usize, y: usize, c: usize| f.get_pixel(x, y, c) - f.get_pixel(0, 0, c);
+    for (x, y, c) in [(0, 0, 0), (149, 119, 1), (75, 60, 2), (10, 110, 0)] {
+        let expected = at(&whole, x0 + x, y0 + y, c) - at(&whole, x0, y0, c);
+        assert!((at(&cut, x, y, c) - expected).abs() < 1e-6, "({x}, {y}, {c})");
+    }
+
+    assert!(model.windowed(60, 0, 150, 160).is_none(), "a window 10 px past a 200 px image");
+
+    // A drifting crop reaches a few pixels past the image: they take the edge's background.
+    let past = model.windowed(-6, 0, 150, 160).unwrap();
+    let mut shifted = Frame::zeros(150, 160, 3).unwrap();
+    for c in 0..3 {
+        for y in 0..160 {
+            for x in 0..150 {
+                shifted.set_pixel(x, y, c, frame.get_pixel(x.saturating_sub(6), y, c));
+            }
+        }
+    }
+    past.subtract_from(&mut shifted);
+    for (x, y) in [(0, 40), (5, 80), (6, 120)] {
+        let expected = whole.get_pixel(0, y, 0) - whole.get_pixel(0, 0, 0);
+        assert!((shifted.get_pixel(x, y, 0) - shifted.get_pixel(6, 0, 0) - expected).abs() < 1e-6, "({x}, {y})");
+    }
+}
+
 #[test]
 fn test_flat_field_fallback() {
     // Create a frame that is mostly bright (simulating a tightly cropped nebula)

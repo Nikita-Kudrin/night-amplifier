@@ -14,6 +14,10 @@ use night_amplifier_core::error::Result;
 use night_amplifier_core::statistics::ImageStats;
 use night_amplifier_core::stacking::CropRect;
 
+#[path = "analysis_noise_trend.rs"]
+mod noise_trend;
+use noise_trend::NoiseTrend;
+
 /// Frames one analysis is reused for before it is recomputed regardless of stack growth.
 ///
 /// The sky moves on its own — twilight, cloud, a passing gradient — and a stack whose
@@ -28,13 +32,6 @@ const MAX_AGE_FRAMES: u32 = 8;
 /// they were taken, which is up to a ~12 % change in MAD — carried in between by
 /// [`NoiseTrend`], so a refresh only corrects what the trend got wrong.
 const DEPTH_GROWTH: f32 = 1.25;
-
-/// Steepest fall of the stack's noise with depth a trend may extrapolate.
-///
-/// `1/sqrt(N)` is pure averaging of independent subs, and nothing a stack does falls
-/// faster; real stacks fall slower (the 106-sub IMX533 set: `N^-0.41` to 32 subs, then
-/// `N^-0.19`) because sky structure under the MAD does not average away.
-const MAX_NOISE_EXPONENT: f32 = 0.5;
 
 /// What the frame being analysed is, from the pipeline's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,52 +121,11 @@ struct Cached {
     stats: Option<ImageStats>,
 }
 
-/// How the stack's noise falls with depth, from its last two measurements.
-///
-/// Between refreshes a reused MAD is carried from the depth it was measured at to the
-/// frame's, as `sigma ∝ N^-exponent`: the curve then moves every frame as the stack does,
-/// and a refresh corrects only the trend's error. The exponent is clamped to
-/// `[0, MAX_NOISE_EXPONENT]` — a measurement that rose (a cloud, a bright sub) holds
-/// rather than predicting noise that grows with depth. Over the most a trend is carried,
-/// a quarter's growth, a clamped extreme moves the MAD at most 12 %.
-#[derive(Debug, Default, Clone, Copy)]
-struct NoiseTrend {
-    /// Depth and mean sigma of the latest measurement.
-    latest: Option<(u32, f32)>,
-    exponent: f32,
-}
-
-impl NoiseTrend {
-    fn observe(&mut self, depth: u32, sigma: f32) {
-        if depth == 0 || !sigma.is_finite() || sigma <= 0.0 {
-            return;
-        }
-        if let Some((previous_depth, previous_sigma)) = self.latest {
-            if depth > previous_depth {
-                let exponent =
-                    (previous_sigma / sigma).ln() / (depth as f32 / previous_depth as f32).ln();
-                self.exponent = exponent.clamp(0.0, MAX_NOISE_EXPONENT);
-            }
-        }
-        self.latest = Some((depth, sigma));
-    }
-
-    /// Forgets the latest measurement but keeps the exponent: the next one was taken over a
-    /// different crop of the stack, and an exponent derived across the two would read the
-    /// border's removal (~15 % less MAD) as noise falling with depth.
-    fn rebase(&mut self) {
-        self.latest = None;
-    }
-
-    /// Factor carrying the latest measurement's noise to `depth`.
-    fn scale_to(&self, depth: u32) -> f32 {
-        match self.latest {
-            Some((measured_at, _)) if depth > measured_at => {
-                (measured_at as f32 / depth as f32).powf(self.exponent)
-            }
-            _ => 1.0,
-        }
-    }
+/// The estimates the last crop's window was measured with, for a frame cut to a moved crop.
+#[derive(Debug)]
+pub struct WindowProbe {
+    pub white_balance: Option<[f32; 3]>,
+    pub background: Option<BackgroundModel>,
 }
 
 /// The render thread's analysis cache.
@@ -187,10 +143,19 @@ pub struct PreviewAnalysis {
     depth: u32,
     /// Kept across refreshes of one stack, dropped with it.
     trend: NoiseTrend,
+    /// The noise window the first stack starts from ([`Self::through_noise_window`]).
+    seeded_window: Option<f32>,
     /// The stack crop of the frame being analysed — see [`Self::note_crop`].
     crop: Option<CropRect>,
     /// `crop` moved since the last frame.
     crop_changed: bool,
+    /// The crop it moved from, when it moved from one crop to another (not to or from none).
+    moved_from: Option<CropRect>,
+    /// The last window's estimates, for the frame cut to a moved crop to be measured through
+    /// once ([`Self::take_window_probe`]).
+    probe: Option<WindowProbe>,
+    /// The trend waits for [`Self::probe_window`] before the frame's refit is measured.
+    probe_pending: bool,
     /// The last [`Self::note_stack`] generation, and whether it changed since the last frame.
     generation: u64,
     rebuilt: bool,
@@ -204,15 +169,29 @@ impl PreviewAnalysis {
         Self::default()
     }
 
+    /// A fresh analysis serving its noise figure through `window`: a one-shot render of a
+    /// stack the render task carried there ([`Self::noise_window`]), so the two agree.
+    pub fn through_noise_window(window: f32) -> Self {
+        Self { seeded_window: Some(window), ..Self::default() }
+    }
+
+    /// What this stack's noise figure is served at, after the crop moves it has seen
+    /// (`NoiseTrend::move_window`); 1 for a stack whose crop never moved.
+    pub fn noise_window(&self) -> f32 {
+        self.trend.window()
+    }
+
     /// The crop the render task cut the next frame to (`StackedFrame::crop`), before
     /// [`Self::begin_frame`].
     ///
     /// A crop change is the same stack seen through a new window: its estimates describe the
-    /// old one and are measured again, but the `NoiseTrend` carries on, rebased. Treated as a
+    /// old one and are measured again, but the `NoiseTrend` carries on, and from one crop to
+    /// another keeps the noise figure where it had it (`NoiseTrend::move_window`). Treated as a
     /// new stack, every change (one per 3-4 subs under drift) dropped the trend the stacked
     /// view holds still with. A size change under an unchanged crop still resets everything.
     pub fn note_crop(&mut self, crop: Option<CropRect>) {
         self.crop_changed = self.crop != crop;
+        self.moved_from = self.crop.filter(|_| self.crop_changed && crop.is_some());
         self.crop = crop;
     }
 
@@ -265,17 +244,24 @@ impl PreviewAnalysis {
         );
 
         let crop_changed = std::mem::take(&mut self.crop_changed);
+        let moved_from = self.moved_from.take();
         let rebuilt = std::mem::take(&mut self.rebuilt);
         let protection_changed = self.cached.as_ref().is_some_and(|c| c.key.protection != key.protection);
         let same_stack = ctx.showing_stack && !rebuilt && self.continues_stack(&key, ctx, crop_changed, protection_changed);
         let remeasure = crop_changed || protection_changed;
-        if !same_stack {
-            self.trend = NoiseTrend::default();
-        } else if remeasure {
-            self.trend.rebase();
-        }
+        let probe = moved_from.filter(|_| same_stack && !protection_changed).and_then(|old| self.carry(old, &key));
         self.reuse = same_stack && !remeasure && self.is_current(ctx);
         self.depth = ctx.stack_depth;
+
+        if !same_stack {
+            self.trend = self.seeded_window.take().map_or_else(NoiseTrend::default, NoiseTrend::through);
+        } else if crop_changed && moved_from.is_none() {
+            self.trend.unwindow();
+        } else if remeasure && probe.is_none() {
+            self.trend.rebase();
+        }
+        self.probe_pending = probe.is_some();
+        self.probe = probe;
 
         if self.reuse {
             if let Some(cached) = self.cached.as_mut() {
@@ -293,6 +279,47 @@ impl PreviewAnalysis {
         }
 
         self.reuse
+    }
+
+    /// The white balance and background model the last window was measured with, through the
+    /// current crop, when it moved at the same bin: a frame measured through them differs from
+    /// the last only in what the window holds (`BackgroundModel::windowed`). Refitted there,
+    /// M33's levels moved 2 ADU and its MAD -33 %, and refits of consecutive Fireworks subs
+    /// read 1.3-2.8 ADU: the frame still refits on schedule, the probe only sets the window.
+    /// `None` for a window too far past the last one.
+    fn carry(&self, old: CropRect, key: &AnalysisKey) -> Option<WindowProbe> {
+        let cached = self.cached.as_ref()?;
+        let new = self.crop?;
+        let bin = |rect: &CropRect, width: usize| (width > 0).then(|| (rect.width + width / 2) / width).filter(|&b| b >= 1);
+        let b = bin(&new, key.dimensions.0)?;
+        if bin(&old, cached.key.dimensions.0)? != b {
+            return None;
+        }
+        let offset = |new: usize, old: usize| (new as isize - old as isize).div_euclid(b as isize);
+        let (x, y) = (offset(new.x, old.x), offset(new.y, old.y));
+        let background = match (&cached.background, key.background_subtraction) {
+            (Some(model), true) => Some(model.windowed(x, y, key.dimensions.0, key.dimensions.1)?),
+            (None, false) => None,
+            _ => return None,
+        };
+        Some(WindowProbe { white_balance: cached.white_balance, background })
+    }
+
+    /// The last window's estimates through a moved crop, once, before the frame is touched:
+    /// measure the frame through them and hand the result to [`Self::probe_window`].
+    pub fn take_window_probe(&mut self) -> Option<WindowProbe> {
+        self.probe.take()
+    }
+
+    /// The noise the frame read through [`Self::take_window_probe`]'s estimates (`None`: it
+    /// could not be measured), which sets the window the frame's refit is served through.
+    pub fn probe_window(&mut self, sigma: Option<f32>) {
+        if std::mem::take(&mut self.probe_pending) {
+            match sigma {
+                Some(sigma) => self.trend.move_window(self.depth, sigma),
+                None => self.trend.rebase(),
+            }
+        }
     }
 
     /// The stored estimates were taken from an earlier frame of this same stack.
@@ -383,10 +410,11 @@ impl PreviewAnalysis {
                 return Ok(value.with_noise_scaled(self.trend.scale_to(self.depth)));
             }
         }
-        let value = compute()?;
+        let mut value = compute()?;
+        self.probe_window(None);
         if let Some(cached) = self.cached.as_mut() {
+            value = value.with_noise_scaled(self.trend.observe(cached.depth, value.mean_sigma()));
             cached.stats = Some(value.clone());
-            self.trend.observe(cached.depth, value.mean_sigma());
         }
         Ok(value)
     }
@@ -722,6 +750,111 @@ mod tests {
             assert!((served / expected - 1.0).abs() < 1e-4, "depth {depth}: served {served}, the trend says {expected}");
         }
         assert!(!begin(&mut a, stacked(31), &with(solved(2))), "a new solve must rebuild the model");
+    }
+
+    /// A model over a `w x h` frame, sloped so that where a window sits changes what it subtracts.
+    fn model(w: usize, h: usize) -> BackgroundModel {
+        BackgroundModel::new(vec![vec![0.0, 0.1, 0.2, 0.3]; 3], 2, 2, w, h, 3, false, 0.1, 1.0)
+    }
+
+    /// `model`'s subtraction from a flat `84 x 92` frame.
+    fn subtracted_by(model: &BackgroundModel) -> Vec<f32> {
+        let mut frame = night_amplifier_core::frame::Frame::filled(84, 92, 3, 0.5).unwrap();
+        model.subtract_from(&mut frame);
+        frame.data().to_vec()
+    }
+
+    /// A crop moving cuts covered sky, not thin border: the frame MAD, which reads the
+    /// target's structure too, rose 14 % at one such move on the 106-sub dumbbell. The frame
+    /// is measured once through the last window's estimates, which sets the window: that
+    /// figure is served where the trend had it, and the frame's own refit through it.
+    #[test]
+    fn a_moved_crop_keeps_the_noise_figure_where_the_trend_had_it() {
+        const MOVED: CropRect = CropRect { x: 12, y: 4, width: 84, height: 92 };
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        let sigma_25 = 0.004 * (16.0f32 / 25.0).powf(0.3);
+        measure(&mut a, 25, sigma_25);
+        assert!(!frame_cut(&mut a, 26, (90, 100), Some(CROP)));
+        assert!(a.take_window_probe().is_none(), "a crop starting has no last window");
+        a.white_balance(|| Ok([1.1, 1.0, 0.9])).unwrap();
+        a.background(|| Ok(model(90, 100))).unwrap();
+        a.stats(|| Ok(sky_stats(0.05, sigma_25 * 0.85))).unwrap();
+        let first = measured(sigma_25 * 0.85);
+
+        assert!(!frame_cut(&mut a, 30, (84, 92), Some(MOVED)), "a moved crop reused the old window's estimates");
+        let probe = a.take_window_probe().expect("the last window's estimates");
+        assert_eq!(probe.white_balance, Some([1.1, 1.0, 0.9]));
+        let through = subtracted_by(probe.background.as_ref().unwrap());
+        assert_eq!(through, subtracted_by(&model(90, 100).windowed(4, 4, 84, 92).unwrap()), "the last model at the new window");
+        assert_ne!(through, subtracted_by(&model(90, 100).windowed(0, 0, 84, 92).unwrap()), "the window's place matters");
+        assert!(a.take_window_probe().is_none(), "one probe a move");
+        a.probe_window(Some(measured(sigma_25 * 0.85 * 1.14)));
+        let mut refits = 0;
+        a.background(|| {
+            refits += 1;
+            Ok(model(84, 92))
+        })
+        .unwrap();
+        assert_eq!(refits, 1, "the frame refits on schedule, the probe only sets the window");
+        let window = first * (26.0f32 / 30.0).powf(0.3) / measured(sigma_25 * 0.85 * 1.14);
+        let served = a.stats(|| Ok(sky_stats(0.05, sigma_25 * 0.85 * 1.14 * 0.9))).unwrap();
+        let expected = measured(sigma_25 * 0.85 * 1.14 * 0.9) * window;
+        assert!((served.mean_sigma() / expected - 1.0).abs() < 1e-4, "served {}, expected {expected}", served.mean_sigma());
+        assert_eq!(served.channels[0].median, 0.05, "the levels are the new window's");
+        assert_eq!(a.noise_window(), window);
+
+        // The refit's 10 % is its own step: not bridged, not read as the stack deepening.
+        assert!(frame_cut(&mut a, 32, (84, 92), Some(MOVED)));
+        let held = a.stats(|| panic!("a reusing frame must not measure")).unwrap().mean_sigma();
+        let along = served.mean_sigma() * (30.0f32 / 32.0).powf(0.3);
+        assert!((held / along - 1.0).abs() < 1e-4, "{held} against {along}");
+
+        // Switched off, the crop's border comes back as measured.
+        assert!(!frame_cut(&mut a, 33, (100, 100), None));
+        let whole = a.stats(|| Ok(sky_stats(0.05, sigma_25))).unwrap().mean_sigma();
+        assert_eq!(whole, measured(sigma_25));
+    }
+
+    /// A moved crop whose frame was never measured through the probe (auto stretch off, a
+    /// failed pass) is measured as any refit, as before.
+    #[test]
+    fn a_moved_crop_never_probed_is_measured_as_before() {
+        const MOVED: CropRect = CropRect { x: 12, y: 4, width: 84, height: 92 };
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        assert!(!frame_cut(&mut a, 26, (90, 100), Some(CROP)));
+        a.background(|| Ok(model(90, 100))).unwrap();
+        a.stats(|| Ok(sky_stats(0.05, 0.003))).unwrap();
+        assert!(!frame_cut(&mut a, 30, (84, 92), Some(MOVED)));
+        assert_eq!(a.stats(|| Ok(sky_stats(0.05, 0.0034))).unwrap().mean_sigma(), measured(0.0034));
+    }
+
+    /// A crop that moves far past the last one, or with the bin changed, cannot carry the
+    /// model: it is refitted, and its step is served as measured, as before.
+    #[test]
+    fn a_crop_moving_out_of_the_last_is_measured_again() {
+        const SHIFTED: CropRect = CropRect { x: 0, y: 0, width: 90, height: 100 };
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        assert!(!frame_cut(&mut a, 26, (90, 100), Some(CROP)));
+        a.background(|| Ok(model(90, 100))).unwrap();
+        a.stats(|| Ok(sky_stats(0.05, 0.003))).unwrap();
+        assert!(!frame_cut(&mut a, 27, (90, 100), Some(SHIFTED)));
+        assert!(a.take_window_probe().is_none(), "the model reached 8 px past a 90 px window");
+        assert_eq!(a.stats(|| Ok(sky_stats(0.05, 0.0034))).unwrap().mean_sigma(), measured(0.0034));
+    }
+
+    /// A one-shot render of a stack the render task carried through a moved crop serves its
+    /// noise figure at that window; a stack after it starts from its own.
+    #[test]
+    fn a_seeded_window_serves_the_first_stack_only() {
+        let mut a = PreviewAnalysis::through_noise_window(0.8);
+        measure(&mut a, 40, 0.004);
+        assert_eq!(reuse(&mut a, 41).mean_sigma(), measured(0.004) * 0.8);
+        assert_eq!(a.noise_window(), 0.8);
+        measure(&mut a, 5, 0.006);
+        assert_eq!(reuse(&mut a, 6).mean_sigma(), measured(0.006));
     }
 
     /// Only a crop excuses a size change: a resolution change under the same crop is a new
