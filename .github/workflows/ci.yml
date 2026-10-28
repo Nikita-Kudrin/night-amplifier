@@ -109,14 +109,21 @@ jobs:
       - name: Run unit tests
         run: cargo nextest run --archive-file tests.tar.zst -E 'not (binary(integration_pipeline) or binary(pro_gating_test))'
 
+  # The run's replay cache (`instruments::replay_cache`) shares a stacked session only within
+  # one runner, so every module reading it runs on one (`replays`), each session stacked once:
+  # hashed across four, each runner stacked the managed sets again. The other partitions set
+  # `NA_REPLAY_CACHE=elsewhere`, which fails a test reaching the cache: a new module that
+  # does fails CI until it is added to REPLAY_MODULES.
   rust-integration-tests:
     needs: rust-build-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      REPLAY_MODULES: 'test(/^integration::(fixture_processing|replay_cache_tests|sky_estimate_tests|stack_quality_tests|stacking_tests)::/)'
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
+        partition: [replays, 1, 2, 3]
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
@@ -130,7 +137,14 @@ jobs:
         with:
           name: tests-archive
       - name: Run integration tests
-        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1 --partition hash:${{ matrix.partition }}/4
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          if [ "$PARTITION" = replays ]; then
+            cargo nextest run --archive-file tests.tar.zst -E "binary(integration_pipeline) and ($REPLAY_MODULES)" --run-ignored all --test-threads 1
+          else
+            NA_REPLAY_CACHE=elsewhere cargo nextest run --archive-file tests.tar.zst -E "binary(integration_pipeline) and not ($REPLAY_MODULES)" --run-ignored all --test-threads 1 --partition "hash:$PARTITION/3"
+          fi
 
   rust-benchmarks:
     needs: rust-build-benches

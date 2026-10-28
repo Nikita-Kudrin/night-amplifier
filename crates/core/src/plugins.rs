@@ -20,19 +20,31 @@ use crate::render::denoise::DenoisePlugin;
 use crate::render::stretch::SaturationPlugin;
 use crate::stacking::{CometPlugin, RejectionPlugin};
 
+/// A filled slot: the plugin, and the type that implements it.
+struct Filled<P: ?Sized> {
+    plugin: Arc<P>,
+    implementation: &'static str,
+}
+
+impl<P: ?Sized> Clone for Filled<P> {
+    fn clone(&self) -> Self {
+        Self { plugin: Arc::clone(&self.plugin), implementation: self.implementation }
+    }
+}
+
 #[derive(Clone, Default)]
 struct Slots {
-    rejection: Option<Arc<dyn RejectionPlugin>>,
-    background: Option<Arc<dyn BackgroundAlgorithmPlugin>>,
-    planetary: Option<Arc<dyn PlanetaryStackerPlugin>>,
-    saturation: Option<Arc<dyn SaturationPlugin>>,
-    denoise: Option<Arc<dyn DenoisePlugin>>,
-    ai_denoise: Option<Arc<dyn AiDenoisePlugin>>,
-    comet: Option<Arc<dyn CometPlugin>>,
-    push_to_solver: Option<Arc<dyn PushToSolverPlugin>>,
-    push_to_catalog: Option<Arc<dyn PushToCatalogPlugin>>,
-    push_to_installer: Option<Arc<dyn PushToInstallerPlugin>>,
-    field_objects: Option<Arc<dyn FieldObjectsPlugin>>,
+    rejection: Option<Filled<dyn RejectionPlugin>>,
+    background: Option<Filled<dyn BackgroundAlgorithmPlugin>>,
+    planetary: Option<Filled<dyn PlanetaryStackerPlugin>>,
+    saturation: Option<Filled<dyn SaturationPlugin>>,
+    denoise: Option<Filled<dyn DenoisePlugin>>,
+    ai_denoise: Option<Filled<dyn AiDenoisePlugin>>,
+    comet: Option<Filled<dyn CometPlugin>>,
+    push_to_solver: Option<Filled<dyn PushToSolverPlugin>>,
+    push_to_catalog: Option<Filled<dyn PushToCatalogPlugin>>,
+    push_to_installer: Option<Filled<dyn PushToInstallerPlugin>>,
+    field_objects: Option<Filled<dyn FieldObjectsPlugin>>,
     /// Answer regardless of the process licence — for tests, which own their plugins.
     always_licensed: bool,
 }
@@ -55,19 +67,29 @@ pub fn install(plugins: Plugins) {
 }
 
 macro_rules! slots {
-    ($($slot:ident: $with:ident, $plugin:ty;)*) => {
+    ($($slot:ident: $with:ident, $plugin:ident;)*) => {
         impl Plugins {
             $(
-                pub fn $with(mut self, plugin: Arc<$plugin>) -> Self {
-                    Arc::make_mut(&mut self.0).$slot = Some(plugin);
+                pub fn $with<P: $plugin + 'static>(mut self, plugin: Arc<P>) -> Self {
+                    let implementation = std::any::type_name::<P>();
+                    Arc::make_mut(&mut self.0).$slot = Some(Filled::<dyn $plugin> { plugin, implementation });
                     self
                 }
 
                 /// Licence-gated: `None` without the plugin or while the licence is inactive.
-                pub fn $slot(&self) -> Option<&$plugin> {
-                    self.0.$slot.as_deref().filter(|_| self.licensed())
+                pub fn $slot(&self) -> Option<&dyn $plugin> {
+                    self.0.$slot.as_ref().map(|s| &*s.plugin).filter(|_| self.licensed())
                 }
             )*
+
+            /// Each filled slot with the type filling it, licence aside. [`Self::registered`]
+            /// names only the slots, so a test's fake and Pro's plugin read alike there.
+            pub fn implementations(&self) -> Vec<(&'static str, &'static str)> {
+                [$((stringify!($slot), self.0.$slot.as_ref().map(|s| s.implementation)),)*]
+                    .into_iter()
+                    .filter_map(|(slot, implementation)| Some((slot, implementation?)))
+                    .collect()
+            }
 
             /// Every slot of `self` that is filled, the rest from `other`.
             fn or(self, other: Plugins) -> Plugins {
@@ -82,17 +104,17 @@ macro_rules! slots {
 }
 
 slots! {
-    rejection: with_rejection, dyn RejectionPlugin;
-    background: with_background, dyn BackgroundAlgorithmPlugin;
-    planetary: with_planetary, dyn PlanetaryStackerPlugin;
-    saturation: with_saturation, dyn SaturationPlugin;
-    denoise: with_denoise, dyn DenoisePlugin;
-    ai_denoise: with_ai_denoise, dyn AiDenoisePlugin;
-    comet: with_comet, dyn CometPlugin;
-    push_to_solver: with_push_to_solver, dyn PushToSolverPlugin;
-    push_to_catalog: with_push_to_catalog, dyn PushToCatalogPlugin;
-    push_to_installer: with_push_to_installer, dyn PushToInstallerPlugin;
-    field_objects: with_field_objects, dyn FieldObjectsPlugin;
+    rejection: with_rejection, RejectionPlugin;
+    background: with_background, BackgroundAlgorithmPlugin;
+    planetary: with_planetary, PlanetaryStackerPlugin;
+    saturation: with_saturation, SaturationPlugin;
+    denoise: with_denoise, DenoisePlugin;
+    ai_denoise: with_ai_denoise, AiDenoisePlugin;
+    comet: with_comet, CometPlugin;
+    push_to_solver: with_push_to_solver, PushToSolverPlugin;
+    push_to_catalog: with_push_to_catalog, PushToCatalogPlugin;
+    push_to_installer: with_push_to_installer, PushToInstallerPlugin;
+    field_objects: with_field_objects, FieldObjectsPlugin;
 }
 
 impl Plugins {
@@ -127,7 +149,8 @@ impl Plugins {
         self
     }
 
-    fn licensed(&self) -> bool {
+    /// Whether the accessors answer: the set is licence-free, or the process is licensed.
+    pub fn licensed(&self) -> bool {
         self.0.always_licensed || crate::license::is_pro_active()
     }
 

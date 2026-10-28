@@ -25,6 +25,9 @@ use std::path::{Path, PathBuf};
 use night_amplifier::statistics::MAD_TO_SIGMA;
 use night_amplifier::Frame;
 
+#[path = "replay_cache.rs"]
+pub mod replay_cache;
+
 /// One sub as it comes off the disk, before the raw-CFA stage.
 ///
 /// The caller's loader decides how — FITS, TIFF, whatever the fixture set holds — and
@@ -131,11 +134,26 @@ pub struct Replay {
 impl Replay {
     /// A deep-sky stacking session at the shipped settings, with the installed plugins.
     pub fn open(dir: &Path) -> Self {
-        let settings = night_amplifier::session::state::CaptureSettings {
-            stacking: true,
-            ..Default::default()
+        Self::with_settings(dir, Self::shipped_settings())
+    }
+
+    fn shipped_settings() -> night_amplifier::session::state::CaptureSettings {
+        night_amplifier::session::state::CaptureSettings { stacking: true, ..Default::default() }
+    }
+
+    /// Plays every sub and keeps what a test reads of the session: no display copies, of
+    /// which the reference's (a whole sub) was half of every stored replay.
+    pub fn played(mut self) -> ReplayRecord {
+        let mut outcomes = self.run();
+        outcomes.iter_mut().for_each(|outcome| outcome.display_frame = None);
+        let (stack, coverage) = match self.depth() {
+            0 => (None, None),
+            _ => {
+                let (stack, coverage) = self.snapshot_with_coverage();
+                (Some(stack), coverage)
+            }
         };
-        Self::with_settings(dir, settings)
+        ReplayRecord { subs: self.subs(), depth: self.depth(), outcomes, stack, coverage }
     }
 
     pub fn with_settings(dir: &Path, settings: night_amplifier::session::state::CaptureSettings) -> Self {
@@ -239,17 +257,53 @@ impl Replay {
     }
 }
 
+/// A session [`Replay::open`] played to the end: [`Replay::played`] as values.
+pub struct ReplayRecord {
+    /// Subs in the session, the reference included.
+    pub subs: usize,
+    /// Frames in the final stack.
+    pub depth: usize,
+    /// Every sub's outcome in order, the reference's first, each without `display_frame`.
+    pub outcomes: Vec<night_amplifier::session::capture::pipeline::StackingOutcome>,
+    /// `None` where no sub could be the reference.
+    pub stack: Option<Frame>,
+    /// The stack's coverage map: `None` where every sub covered all of it, or no stack.
+    pub coverage: Option<night_amplifier::NoiseField>,
+}
+
+/// [`Replay::open`] played to the end once per test run: the first test replaying `dir`
+/// stores it and the others read it back ([`replay_cache`]). A test that steps the replay
+/// or feeds it frames of its own opens a [`Replay`] instead.
+pub fn replayed(dir: &Path) -> ReplayRecord {
+    let key = replay_cache::Key::new("replay")
+        .files(&files_under(dir))
+        .settings(&Replay::shipped_settings())
+        .plugins(&night_amplifier::plugins::Plugins::installed());
+    let label = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
+    replay_cache::cached(&key, &label, || Replay::open(dir).played())
+}
+
+/// Every file below `dir`, sorted: whatever the simulated camera may read.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for path in std::fs::read_dir(&dir).into_iter().flatten().filter_map(|e| e.ok().map(|e| e.path())) {
+            if path.is_dir() { pending.push(path) } else { files.push(path) }
+        }
+    }
+    files.sort();
+    files
+}
+
 /// Stacks a real session, handing back `(depth, stack)` at each requested depth.
 ///
 /// Frames go through the capture path's raw-CFA stage (hot pixels, row/column FPN) and
 /// demosaic, as the capture task runs them: a bare debayer leaves every hot pixel in, and
-/// registration drags each one into a dotted trail along the session's drift.
-pub fn stack_snapshots(
-    files: &[PathBuf],
-    depths: &[usize],
-    load: &dyn Fn(&Path) -> RawSub,
-) -> Vec<(usize, Frame)> {
-    with_stack(files, depths, load, |ctx, _| ctx.compute().unwrap())
+/// registration drags each one into a dotted trail along the session's drift. The stacks
+/// are [`accumulator_snapshots`]' frames, the same running mean `compute` reads.
+pub fn stack_snapshots(files: &[PathBuf], depths: &[usize]) -> Vec<(usize, Frame)> {
+    accumulator_snapshots(files, depths).into_iter().map(|s| (s.depth, s.frame)).collect()
 }
 
 /// One depth of a stack, with everything the accumulator knows about it.
@@ -268,14 +322,24 @@ pub struct AccumulatorSnapshot {
 
 /// The accumulator at each requested depth: the display copy, the field the render task
 /// would carry, the full measurement and the per-pixel coverage.
-pub fn accumulator_snapshots(
-    files: &[PathBuf],
-    depths: &[usize],
-    load: &dyn Fn(&Path) -> RawSub,
-) -> Vec<AccumulatorSnapshot> {
-    let mut out = Vec::new();
-    for_each_snapshot(files, depths, load, |snapshot| out.push(snapshot));
-    out
+///
+/// Stacked once per test run for each `files` and `depths` ([`replay_cache`]), which is
+/// why the subs are always [`load_sub`]'s: a loader cannot be part of a key.
+pub fn accumulator_snapshots(files: &[PathBuf], depths: &[usize]) -> Vec<AccumulatorSnapshot> {
+    let key = replay_cache::Key::new("stack")
+        .files(files)
+        .with("depths", format!("{depths:?}"))
+        .settings(&night_amplifier::session::state::CaptureSettings::default())
+        .plugins(&night_amplifier::plugins::Plugins::installed());
+    let label = files
+        .first()
+        .and_then(|f| f.parent()?.file_name())
+        .map_or_else(|| "stack".to_string(), |n| n.to_string_lossy().into_owned());
+    replay_cache::cached(&key, &label, || {
+        let mut out = Vec::new();
+        for_each_snapshot(files, depths, &load_sub, |snapshot| out.push(snapshot));
+        out
+    })
 }
 
 /// [`accumulator_snapshots`] handed to `visit` one depth at a time and then dropped: a sweep
@@ -1655,10 +1719,10 @@ pub fn pooled_star_response(
 /// reads as signal in [`signal_and_noise`]. Render both through **one** tone curve
 /// ([`preview_parts`] of the first, [`encode_preview`] of both): curves solved per half
 /// put a gain mismatch into their difference that scales with the signal.
-pub fn half_stacks(files: &[PathBuf], load: &dyn Fn(&Path) -> RawSub) -> [(usize, Frame); 2] {
+pub fn half_stacks(files: &[PathBuf]) -> [(usize, Frame); 2] {
     let even: Vec<PathBuf> = files.iter().step_by(2).cloned().collect();
     let odd: Vec<PathBuf> = files[..1].iter().chain(files.iter().skip(1).step_by(2)).cloned().collect();
-    [even, odd].map(|half| stack_snapshots(&half, &[], load).pop().expect("a stack"))
+    [even, odd].map(|half| stack_snapshots(&half, &[]).pop().expect("a stack"))
 }
 
 /// Pixels within 5 px of a compact source: over 6 MADs of the 1-6 px [`band_pass`].
@@ -1774,7 +1838,7 @@ pub fn cached_stack(name: &str, dir: &str) -> Option<(night_amplifier::Frame, u3
     println!("  {name}: stacking {} subs...", files.len());
     // The *stacked* count, not the file count: a sub that failed registration is not in
     // the stack, and the tone curve is solved from this number.
-    let (stacked, stack) = stack_snapshots(&files, &[], &load_sub).pop()?;
+    let (stacked, stack) = stack_snapshots(&files, &[]).pop()?;
     let depth = stacked as u32;
     println!("  {name}: {depth} of {} subs registered and stacked", files.len());
     write_cached_stack(&cache, &stack, depth);

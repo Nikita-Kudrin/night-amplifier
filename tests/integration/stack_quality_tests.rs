@@ -12,7 +12,7 @@ use night_amplifier::Frame;
 use serial_test::serial;
 
 use crate::integration::common::FIXTURES_DIR;
-use crate::integration::instruments::{half_flux_radii, measurable_stars, Replay, StarSize};
+use crate::integration::instruments::{half_flux_radii, measurable_stars, replayed, Replay, ReplayRecord, StarSize};
 
 /// A deep-sky session and the subs in it (1-based) whose every star is visibly doubled
 /// or smeared into separate images: the mount moved during the exposure.
@@ -81,10 +81,19 @@ const ORACLE_SESSIONS: &[OracleSession] = &[
 const MAX_REGISTRATION_LOSS: f32 = 0.01;
 
 fn replay(name: &str) -> Replay {
+    Replay::open(&session_dir(name))
+}
+
+/// `name` played to the end, shared across the run.
+fn played(name: &str) -> ReplayRecord {
+    replayed(&session_dir(name))
+}
+
+fn session_dir(name: &str) -> std::path::PathBuf {
     crate::integration::common::ensure_fixtures_sync_named(&[name]);
     let dir = Path::new(FIXTURES_DIR).join(name);
     assert!(dir.is_dir(), "{}", crate::integration::common::missing_fixture_message(name));
-    Replay::open(&dir)
+    dir
 }
 
 /// A bump that leaves a sub unregistrable used to read as the telescope having been
@@ -96,7 +105,7 @@ fn replay(name: &str) -> Replay {
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn a_bumped_sub_does_not_read_as_the_sky_moving() {
     for session in SESSIONS {
-        let outcomes = replay(session.name).run();
+        let outcomes = played(session.name).outcomes;
         let moved: Vec<String> = outcomes
             .iter()
             .enumerate()
@@ -123,7 +132,7 @@ fn a_bumped_sub_does_not_read_as_the_sky_moving() {
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn clean_subs_reach_the_stack() {
     for session in SESSIONS {
-        let outcomes = replay(session.name).run();
+        let outcomes = played(session.name).outcomes;
         let clean: Vec<usize> =
             (1..=outcomes.len()).filter(|n| !session.bumped.contains(n)).collect();
         let refused: Vec<usize> = clean
@@ -162,9 +171,9 @@ fn the_stack_is_as_sharp_as_its_subs() {
     for &name in SHARPNESS_SESSIONS {
         // Pass one stacks, noting where each sub that ended up in the stack landed. Subs
         // are 108 MB each once demosaiced, so pass two replays them rather than keep them.
-        let mut first = replay(name);
-        let landed = landed(&first.run());
-        let stack = first.snapshot();
+        let first = played(name);
+        let landed = landed(&first.outcomes);
+        let stack = first.stack.expect("a stack");
         let at = measurable_stars(&stack);
         let stacked = half_flux_radii(&stack, &at);
 
@@ -297,9 +306,9 @@ impl MeanStack {
 /// The session's subs stacked twice by the test, on production's transforms and on the
 /// oracle's, with the stack stars both are measured at and the median pairs per fit.
 fn production_and_oracle_stacks(name: &str) -> (Frame, Frame, Vec<(f32, f32)>, usize) {
-    let mut first = replay(name);
-    let landed = landed(&first.run());
-    let stack = first.snapshot();
+    let first = played(name);
+    let landed = landed(&first.outcomes);
+    let stack = first.stack.expect("a stack");
     let at = measurable_stars(&stack);
     let anchors: Vec<(f32, f32)> = night_amplifier::detection::detect_stars_adaptive(&stack)
         .unwrap_or_default()

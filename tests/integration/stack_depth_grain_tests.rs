@@ -142,19 +142,6 @@ fn a_deeper_stack_is_rendered_calmer_and_brighter_in_step() {
     }
 }
 
-/// Stacks a real session, handing back `(depth, stack)` at each requested depth. The
-/// implementation lives in `instruments`, where the Pro repo can reach it too.
-pub(crate) fn stack_snapshots(
-    files: &[std::path::PathBuf],
-    depths: &[usize],
-) -> Vec<(usize, night_amplifier::Frame)> {
-    crate::integration::instruments::stack_snapshots(
-        files,
-        depths,
-        &crate::integration::instruments::load_sub,
-    )
-}
-
 /// The bundled fixture set, so this runs in CI.
 #[test]
 #[serial]
