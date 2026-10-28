@@ -419,28 +419,27 @@ describe('StatusBar', () => {
             expect(chip.find('.btn-dismiss').exists()).toBe(false)
         })
 
-        it('says how many files reached the disk once every one has', async () => {
-            const clearStorageSync = vi.fn()
-            const wrapper = mountWith({state: 'synced', files: 166, failed: 0, error: null}, clearStorageSync)
-
-            const chip = wrapper.find('.storage-sync.main.synced')
-            expect(chip.find('.status-chip-text').text()).toBe('Saved 166 files to disk')
-            expect(chip.classes()).toContain('tone-success')
-            await chip.trigger('click')
-            expect(clearStorageSync).toHaveBeenCalledWith('main')
-        })
-
-        // Each camera syncs when it stops: the guide's chip is its own, and dismissed alone.
-        it('shows the guide camera\'s save beside the imaging camera\'s', async () => {
-            const clearStorageSync = vi.fn()
+        it('shows nothing once every file reached the disk', () => {
             const wrapper = mountWith(
-                {state: 'synced', files: 166, failed: 0, error: null},
-                clearStorageSync,
+                {state: 'synced', files: 166, failed: 0, error: null}, vi.fn(),
                 {state: 'synced', files: 1, failed: 0, error: null},
             )
 
+            expect(wrapper.find('.storage-sync').exists()).toBe(false)
+            expect(wrapper.text()).not.toContain('Saved')
+        })
+
+        // Each camera syncs when it stops: the guide's chip is its own, and dismissed alone.
+        it('shows the guide camera\'s failure beside the imaging camera\'s', async () => {
+            const clearStorageSync = vi.fn()
+            const wrapper = mountWith(
+                {state: 'failed', files: 165, failed: 1, error: null},
+                clearStorageSync,
+                {state: 'failed', files: 0, failed: 1, error: null},
+            )
+
             const texts = wrapper.findAll('.storage-sync .status-chip-text').map((chip) => chip.text())
-            expect(texts).toEqual(['Saved 166 files to disk', 'Saved 1 guide frame to disk'])
+            expect(texts).toEqual(['1 file not saved to disk', '1 guide frame not saved to disk'])
             await wrapper.find('.storage-sync.guide').trigger('click')
             expect(clearStorageSync).toHaveBeenCalledWith('guide')
         })
