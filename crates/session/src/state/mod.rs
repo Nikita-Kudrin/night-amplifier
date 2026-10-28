@@ -32,6 +32,7 @@ mod settings;
 mod settings_store;
 mod storage_sync;
 mod types;
+mod stack_noise;
 mod stream_crop;
 mod sync;
 mod viewed_camera;
@@ -66,6 +67,7 @@ pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState, SolverCamera};
+pub use stack_noise::StackNoiseWindow;
 pub use stream_crop::StreamCropView;
 pub use viewed_camera::{ViewSelection, ViewedCamera};
 
@@ -98,6 +100,9 @@ pub struct AppState {
     pub recovery_status: CameraRecoveryStatus,
     /// The `auto_crop` cut the main stream's frames carry. See [`StreamCropView`].
     pub stream_crop: StreamCropView,
+    /// The window the render task carries the stack's noise figure through, for the saved
+    /// stack. See [`StackNoiseWindow`].
+    pub stack_noise: StackNoiseWindow,
     /// Event broadcast channel
     pub events: broadcast::Sender<ServerEvent>,
     /// Disk writer handle for saving frames
@@ -230,6 +235,7 @@ impl AppState {
             viewed_camera: ViewedCamera::new(events_tx.clone()),
             recovery_status: CameraRecoveryStatus::new(events_tx.clone()),
             stream_crop: StreamCropView::new(events_tx.clone()),
+            stack_noise: StackNoiseWindow::default(),
             push_to_announcer: Arc::new(PushToAnnouncer::new(events_tx.clone())),
             field_solve: Default::default(),
             installs: Arc::new(Installs::new(events_tx.clone())),

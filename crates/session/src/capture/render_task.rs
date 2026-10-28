@@ -40,6 +40,7 @@ pub fn run_render_task(
     // stack, not the frame, so a frame of the same stack can be served the previous
     // frame's measurements. `analysis` decides that per frame; see `capture::analysis`.
     let mut analysis = PreviewAnalysis::new();
+    state.stack_noise.clear();
 
     // Same lifetime, and for a stronger reason: the factor decides what the tone-curve
     // solve measures, so it must not move under a viewer. See `SessionBinFactor`.
@@ -167,6 +168,7 @@ pub fn run_render_task(
                 }
             }
         };
+        state.stack_noise.publish(stack_generation, analysis.noise_window());
 
         // Use max parallel chunks for live view, single chunk during stacking.
         // Keyed on what is being displayed, not on whether this frame joined the
@@ -298,10 +300,7 @@ impl SessionBinFactor {
             return self.factor;
         }
 
-        let factor = match resolution.target_box() {
-            Some(target) => preview_bin_factor(width, height, target),
-            None => 1,
-        };
+        let factor = preview_bin(width, height, resolution);
         // `info`, not `debug`: this fires once per session and on the two changes the
         // observer makes deliberately, and it re-grades the picture when it moves.
         tracing::info!(
@@ -316,6 +315,13 @@ impl SessionBinFactor {
         self.factor = factor;
         factor
     }
+}
+
+/// The factor a `width x height` stack is binned by before the pipeline at Processing
+/// Resolution `resolution`: [`preview_bin_factor`] against its box, 1 at Native. Public so
+/// the integration tests render a stack in production's order (bin, then stretch).
+pub fn preview_bin(width: usize, height: usize, resolution: Resolution) -> usize {
+    resolution.target_box().map_or(1, |target| preview_bin_factor(width, height, target))
 }
 
 /// Largest integer bin that still leaves the preview the pixels [`Resolution`] asks

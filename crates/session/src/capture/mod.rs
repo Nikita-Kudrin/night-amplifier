@@ -21,7 +21,7 @@ pub(crate) mod push_to_tasks;
 mod render_task;
 /// For the server's stream tests, which drive frames through the real render task.
 #[cfg(any(test, feature = "test-support"))]
-pub use render_task::run_render_task;
+pub use render_task::{preview_bin, run_render_task};
 pub mod solving;
 pub mod stack_crop;
 mod stacking_task;
@@ -38,7 +38,7 @@ pub mod watchdog;
 #[cfg(test)]
 pub mod watchdog_tests;
 
-pub use analysis::{AnalysisContext, PreviewAnalysis};
+pub use analysis::{AnalysisContext, PreviewAnalysis, WindowProbe};
 pub use context::{
     LiveStackError, LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover, PROBATION_SUBS,
     StackingContext,

@@ -251,7 +251,7 @@ pub fn run_stacking_task(
     }
 
     // Save stacked result before exiting
-    save_stacked_result(&state, stacker.as_deref(), &mut stack_crop);
+    save_stacked_result(&state, stacker.as_deref(), &mut stack_crop, stack_generation);
 
     // Park the accumulator in case this capture is about to be resumed after a
     // reconnect. A fresh start or a clean stop clears it; see
@@ -533,11 +533,13 @@ fn final_stack(stacker: Option<&dyn LiveStacker>, stack_crop: &mut StackCrop, au
     Some(FinalStack { frame, depth, coverage, crop })
 }
 
-/// Save the final stacked result at the end of a capture session.
+/// Save the final stacked result at the end of a capture session, through the noise window
+/// the live view showed stack `generation` through.
 fn save_stacked_result(
     state: &Arc<AppState>,
     stacker: Option<&dyn LiveStacker>,
     stack_crop: &mut StackCrop,
+    generation: u64,
 ) {
     let auto_crop = state.settings.snapshot().auto_crop;
     if let Some(stack) = final_stack(stacker, stack_crop, auto_crop) {
@@ -552,6 +554,7 @@ fn save_stacked_result(
                 stack.depth as u32,
                 stack.coverage,
                 stack.crop,
+                state.stack_noise.of(generation),
                 &info,
             );
         }

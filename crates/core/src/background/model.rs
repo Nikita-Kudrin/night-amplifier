@@ -33,6 +33,32 @@ pub struct BackgroundModel {
     nodes_y: Option<Vec<usize>>,
     /// Structure along the frame's edges, added on top of the grid ([`EdgeProfiles`]).
     edges: Option<EdgeProfiles>,
+    /// The part of the image a frame [`Self::subtract_from`] takes is cut to: all of it, or
+    /// a crop's ([`Self::windowed`]).
+    window: Window,
+}
+
+/// `(x, y)` and size of a window on the model's image, in its pixels; it may start before
+/// the image or end past it by [`MAX_WINDOW_REACH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Window {
+    x: isize,
+    y: isize,
+    width: usize,
+    height: usize,
+}
+
+/// How far past its image, as a share of the side, a window may reach: that strip takes the
+/// background at the image's edge. The node grid's inset line sits 3.5 % in from the edge, so
+/// the strip is never wider than the model's outermost interval (a drifting crop moved 8 px
+/// of 984 past the last one).
+const MAX_WINDOW_REACH: f32 = 0.035;
+
+impl Window {
+    /// Whether every pixel of the window lies on the image.
+    fn inside(&self, width: usize, height: usize) -> bool {
+        self.x >= 0 && self.y >= 0 && self.x as usize + self.width <= width && self.y as usize + self.height <= height
+    }
 }
 
 impl BackgroundModel {
@@ -62,6 +88,7 @@ impl BackgroundModel {
             nodes_x: None,
             nodes_y: None,
             edges: None,
+            window: Window { x: 0, y: 0, width: image_width, height: image_height },
         }
     }
 
@@ -96,6 +123,7 @@ impl BackgroundModel {
             nodes_x: Some(nodes_x),
             nodes_y: Some(nodes_y),
             edges: None,
+            window: Window { x: 0, y: 0, width: image_width, height: image_height },
         }
     }
 
@@ -107,6 +135,21 @@ impl BackgroundModel {
 
     pub fn edges(&self) -> Option<&EdgeProfiles> {
         self.edges.as_ref()
+    }
+
+    /// This model as a frame cut to `width x height` at `(x, y)` of its window sees it: the
+    /// same background at the same sky, so a crop that moves changes only which pixels are
+    /// measured, not how they were subtracted. Only [`Self::subtract_from`] reads the window.
+    /// `None` if it reaches past the image by more than [`MAX_WINDOW_REACH`] of a side.
+    pub fn windowed(&self, x: isize, y: isize, width: usize, height: usize) -> Option<Self> {
+        let window = Window { x: self.window.x + x, y: self.window.y + y, width, height };
+        let (iw, ih) = (self.image_width as f32, self.image_height as f32);
+        let reach = |start: isize, len: usize, side: f32| {
+            let past = (-start).max(0).max(start + len as isize - side as isize);
+            past as f32 <= MAX_WINDOW_REACH * side
+        };
+        let fits = width > 0 && height > 0 && reach(window.x, width, iw) && reach(window.y, height, ih);
+        fits.then(|| Self { window, ..self.clone() })
     }
 
     /// The background at one pixel as [`Self::subtract_from`] removes it (before the
@@ -130,16 +173,14 @@ impl BackgroundModel {
         aggressiveness = self.aggressiveness
     ))]
     pub fn subtract_from(&self, frame: &mut Frame) {
-        // The rows recover the channel index from `self.image_height` while writing
+        // The rows recover the channel index from the window's height while writing
         // `frame.data_mut()`, so a frame that does not match the model would silently write
         // one plane's correction into another: refuse the mismatch.
-        if frame.width() != self.image_width
-            || frame.height() != self.image_height
-            || frame.channels() != self.channels
-        {
+        let window = self.window;
+        if frame.width() != window.width || frame.height() != window.height || frame.channels() != self.channels {
             tracing::warn!(
                 frame = %format!("{}x{}x{}", frame.width(), frame.height(), frame.channels()),
-                model = %format!("{}x{}x{}", self.image_width, self.image_height, self.channels),
+                model = %format!("{}x{}x{}", window.width, window.height, self.channels),
                 "Background model does not match the frame; skipping subtraction"
             );
             return;
@@ -215,17 +256,28 @@ impl BackgroundModel {
 
         let _span = tracing::info_span!("apply_subtraction").entered();
         let rows = Rows::new(self);
-        let height = self.image_height;
+        let inside = window.inside(self.image_width, self.image_height);
+        let last = (self.image_width - 1) as isize;
+        let clamp = |at: isize, last: isize| at.clamp(0, last) as usize;
         // One dispatch over every row of every plane: per channel instead cost three rayon
         // barriers and measured 19 % slower.
-        frame.data_mut().par_chunks_mut(self.image_width).enumerate().for_each_init(
+        frame.data_mut().par_chunks_mut(window.width).enumerate().for_each_init(
             || rows.scratch(),
             |scratch, (idx, row)| {
-                let (c, y) = (idx / height, idx % height);
-                rows.render(c, y, scratch);
-                for (slot, background) in row.iter_mut().zip(&scratch.row) {
+                let (c, y) = (idx / window.height, idx % window.height);
+                rows.render(c, clamp(window.y + y as isize, self.image_height as isize - 1), scratch);
+                let subtract = |slot: &mut f32, background: f32| {
                     let subtraction = (background - offsets[c]) * aggressiveness;
                     *slot = (*slot - subtraction + pedestal).max(0.0);
+                };
+                if inside {
+                    for (slot, &background) in row.iter_mut().zip(&scratch.row[window.x as usize..]) {
+                        subtract(slot, background);
+                    }
+                } else {
+                    for (x, slot) in row.iter_mut().enumerate() {
+                        subtract(slot, scratch.row[clamp(window.x + x as isize, last)]);
+                    }
                 }
             },
         );

@@ -6,7 +6,7 @@
 
 use tracing::{debug, instrument, warn};
 
-use super::analysis::{AnalysisContext, PreviewAnalysis};
+use super::analysis::{AnalysisContext, PreviewAnalysis, WindowProbe};
 use super::context::{create_live_stacker, LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::plugins::Plugins;
 use super::frame_gate::{FrameAdmission, RejectionReason};
@@ -220,6 +220,32 @@ pub fn stack_frame_with(
 pub struct PreviewRender {
     pub pipeline_config: night_amplifier_core::render::RenderPipelineConfig,
     pub stretch_result: Option<night_amplifier_core::render::display::StretchResult>,
+    /// The solve `stretch_result` was built from, for diagnostics: its black point is the
+    /// one already subtracted, so reads 0.
+    pub solve: Option<night_amplifier_core::render::AutoStretchResult>,
+}
+
+/// The noise a frame cut to a moved crop reads through the last window's white balance and
+/// model (`PreviewAnalysis::take_window_probe`): stages 0-1.5 below on a copy, then its MAD.
+/// What it changed is the window alone, which the frame's own refit is then served through.
+/// One extra pass, on the frames whose crop moved.
+fn probe_window_noise(
+    frame: &Frame,
+    config: &night_amplifier_core::render::RenderPipelineConfig,
+    probe: &WindowProbe,
+) -> Option<f32> {
+    let _span = tracing::info_span!("window_probe").entered();
+    let mut copy = frame.clone();
+    if config.background_subtraction && copy.channels() == 3 {
+        night_amplifier_core::render::neutralize_background(&mut copy, &probe.white_balance?).ok()?;
+    }
+    if config.background_subtraction {
+        probe.background.as_ref()?.subtract_from(&mut copy);
+    }
+    if config.scnr && copy.channels() == 3 {
+        night_amplifier_core::render::scnr::apply_scnr(&mut copy, config.scnr_amount).ok()?;
+    }
+    Some(night_amplifier_core::statistics::compute_image_stats(&copy).ok()?.mean_sigma())
 }
 
 /// Process a frame for preview display using the unified render pipeline.
@@ -286,6 +312,10 @@ pub fn process_preview_frame_with_analysis(
         pipeline_config.auto_stretch,
     );
     tracing::Span::current().record("analysis_reused", reused);
+    if let Some(probe) = analysis.take_window_probe() {
+        let sigma = pipeline_config.auto_stretch.then(|| probe_window_noise(frame, &pipeline_config, &probe)).flatten();
+        analysis.probe_window(sigma);
+    }
 
     // Stage 0: Background Neutralization (Pre-subtraction)
     //
@@ -350,6 +380,7 @@ pub fn process_preview_frame_with_analysis(
     // what makes them reusable: a cached set describes a frame that went through the
     // *same* cached white balance and background model, so the whole analysis is
     // internally consistent or none of it is.
+    let mut solve = None;
     let stretch_result = if pipeline_config.auto_stretch {
         let _span2 = tracing::info_span!("prepare_auto_stretch").entered();
         // Not `?`: a frame too small for robust statistics (below `StatsConfig`'s
@@ -370,6 +401,7 @@ pub fn process_preview_frame_with_analysis(
             });
         match prepared {
             Ok(res) => {
+                solve = Some(res);
                 // When saturation boost is off and contrast is enabled, fuse the
                 // contrast S-curve into the scale LUT — the same optimization that
                 // auto_stretch_frame used in the old RenderPipeline::process path.
@@ -447,6 +479,7 @@ pub fn process_preview_frame_with_analysis(
     Ok(PreviewRender {
         pipeline_config,
         stretch_result,
+        solve,
     })
 }
 

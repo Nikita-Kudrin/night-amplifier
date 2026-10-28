@@ -322,13 +322,15 @@ pub fn should_stop_on_errors(state: &AppState) -> bool {
 /// live only in the streaming encoders, AGENTS.md's *Spatial denoising*) — the
 /// direct path once silently dropped noise reduction. `pub` so Pro can test that
 /// regression directly. `coverage`: without it a thin border saved grainier than
-/// observed live (5.7% of bytes differed over a thinly covered quarter).
+/// observed live (5.7% of bytes differed over a thinly covered quarter). `noise_window`:
+/// the window the live view carried the stack's noise figure through (`StackNoiseWindow`).
 pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
     plugins: &Plugins,
     stack_depth: u32,
     coverage: Option<night_amplifier_core::frame::NoiseField>,
+    noise_window: f32,
 ) -> night_amplifier_core::error::Result<(Vec<u8>, u32, u32)> {
     use super::analysis::{AnalysisContext, PreviewAnalysis};
     use super::pipeline::process_preview_frame_with_analysis;
@@ -347,7 +349,7 @@ pub fn render_stacked_png(
             showing_stack: true,
             stack_depth,
         },
-        &mut PreviewAnalysis::new(),
+        &mut PreviewAnalysis::through_noise_window(noise_window),
     )?;
     let ready_frame = RenderReadyFrame {
         linear_frame: Arc::new(frame),
@@ -362,15 +364,16 @@ pub fn render_stacked_png(
 
 /// Save stacked result if stacking was enabled and we have frames.
 ///
-/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`]. `crop` is
-/// where `auto_crop` already cut the frame from the stack (see `capture::stack_crop`), which
-/// the FITS records as its subframe origin.
+/// `coverage` and `noise_window` travel with the frame for the PNG — see
+/// [`render_stacked_png`]. `crop` is where `auto_crop` already cut the frame from the stack
+/// (see `capture::stack_crop`), which the FITS records as its subframe origin.
 pub fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
     stack_depth: u32,
     coverage: Option<night_amplifier_core::frame::NoiseField>,
     crop: Option<night_amplifier_core::stacking::CropRect>,
+    noise_window: f32,
     camera_info: &ConnectedCameraInfo,
 ) {
     use night_amplifier_core::fits::FitsMetadata;
@@ -431,7 +434,7 @@ pub fn save_stacked_result(
             state.send_error(format!("The stack was not saved: {e}"));
         }
 
-        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {
+        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage, noise_window) {
             Ok((rgb8, width, height)) => {
                 if let Err(e) = state.disk_writer.queue_stacked_png(
                     Arc::new(rgb8),
@@ -561,7 +564,7 @@ mod tests {
         };
 
         let stack = Frame::filled(8, 8, 3, 0.25).unwrap();
-        save_stacked_result(&state, Some(stack), 1, None, None, &camera);
+        save_stacked_result(&state, Some(stack), 1, None, None, 1.0, &camera);
 
         let errors: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|event| match event {
@@ -751,7 +754,7 @@ mod tests {
         }
         let frame = night_amplifier_core::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        let (rgb8, width, _height) = render_stacked_png(frame, &settings, &Plugins::none(), 1, None).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings, &Plugins::none(), 1, None, 1.0).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
@@ -815,9 +818,9 @@ mod tests {
         settings.denoise.luma_strength = 0.0;
 
         settings.background_subtraction = false;
-        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
         settings.background_subtraction = true;
-        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
 
         let kept = edge_difference(&kept, w as usize, h as usize).abs();
         let removed = edge_difference(&removed, w as usize, h as usize).abs();
@@ -861,7 +864,7 @@ mod tests {
         settings.denoise.luma_strength = 1.0;
 
         let (exported, _, _) =
-            render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 40, Some(coverage.clone())).unwrap();
+            render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 40, Some(coverage.clone()), 1.0).unwrap();
 
         let mut live = gradient_frame();
         let rendered = process_preview_frame_with_analysis(
@@ -905,8 +908,8 @@ mod tests {
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
-        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
-        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 64, None).unwrap();
+        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
+        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 64, None, 1.0).unwrap();
 
         assert!(
             shallow != deep,
