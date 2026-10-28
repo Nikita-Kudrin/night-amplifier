@@ -25,6 +25,7 @@
 //! - `display_output_tests` - Black floor, stream resolution and both denoisers, in output levels
 //! - `dither_tests` - The blue-noise dither against the Bayer matrix: lattice lines, what JPEG keeps
 //! - `instruments` - The measurement instruments, shared with Pro by `#[path]`: no `crate::` there
+//! - `replay_cache_tests` - Replays shared across a run: bit for bit, keyed on their inputs, made once
 //! - `render_brightness_tests` - The brightness-against-grain trade, on the instruments that judge it
 //! - `auto_crop_tests` - `auto_crop` on real sessions: area kept, crop motion, the cut before stretch
 //! - `early_subs_tests` - Bad first subs, streamed against the stack's probation and an oracle
@@ -49,6 +50,7 @@ pub mod image_loading;
 pub mod instruments;
 pub mod prefetch;
 pub mod render_brightness_tests;
+pub mod replay_cache_tests;
 pub mod sky_estimate_tests;
 pub mod stack_depth_grain_tests;
 pub mod stack_quality_tests;

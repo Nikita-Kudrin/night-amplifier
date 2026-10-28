@@ -44,6 +44,6 @@ pub use context::{
     StackingContext,
 };
 pub use drop_log::DropLog;
-pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
+pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason, Restacked};
 pub use stage_config::BLACK_FLOOR_RANGE;
 pub use task::run_capture_loop;

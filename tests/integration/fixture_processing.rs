@@ -16,7 +16,7 @@ use crate::integration::common::{
     MIN_FRAMES_FOR_STACKING, MIN_STRETCH_FACTOR, STACKED_OUTPUT_DIR,
 };
 use crate::integration::image_loading::{load_image, save_processed_frame_to_dir};
-use crate::integration::instruments::Replay;
+use crate::integration::instruments::replayed;
 
 /// Stacks and renders every fixture set, saving each result under `processed/stacked/`.
 ///
@@ -47,9 +47,9 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) {
     let name = fixture_set.name.as_str();
     println!("\n━━━ {name} ({} files) ━━━", fixture_set.files.len());
 
-    let mut replay = Replay::open(&fixture_set.path);
-    let offered = replay.subs();
-    for (n, outcome) in replay.run().iter().enumerate() {
+    let session = replayed(&fixture_set.path);
+    let offered = session.subs;
+    for (n, outcome) in session.outcomes.iter().enumerate() {
         if let Some(admission) = outcome.admission.as_ref().filter(|a| !a.added) {
             println!(
                 "  sub {} not stacked: {:?} ({} stars matched, residual {:.2} px)",
@@ -60,11 +60,11 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) {
             );
         }
     }
-    let integrated = replay.depth();
+    let integrated = session.depth;
     let retention = integrated as f64 / offered as f64;
     println!("  {integrated}/{offered} subs integrated ({:.0}%)", retention * 100.0);
 
-    let mut stacked = replay.snapshot();
+    let mut stacked = session.stack.unwrap_or_else(|| panic!("{name}: no sub took the reference"));
     let render_config = night_amplifier::render::pipeline::RenderPipelineConfig::deep_sky();
     let rendered = night_amplifier::render::pipeline::RenderPipeline::new(render_config)
         .process(&mut stacked)

@@ -57,6 +57,31 @@ fn a_filled_slot_answers_and_is_named() {
     assert_eq!(plugins.registered(), ["saturation"]);
 }
 
+/// Two plugins in one slot read alike in `registered`; `implementations` tells them apart,
+/// which is what a cache keyed on the set needs (a fake's stack is not Pro's).
+#[test]
+fn implementations_name_the_type_in_each_slot() {
+    struct OtherSaturation;
+    impl SaturationPlugin for OtherSaturation {
+        fn apply_boost(&self, _: &mut Frame, _: &SaturationBoostConfig) -> Result<()> {
+            Ok(())
+        }
+
+        fn apply_boost_slice(&self, _: &mut [f32], _: &SaturationBoostConfig) {}
+    }
+
+    let fake = Plugins::none().with_saturation(Arc::new(FakeSaturation("a")));
+    let other = Plugins::none().with_saturation(Arc::new(OtherSaturation));
+    assert_eq!(fake.registered(), other.registered());
+    let [(slot, implementation)] = fake.implementations()[..] else {
+        panic!("one filled slot: {:?}", fake.implementations());
+    };
+    assert_eq!(slot, "saturation");
+    assert!(implementation.ends_with("FakeSaturation"), "{implementation}");
+    assert_ne!(fake.implementations(), other.implementations());
+    assert!(Plugins::none().implementations().is_empty());
+}
+
 /// A later install only fills what the earlier one left empty — Pro's tests register
 /// a set, then a wider one, and the first plugin of each slot stays.
 #[test]

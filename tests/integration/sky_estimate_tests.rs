@@ -9,7 +9,8 @@
 
 use serial_test::serial;
 
-use crate::integration::stack_depth_grain_tests::{managed_session, stack_snapshots};
+use crate::integration::instruments::stack_snapshots;
+use crate::integration::stack_depth_grain_tests::managed_session;
 
 /// 8 subs of a globular at 2048², the eyepiece fixture. Its sky is uncontaminated over
 /// most of the frame, which is what makes it usable as a baseline.

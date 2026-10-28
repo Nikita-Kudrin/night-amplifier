@@ -105,7 +105,14 @@ contents too. Coordinates measured on a stack name its size (`NamedTarget::frame
 Measurement instruments (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
 A stacking test replays a fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` →
 `stack_frame`), never a re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
-production stacks at 87 %. A test rendering a stack's depths renders every one through `instruments::replay_held`
+production stacks at 87 %. A whole session at shipped settings is `instruments::replayed` (with `stack_snapshots`/
+`accumulator_snapshots`, always on `load_sub`): stacked once a run into `target/tmp/replay-cache/<run>` (`replay_cache`;
+nextest's run id, else a fresh directory per process: a bare pid repeats in a container), read back bit for bit by
+every other test, never by another run — an earlier build's stack would pass for this one's. Its key names each
+plugin slot's type (`Plugins::implementations`), not the plugin's state. An entry is about a frame per depth; a run's
+entries stay until the next run. CI runs every module reading it on one runner (`REPLAY_MODULES` in `ci.yml`); the
+other partitions set `NA_REPLAY_CACHE=elsewhere`, which fails a test that reaches it (`off` turns it off; any other
+value moves it). A test rendering a stack's depths renders every one through `instruments::replay_held`
 (one `PreviewAnalysis` and `StackCrop` per order, as the render task holds them), never a fresh analysis per depth:
 fresh renders gave M33 back 4 levels production never shows, and hid the deep dumbbell's 3 at an auto-crop change.
 Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
