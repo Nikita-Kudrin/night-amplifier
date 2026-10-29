@@ -283,9 +283,11 @@ impl CaptureSettings {
         self.save_stacked_image && self.capture_mode() == CaptureMode::Stacking
     }
 
-    /// Whether the guide camera's raw frames go to disk.
-    pub fn saves_guide_raw_frames(&self) -> bool {
-        self.raw_frame_saving.saves(CaptureMode::Guide)
+    /// Whether the guide camera's raw frames go to disk: a diagnostic, so only in
+    /// [`AppState::debug_mode`](crate::state::AppState::debug_mode). Outside it the
+    /// switch is ignored, not cleared, so a later debug run keeps the observer's choice.
+    pub fn saves_guide_raw_frames(&self, debug_mode: bool) -> bool {
+        debug_mode && self.raw_frame_saving.saves(CaptureMode::Guide)
     }
 
     /// Whether the main capture writes anything into a session of its own: its raw
@@ -302,9 +304,10 @@ impl CaptureSettings {
     /// The guide switch counts even though `initialize_capture_session` — the only place
     /// that used to set the writer's master flag — runs at *main* capture start. A guide
     /// camera saving subs with no main capture running is an ordinary case, and without
-    /// this the writer would silently refuse every one of its frames.
-    pub fn disk_writing_enabled(&self) -> bool {
-        self.main_capture_saves() || self.saves_guide_raw_frames()
+    /// this the writer would silently refuse every one of its frames. Outside debug mode
+    /// the switch does not count, or a saved one kept the writer on with nothing to write.
+    pub fn disk_writing_enabled(&self, debug_mode: bool) -> bool {
+        self.main_capture_saves() || self.saves_guide_raw_frames(debug_mode)
     }
 
     /// Get the saturation boost config based on current settings
@@ -647,7 +650,7 @@ mod tests {
             ..CaptureSettings::default()
         };
 
-        assert!(settings.disk_writing_enabled());
+        assert!(settings.disk_writing_enabled(false), "the imaging camera's saving needs no debug mode");
         assert!(
             !settings.saves_stacked_image(),
             "the stacked image must not follow raw saving into Live view"
@@ -665,7 +668,58 @@ mod tests {
             ..CaptureSettings::default()
         };
 
-        assert!(!settings.disk_writing_enabled());
+        assert!(!settings.disk_writing_enabled(true));
+    }
+
+    fn saving_only_guide_frames() -> CaptureSettings {
+        CaptureSettings {
+            raw_frame_saving: RawFrameSaving {
+                guide: true,
+                ..Default::default()
+            },
+            ..CaptureSettings::default()
+        }
+    }
+
+    /// Guide frames are a diagnostic: the switch counts only in debug mode, and a
+    /// switch left on from a debug run must not save them in an ordinary one.
+    #[test]
+    fn guide_frames_are_saved_only_with_the_switch_on_in_debug_mode() {
+        let on = saving_only_guide_frames();
+        let off = CaptureSettings::default();
+
+        assert!(on.saves_guide_raw_frames(true));
+        assert!(!on.saves_guide_raw_frames(false));
+        assert!(!off.saves_guide_raw_frames(true));
+        assert!(!off.saves_guide_raw_frames(false));
+    }
+
+    /// A guide switch left on outside debug mode would otherwise hold the writer on
+    /// with nothing to write.
+    #[test]
+    fn a_guide_switch_alone_enables_the_writer_only_in_debug_mode() {
+        let settings = saving_only_guide_frames();
+
+        assert!(settings.disk_writing_enabled(true));
+        assert!(!settings.disk_writing_enabled(false));
+    }
+
+    #[test]
+    fn debug_mode_does_not_decide_what_the_imaging_camera_saves() {
+        let stacking = CaptureSettings {
+            stacking: true,
+            save_stacked_image: true,
+            raw_frame_saving: RawFrameSaving {
+                stacking: true,
+                guide: true,
+                ..Default::default()
+            },
+            ..CaptureSettings::default()
+        };
+
+        assert!(stacking.main_capture_saves());
+        assert!(stacking.disk_writing_enabled(false));
+        assert!(stacking.disk_writing_enabled(true));
     }
 
     #[test]

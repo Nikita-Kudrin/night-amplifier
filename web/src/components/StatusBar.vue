@@ -7,7 +7,7 @@ import StatusIcon from './ui/StatusIcon.vue'
 import StatusNotice from './StatusNotice.vue'
 import type {StatusTone} from './StatusNotice.vue'
 import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
-import {useEventStreamContext, useSelectedCamera} from '../composables/appContext'
+import {useCapabilities, useEventStreamContext, useSelectedCamera} from '../composables/appContext'
 import type {CameraRole, SolveVerdict} from '../composables/api.types'
 import {formatPercent} from '../utils/format'
 
@@ -25,6 +25,8 @@ interface Chip {
 const eventStream = useEventStreamContext()
 if (!eventStream) throw new Error('StatusBar needs the event stream App.vue provides')
 const currentCamera = useSelectedCamera()
+// Drops are a diagnostic, shown beside LiveView's FPS and resolution only in debug mode.
+const {debugLogging} = useCapabilities()
 
 const captureState = computed(() => captureStateDisplay(eventStream.captureState.value))
 
@@ -205,7 +207,7 @@ const notices = computed(() => {
       <BaseInfoIcon :message="framesTooltip"/>
     </div>
 
-    <div v-if="eventStream.droppedCount.value > 0" class="status-item frames dropped">
+    <div v-if="debugLogging && eventStream.droppedCount.value > 0" class="status-item frames dropped">
       <StatusIcon name="dropped"/>
       <span>
         Dropped: {{ eventStream.droppedCount.value }}<template v-if="dropRate !== null">

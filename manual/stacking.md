@@ -188,7 +188,7 @@ the status bar first shows **Saving to disk — keep the power on**, while the s
 raw frames or the SER video are pushed onto the device. Once the notice goes away, while the status
 bar still says **Connected**, it is safe to power off: if the connection dropped in between, the
 server may have restarted mid-save, and nothing then confirms the files reached the device. If something did not make it, it says how many files and why instead. The guide camera's
-saved frames get their own notice when the guide camera stops — **Saving guide frames to disk** —
+saved frames (debug mode only) get their own notice when the guide camera stops — **Saving guide frames to disk** —
 so wait for both if both were saving. Settings are written the same way
 each time you change them.
 

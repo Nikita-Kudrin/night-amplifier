@@ -106,7 +106,7 @@ impl GuideDiskSession {
         frame_number: u64,
         camera_info: &ConnectedCameraInfo,
     ) {
-        if !settings.saves_guide_raw_frames() {
+        if !settings.saves_guide_raw_frames(state.debug_mode()) {
             if self.session.take().is_some() {
                 state.slot(CameraRole::Guide).set_raw_session(None);
             }

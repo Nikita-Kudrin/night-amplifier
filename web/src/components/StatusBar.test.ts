@@ -9,7 +9,7 @@ import {sendTo} from '../test/eventStream'
 import {createCaptureEvents} from '../composables/events/captureEvents'
 import type {PlateSolving} from '../composables/events/pushToEvents'
 import type {SolveVerdict} from '../composables/api.types'
-import {camera} from '../test/fixtures'
+import {camera, capabilities} from '../test/fixtures'
 
 describe('StatusBar', () => {
     function mountStatusBar(provide: ProvideOverrides = {}) {
@@ -503,18 +503,29 @@ describe('StatusBar', () => {
     })
 
     describe('Dropped Frames Counter', () => {
+        // A diagnostic, like LiveView's FPS and resolution: shown only in debug mode.
+        function mountInDebugMode(eventStream: ProvideOverrides['eventStream']) {
+            return mountStatusBar({eventStream, capabilities: capabilities({debug_logging: true})})
+        }
+
         it('does not show dropped counter when no frames dropped', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(0)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(0)})
 
             expect(wrapper.find('.dropped').exists()).toBe(false)
         })
 
-        it('shows dropped counter when frames have been dropped', () => {
+        it('hides dropped frames outside debug mode', () => {
             const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(5)},
+                eventStream: {droppedCount: ref(5), deliveredCount: ref(100)},
+                capabilities: capabilities({debug_logging: false}),
             })
+
+            expect(wrapper.find('.dropped').exists()).toBe(false)
+            expect(wrapper.text()).not.toContain('Dropped')
+        })
+
+        it('shows dropped counter when frames have been dropped', () => {
+            const wrapper = mountInDebugMode({droppedCount: ref(5)})
 
             const dropped = wrapper.find('.dropped')
             expect(dropped.exists()).toBe(true)
@@ -522,17 +533,13 @@ describe('StatusBar', () => {
         })
 
         it('shows the share of delivered frames, not just the count', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(35), deliveredCount: ref(100)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(35), deliveredCount: ref(100)})
 
             expect(wrapper.find('.dropped').text()).toContain('35%')
         })
 
         it('shows the bare count while the server has reported no denominator', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(5), deliveredCount: ref(0)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(5), deliveredCount: ref(0)})
 
             const text = wrapper.find('.dropped').text()
             expect(text).toContain('Dropped: 5')
@@ -549,7 +556,7 @@ describe('StatusBar', () => {
             dropped_count: 6, delivered_count: 126, last_rejection_reason: 'trailed stars',
         })
 
-        const wrapper = mountStatusBar({eventStream: {...capture.state}})
+        const wrapper = mountStatusBar({eventStream: {...capture.state}, capabilities: capabilities({debug_logging: true})})
 
         expect(wrapper.find('.frames').text()).toContain('Rejected 20 | Total 120')
         expect(wrapper.find('.dropped').text()).toContain('Dropped: 6')
