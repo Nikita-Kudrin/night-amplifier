@@ -27,6 +27,12 @@ pub enum RejectionReason {
     /// One of a stack's first subs whose stars line up on the elected reference far
     /// worse than the others' do: cloud, a bump, a trail (see `context::probation`).
     Outvoted,
+    /// Planetary: the surface's best match lies on the edge of the search or of the frame,
+    /// so the target moved farther than the alignment window can follow.
+    TargetOutOfReach,
+    /// Planetary: nothing in the search correlates with the reference's surface (cloud, a
+    /// frame off the target).
+    SurfaceNotFound,
 }
 
 impl RejectionReason {
@@ -41,6 +47,8 @@ impl RejectionReason {
             Self::StarsDoubled => "stars doubled or trailed — the mount moved during the exposure",
             Self::StackerError => "stacker rejected the frame",
             Self::Outvoted => "its stars line up far worse than the session's other first subs",
+            Self::TargetOutOfReach => "the target moved farther than alignment can follow",
+            Self::SurfaceNotFound => "nothing in the frame matches the reference's surface",
         }
     }
 
@@ -74,7 +82,9 @@ impl RejectionReason {
             Self::NoStars
             | Self::TooFewStars
             | Self::RegistrationFailed
-            | Self::TooFewCorrespondences => true,
+            | Self::TooFewCorrespondences
+            | Self::TargetOutOfReach
+            | Self::SurfaceNotFound => true,
             Self::ResidualTooHigh
             | Self::StarsTooLarge
             | Self::StarsDoubled
@@ -149,8 +159,18 @@ impl FrameAdmission {
         }
     }
 
-    /// A verdict from a mode that aligns without star matching or a gate (comet,
-    /// planetary): it says whether the frame joined, never why it did not.
+    /// A frame that joined by correlation (planetary): where it landed, no star counts.
+    pub(in crate::capture) fn correlated(transform: AffineTransform) -> Self {
+        Self { transform: Some(transform), ..Self::unreasoned(true) }
+    }
+
+    /// A frame left out for `reason` before any star was counted (planetary).
+    pub(in crate::capture) fn refused(reason: RejectionReason) -> Self {
+        Self { rejected_because: Some(reason), ..Self::unreasoned(false) }
+    }
+
+    /// A verdict from a mode that aligns without star matching or a gate (comet): it says
+    /// whether the frame joined, never why it did not.
     pub(in crate::capture) fn unreasoned(added: bool) -> Self {
         Self {
             added,

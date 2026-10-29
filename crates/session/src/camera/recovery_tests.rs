@@ -186,18 +186,30 @@ impl DeviceCatalog for FakeCatalog {
 }
 
 pub(super) fn rig(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
-    build_rig(catalog, false)
+    build_rig(catalog, false, None)
 }
 
 /// A rig whose disk writer is running, for tests that look at the files a capture saves.
 fn rig_with_disk_writer(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
-    build_rig(catalog, true)
+    build_rig(catalog, true, None)
 }
 
-fn build_rig(catalog: &Arc<FakeCatalog>, run_disk_writer: bool) -> Arc<AppState> {
+/// [`rig_with_disk_writer`] running `plugins` instead of the installed set.
+pub(super) fn saving_rig_with(catalog: &Arc<FakeCatalog>, plugins: night_amplifier_core::plugins::Plugins) -> Arc<AppState> {
+    build_rig(catalog, true, Some(plugins))
+}
+
+fn build_rig(
+    catalog: &Arc<FakeCatalog>,
+    run_disk_writer: bool,
+    plugins: Option<night_amplifier_core::plugins::Plugins>,
+) -> Arc<AppState> {
     let (mut state, disk_writer) = AppState::new_for_testing();
     if run_disk_writer {
         std::thread::spawn(move || disk_writer.run());
+    }
+    if let Some(plugins) = plugins {
+        state.plugins = plugins;
     }
     state.device_catalog = Arc::clone(catalog) as Arc<dyn DeviceCatalog>;
     let state = Arc::new(state);

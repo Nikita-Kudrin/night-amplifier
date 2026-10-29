@@ -120,7 +120,7 @@ impl PlanetaryConfig {
 }
 
 /// Region of interest for alignment
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct AlignmentRoi {
     /// X coordinate of top-left corner
@@ -182,6 +182,18 @@ impl AlignmentRoi {
             width: w,
             height: h,
         }
+    }
+
+    /// The window a `width`x`height` frame is aligned by: `chosen`, or one half its short
+    /// side (64 px at least); with `tracking`, that size centred there, the reference's
+    /// centroid, so the window sits on the target wherever the reference caught it.
+    pub fn for_alignment(width: usize, height: usize, chosen: Option<Self>, tracking: Option<(f32, f32)>) -> Self {
+        let default_side = (width.min(height) / 2).max(64);
+        let (side_w, side_h) = chosen.map_or((default_side, default_side), |r| (r.width, r.height));
+        if let Some((cx, cy)) = tracking {
+            return Self::centered_at(cx, cy, side_w, side_h, width, height);
+        }
+        chosen.unwrap_or_else(|| Self::centered(width, height, default_side))
     }
 }
 

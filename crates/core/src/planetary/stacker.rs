@@ -6,19 +6,24 @@ use tracing::{field, instrument, Span};
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 
-use super::alignment::compute_alignment;
+use super::alignment::{align, compute_centroid, AlignmentReference, Fit, LuminancePyramid, Search};
 use super::config::{AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats};
 use super::quality::compute_quality;
 
 /// PlanetaryStacker trait for the Pro plugin
 pub trait PlanetaryStackerPlugin: Send + Sync {
-    /// Aligns and warps the frame against the reference using multi-point surface alignment
+    /// Aligns and warps the frame against the reference using multi-point surface alignment.
+    /// Frame and reference come as the luminance levels the session searched them on, so the
+    /// plugin builds none of its own (it once built both, ~19 ms a 3008² frame). `search` is
+    /// where each point looks: the frame's global shift and how far around it seeing may
+    /// move a patch.
     fn warp_frame(
         &self,
         frame: &Frame,
-        reference: &Frame,
+        frame_luminance: &LuminancePyramid,
+        reference: &LuminancePyramid,
         roi: &AlignmentRoi,
-        search_radius: usize,
+        search: Search,
     ) -> Result<Frame>;
     /// Clears any cached alignment points when the reference frame changes
     fn clear_cache(&self);
@@ -76,6 +81,8 @@ impl PlanetaryStacker {
         self.reference = Some(frame);
     }
 
+    /// Scores the frame and keeps it for the stack; one the reference's window cannot place
+    /// is scored but left out.
     pub fn add_frame(&mut self, frame: &Frame) -> Result<f32> {
         self.add_frame_builtin(frame)
     }
@@ -94,7 +101,10 @@ impl PlanetaryStacker {
         self.validate_dimensions(frame)?;
 
         let quality = compute_quality(frame, self.config.quality_metric);
-        let offset = self.compute_frame_alignment(frame);
+        let Some(offset) = self.compute_frame_alignment(frame) else {
+            tracing::debug!("Planetary frame not found near the reference, left out of the stack");
+            return Ok(quality);
+        };
 
         if self.config.max_frames > 0 && self.frames.len() >= self.config.max_frames {
             if let Some(worst_idx) = self
@@ -155,37 +165,21 @@ impl PlanetaryStacker {
         Ok(())
     }
 
-    fn compute_frame_alignment(&self, frame: &Frame) -> (f32, f32) {
-        let reference = self.reference.as_ref().unwrap();
-
-        let roi = if self.config.auto_tracking {
-            let lum = super::quality::frame_to_luminance(frame);
-            let (cx, cy) = super::alignment::compute_centroid(&lum, self.width, self.height);
-            let (base_w, base_h) = match self.config.alignment_roi {
-                Some(r) => (r.width, r.height),
-                None => {
-                    let size = (self.width.min(self.height) / 2).max(64);
-                    (size, size)
-                }
-            };
-            AlignmentRoi::centered_at(cx, cy, base_w, base_h, self.width, self.height)
-        } else {
-            self.config.alignment_roi.unwrap_or_else(|| {
-                let size = (self.width.min(self.height) / 2).max(64);
-                AlignmentRoi::centered(self.width, self.height, size)
-            })
-        };
-
-        let (dx, dy, ncc) = compute_alignment(
-            reference,
-            frame,
-            &roi,
-            self.config.search_radius,
-            self.config.subpixel_factor,
-        );
-
-        tracing::debug!(dx, dy, ncc, "Planetary stacker alignment results");
-        (dx, dy)
+    /// The frame's shift onto the reference, searched `search_radius` around the centroids'
+    /// estimate as the live stack searches; `None` for a frame the window cannot place (its
+    /// best match on the search's or the frame's edge, or none), which a wrong shift would
+    /// smear into the stack.
+    fn compute_frame_alignment(&self, frame: &Frame) -> Option<(f32, f32)> {
+        let reference = LuminancePyramid::of(self.reference.as_ref()?);
+        let pyramid = LuminancePyramid::of(frame);
+        let reference_centroid = compute_centroid(reference.luminance(), self.width, self.height);
+        let (cx, cy) = compute_centroid(pyramid.luminance(), self.width, self.height);
+        let tracking = self.config.auto_tracking.then_some(reference_centroid);
+        let roi = AlignmentRoi::for_alignment(self.width, self.height, self.config.alignment_roi, tracking);
+        let search = Search { expected: (reference_centroid.0 - cx, reference_centroid.1 - cy), radius: self.config.search_radius };
+        let found = align(&AlignmentReference::new(&reference, &roi), &pyramid, search, self.config.subpixel_factor);
+        tracing::debug!(dx = found.dx, dy = found.dy, ncc = found.ncc, fit = ?found.fit, "Planetary stacker alignment results");
+        matches!(found.fit, Fit::Correlated | Fit::Featureless).then_some((found.dx, found.dy))
     }
 
     /// Returns the number of frames collected

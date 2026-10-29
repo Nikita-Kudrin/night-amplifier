@@ -514,6 +514,13 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
         url: "https://drive.usercontent.google.com/download?id=1EXDudBM5ovlbTq10OId3sR7TjKt-Uux9&export=download&confirm=t",
         contents: Contents { files: 75, bytes: 1_357_560_000 },
     },
+    // 30 frames of 2026-10-24's Moon SER (Ares-C PRO, 3008², 10 ms), cut from the 1467 of a
+    // drifting, jittering capture; `planetary::FRAMES` says which and why.
+    Fixture {
+        name: "moon-drifting-imx533-ser",
+        url: "https://drive.usercontent.google.com/download?id=1hzROA7FMnl2vJ34eK7WjTj3eLgLSApYf&export=download&confirm=t",
+        contents: Contents { files: 1, bytes: 542_884_018 },
+    },
     Fixture {
         name: "iris-nebula-imx533",
         url: "https://drive.usercontent.google.com/download?id=1e91M7PAjp_VxjVDaST7BN05vHVfal6IB&export=download&confirm=t",

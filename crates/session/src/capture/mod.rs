@@ -27,6 +27,8 @@ pub mod stack_crop;
 mod stacking_task;
 mod stage_config;
 pub(crate) mod stall;
+mod stop_drain;
+pub use stop_drain::STOP_DRAIN;
 pub mod storage;
 mod stream_encoding;
 mod wanderer;

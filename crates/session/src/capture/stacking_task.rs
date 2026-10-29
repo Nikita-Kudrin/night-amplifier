@@ -15,6 +15,7 @@ use super::field_solve;
 use super::frame_gate::{RejectionReason, Restacked};
 use super::context::{LiveStacker, StackingCarryover};
 use super::stack_crop::{self, StackCrop};
+use super::stop_drain::{StopDrain, STOP_DRAIN};
 use super::wanderer::Wanderer;
 use super::{pipeline, solving, storage};
 
@@ -71,11 +72,15 @@ pub fn run_stacking_task(
     let mut stack_generation = 0u64;
 
     let mut cfa_stage = CfaStage::default();
+    let mut drain = StopDrain::new(STOP_DRAIN);
 
     while let Ok(msg) = stacking_rx.recv() {
         // One per message taken, before any work on it: the reported depth is what the
         // capture thread is waiting behind, not what it was when this frame arrived.
         stacking_depth.taken();
+        if !drain.admits(state.cancelled_for()) {
+            continue;
+        }
 
         let CapturedFrame {
             frame: raw_frame,
@@ -86,16 +91,8 @@ pub fn run_stacking_task(
 
         // Decode, correct on the mosaic, then debayer — all in the stacking task
         // so the camera thread stays free to start the next exposure.
-        let frame = {
-            let _span = tracing::info_span!("frame_conversion").entered();
-            match cfa_stage.for_settings(&settings).convert(&raw_frame, &camera_info.info) {
-                Ok(f) => Arc::new(f),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Frame conversion failed");
-                    state.frame_rejected(settings.stacking, format!("Conversion failed: {}", e));
-                    continue;
-                }
-            }
+        let Some(frame) = cfa_stage.converted(&state, &raw_frame, &settings, &camera_info.info) else {
+            continue;
         };
 
         // Detect when stacking is toggled on or stacking type changes — reset context
@@ -250,6 +247,7 @@ pub fn run_stacking_task(
         );
     }
 
+    drain.finish();
     // Save stacked result before exiting
     save_stacked_result(&state, stacker.as_deref(), &mut stack_crop, stack_generation);
 
@@ -386,6 +384,19 @@ impl CfaStage {
 
     fn convert(&self, raw: &RawFrame, info: &CameraInfo) -> CameraResult<Frame> {
         pipeline::convert_captured_frame(raw, info, &self.pipeline, self.debayer)
+    }
+
+    /// `raw` converted for `settings`; one that will not convert is reported as rejected.
+    fn converted(&mut self, state: &AppState, raw: &RawFrame, settings: &CaptureSettings, info: &CameraInfo) -> Option<Arc<Frame>> {
+        let _span = tracing::info_span!("frame_conversion").entered();
+        self.for_settings(settings)
+            .convert(raw, info)
+            .inspect_err(|e| {
+                tracing::warn!(error = %e, "Frame conversion failed");
+                state.frame_rejected(settings.stacking, format!("Conversion failed: {}", e));
+            })
+            .ok()
+            .map(Arc::new)
     }
 }
 

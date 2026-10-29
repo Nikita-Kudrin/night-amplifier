@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 use super::channel::{CapturedFrame, QueueDepth};
 use super::drop_log::DropLog;
 use night_amplifier_core::camera::RawFrame;
-use night_amplifier_core::disk_writer::WritingSessionType;
+use night_amplifier_core::disk_writer::{SyncGroup, WritingSessionType};
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::plugins::Plugins;
 use crate::state::{
@@ -49,6 +49,9 @@ pub fn run_storage_task(
     }
 
     warnings.finish(&state);
+    // The container's last frame is queued: its header counts them now, not once the
+    // stacker behind it has finished.
+    state.disk_writer.finish_container(SyncGroup::Shared);
 
     debug!("Storage task ended");
 }

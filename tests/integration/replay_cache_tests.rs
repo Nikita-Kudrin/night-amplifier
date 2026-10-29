@@ -19,7 +19,7 @@ use crate::integration::instruments::{
     ReplayRecord,
 };
 
-const REASONS: [RejectionReason; 9] = [
+const REASONS: [RejectionReason; 11] = [
     RejectionReason::NoStars,
     RejectionReason::TooFewStars,
     RejectionReason::RegistrationFailed,
@@ -29,6 +29,8 @@ const REASONS: [RejectionReason; 9] = [
     RejectionReason::StarsDoubled,
     RejectionReason::StackerError,
     RejectionReason::Outvoted,
+    RejectionReason::TargetOutOfReach,
+    RejectionReason::SurfaceNotFound,
 ];
 
 fn frame(w: usize, h: usize, c: usize, seed: f32) -> Frame {
@@ -72,16 +74,17 @@ fn outcome(i: usize) -> StackingOutcome {
 #[test]
 fn an_entry_reads_back_bit_for_bit() {
     let record = ReplayRecord {
-        subs: 12,
+        subs: 14,
         depth: 9,
-        outcomes: (0..12).map(outcome).collect(),
+        outcomes: (0..14).map(outcome).collect(),
         stack: Some(frame(7, 5, 3, 0.1)),
         coverage: Some(field(true)),
     };
     let bytes = encoded(&record);
     let back: ReplayRecord = decoded(&bytes).unwrap();
     assert!(encoded(&back) == bytes, "a record changed on its way through an entry");
-    assert_eq!((back.subs, back.depth), (12, 9));
+    assert_eq!((back.subs, back.depth), (14, 9));
+    assert!(back.outcomes[12..].iter().all(|o| o.frame_added), "admitted subs read back too");
     let reasons: Vec<_> = back.outcomes.iter().filter_map(StackingOutcome::rejected_because).collect();
     assert_eq!(reasons, REASONS);
     assert!(back.outcomes[2].admission.unwrap().mean_residual.is_nan());
