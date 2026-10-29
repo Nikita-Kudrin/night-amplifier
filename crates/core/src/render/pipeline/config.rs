@@ -3,11 +3,28 @@ use crate::render::autostretch::AutoStretchConfig;
 use crate::render::denoise::DenoiseConfig;
 use crate::render::output::{ContrastConfig, DisplayOutput, ShadowFloorRequest};
 use crate::plugins::Plugins;
+use crate::render::planetary::DaylightBalance;
 use crate::render::stretch::SaturationBoostConfig;
+
+/// Which tone a frame gets: the deep-sky stretch solved on its sky, or Planetary's levels read
+/// off the target ([`crate::render::planetary`]) with none of the spatial stages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToneProfile {
+    #[default]
+    DeepSky,
+    Planetary,
+}
 
 /// Configuration for the unified render pipeline
 #[derive(Debug, Clone)]
 pub struct RenderPipelineConfig {
+    /// The tone profile the stretch fields below serve; Planetary reads none of them.
+    pub tone: ToneProfile,
+    /// The camera balance a Planetary frame renders through, identity for every other tone.
+    /// It travels with the frame: a calibration corrects the balance the frame was rendered
+    /// with, which after a Stop is no longer the one saved.
+    pub daylight_balance: DaylightBalance,
+
     /// Whether to apply background subtraction
     pub background_subtraction: bool,
     /// Configuration for background subtraction (if enabled)
@@ -66,6 +83,8 @@ pub struct RenderPipelineConfig {
 impl Default for RenderPipelineConfig {
     fn default() -> Self {
         Self {
+            tone: ToneProfile::DeepSky,
+            daylight_balance: DaylightBalance::IDENTITY,
             background_subtraction: false,
             background_config: BackgroundConfig::default(),
             auto_stretch: true,
@@ -181,6 +200,8 @@ impl RenderPipelineConfig {
     /// Preset for deep sky imaging (nebulae, galaxies)
     pub fn deep_sky() -> Self {
         Self {
+            tone: ToneProfile::DeepSky,
+            daylight_balance: DaylightBalance::IDENTITY,
             background_subtraction: true,
             background_config: BackgroundConfig::default(),
             auto_stretch: true,
@@ -203,29 +224,11 @@ impl RenderPipelineConfig {
         }
     }
 
-    /// Preset for planetary imaging
-    pub fn planetary() -> Self {
-        Self {
-            background_subtraction: false,
-            background_config: BackgroundConfig::default(),
-            auto_stretch: true,
-            stretch_config: AutoStretchConfig::from_profile(true, Default::default()),
-            saturation_boost: false,
-            saturation_config: SaturationBoostConfig::default(),
-            contrast: true,
-            contrast_config: ContrastConfig::subtle(),
-            scnr: false,
-            scnr_amount: 1.0,
-            display: DisplayOutput::PLAIN,
-            shadow_floor: ShadowFloorRequest::NONE,
-            denoise: DenoiseConfig::OFF,
-            plugins: Plugins::installed(),
-        }
-    }
-
     /// Preset for preview mode (fast, less aggressive)
     pub fn preview() -> Self {
         Self {
+            tone: ToneProfile::DeepSky,
+            daylight_balance: DaylightBalance::IDENTITY,
             background_subtraction: false,
             background_config: BackgroundConfig::default(),
             auto_stretch: true,

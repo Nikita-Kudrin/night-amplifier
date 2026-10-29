@@ -296,7 +296,7 @@ mod tests {
         const ALWAYS: &[&str] = &[
             "auto_crop", "auto_reconnect", "auto_resume_capture", "auto_stretch", "auto_stretch_intensity",
             "background_extraction_algorithm", "background_subtraction", "bin",
-            "cooler_enabled", "cooler_fast_mode", "denoise", "dew_heater_enabled",
+            "cooler_enabled", "cooler_fast_mode", "daylight_balance", "denoise", "dew_heater_enabled",
             "dew_heater_power", "eula_accepted", "exposure_us", "eyepiece", "focus_mode",
             "force_focus_image_now", "gain", "guide_camera", "indi_server_host",
             "indi_server_port", "offset", "planetary_auto_tracking",

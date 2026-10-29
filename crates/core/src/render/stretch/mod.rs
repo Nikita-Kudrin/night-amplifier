@@ -76,22 +76,51 @@ pub fn scale_lut_luminance(i: usize) -> f32 {
     f32::from_bits(SCALE_LUT_FLOOR_BITS + ((i as u32) << (23 - SCALE_LUT_MANTISSA_BITS)))
 }
 
+/// Which brightness of a pixel a [`ScaleLut`] is indexed by; every channel is then scaled by
+/// the one entry it reads.
+///
+/// `MaxChannel` is Planetary's: indexed by luminance, a saturated colour's own channel runs
+/// past the curve — an H-alpha disc, whose luminance is a fifth of its red, clipped red on
+/// 99.7 % of it — while the brightest channel can never pass the curve's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScaleBasis {
+    #[default]
+    Luminance,
+    MaxChannel,
+}
+
 /// The fused stretch+contrast scale table: entry `i` holds the curve's scale at
 /// [`scale_lut_luminance`]`(i)`. A type, not a slice of any length: an 8192-entry table of the
 /// evenly spread layout this replaced was read silently wrong, and its fixed length keeps the
-/// lookup's `i + 1` in bounds by construction.
+/// lookup's `i + 1` in bounds by construction. It carries its [`ScaleBasis`], so a kernel can
+/// never read it by the other brightness.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ScaleLut(Box<[f32; SCALE_LUT_SIZE]>);
+pub struct ScaleLut {
+    entries: Box<[f32; SCALE_LUT_SIZE]>,
+    basis: ScaleBasis,
+}
 
 impl ScaleLut {
-    /// A table holding `entry(i)` at entry `i`.
+    /// A luminance table holding `entry(i)` at entry `i`.
     pub fn from_entries(entry: impl Fn(usize) -> f32) -> Self {
         let entries: Box<[f32]> = (0..SCALE_LUT_SIZE).map(entry).collect();
-        Self(entries.try_into().expect("SCALE_LUT_SIZE entries"))
+        Self {
+            entries: entries.try_into().expect("SCALE_LUT_SIZE entries"),
+            basis: ScaleBasis::Luminance,
+        }
+    }
+
+    /// The same entries, indexed by `basis`.
+    pub fn with_basis(self, basis: ScaleBasis) -> Self {
+        Self { basis, ..self }
     }
 
     pub fn entries(&self) -> &[f32; SCALE_LUT_SIZE] {
-        &self.0
+        &self.entries
+    }
+
+    pub fn basis(&self) -> ScaleBasis {
+        self.basis
     }
 }
 
@@ -99,7 +128,7 @@ impl std::ops::Index<usize> for ScaleLut {
     type Output = f32;
 
     fn index(&self, i: usize) -> &f32 {
-        &self.0[i]
+        &self.entries[i]
     }
 }
 
@@ -144,7 +173,7 @@ struct LutCacheKey {
 /// 18->19). Keeping 13 of f32's 23 mantissa bits gives a `2^-13` step (~0.012% of
 /// value), inside the solver's `tolerance` of 1e-3 and ~250 steps clear of that
 /// collision; masking (vs scaling) also gives zero/negative/inf/NaN distinct keys.
-fn quantize_relative(v: f32) -> u32 {
+pub(crate) fn quantize_relative(v: f32) -> u32 {
     const KEPT_MANTISSA_BITS: u32 = 13;
     v.to_bits() & !((1u32 << (23 - KEPT_MANTISSA_BITS)) - 1)
 }

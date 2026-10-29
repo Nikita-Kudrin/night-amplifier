@@ -11,6 +11,7 @@ use night_amplifier_core::background::BackgroundExtractionAlgorithm;
 use night_amplifier_core::camera::{CaptureConfig, DualSamplingMode};
 use night_amplifier_core::cfa::SensorCorrectionSettings;
 use night_amplifier_core::planetary::AlignmentRoi;
+use night_amplifier_core::render::planetary::DaylightBalance;
 use night_amplifier_core::plugins::Plugins;
 use night_amplifier_core::push_to::TelescopeSettings;
 use night_amplifier_core::render::denoise::DenoiseSettings;
@@ -99,6 +100,8 @@ pub struct CaptureSettings {
     pub dew_heater_enabled: bool,
     /// Anti-dew heater power level (0-100)
     pub dew_heater_power: i32,
+    /// The main camera's daylight white balance, which Planetary renders through
+    pub daylight_balance: DaylightBalance,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
     /// Crop a deep-sky stack to the area most of its subs cover, live and in the saved
@@ -205,6 +208,7 @@ impl Default for CaptureSettings {
             planetary_multi_point_alignment: false,
             dew_heater_enabled: hw.dew_heater_enabled,
             dew_heater_power: hw.dew_heater_power,
+            daylight_balance: hw.daylight_balance,
             wanderer_mode: false,
             auto_crop: true,
             auto_reconnect: true,
@@ -351,6 +355,7 @@ impl CaptureSettings {
             cooler_fast_mode: self.cooler_fast_mode,
             dew_heater_enabled: self.dew_heater_enabled,
             dew_heater_power: self.dew_heater_power,
+            daylight_balance: self.daylight_balance,
         }
     }
 

@@ -178,6 +178,7 @@ have answered mid-test.
 | `stacking/`        | `MasterStack` accumulator, rejection, warping                                  |
 | `background/`      | Gradient model: node layout, sky/target classifier, catalog protection, edge profiles |
 | `render/`          | Stretch, autostretch solver, white balance, S-curve; `display/` the f32 → RGB8 kernels and PNG |
+| `render/planetary/` | Planetary's levels, max-channel curve and per-camera daylight balance          |
 | `camera/`          | Traits + vendor SDKs + simulator                                               |
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
 | `disk_writer/`     | Async bounded-queue frame writer                                               |
@@ -434,7 +435,7 @@ lattice). WebGL needs `UNPACK_ALIGNMENT` 1 for the frontend's unpadded RGB rows.
 ## Adding a Stacking Type / Settings Persistence
 
 Add a `StackingType` variant (`crates/core/src/stacking/config.rs`), update `all()`, and implement its capability methods
-(`display_name`, `uses_star_registration`, `uses_fpn_removal`, etc.). A type with its own accumulator also gets a
+(`display_name`, `uses_star_registration`, `uses_fpn_removal`, `tone_profile`, etc.). A type with its own accumulator also gets a
 `LiveStacker` impl (`crates/session/src/capture/context/`) and a `create_live_stacker` arm; the stacking task drives every mode
 through that trait, and a carried stack only resumes under its own `kind()`.
 
@@ -645,6 +646,27 @@ the curve (M33 0.59x a sub's, the deep dumbbell 0.60x against 0.46x), but the st
 bright targets in range — M27's core burned (197 -> 251 levels) and M31 at 250 mm, whose MAD is 4.5x its faint
 disk's noise, rendered core/mid/outer at 241/241/241 against 239/181/117. It needs a re-tuned depth curve and a way
 to tell a frame with no sky from one with a sky ring.
+
+### Planetary tone (`render::planetary`)
+
+**Planetary runs none of the deep-sky stages** (`ToneProfile::Planetary`, set in `get_render_pipeline_config`
+whatever the settings say): the gradient model read a lunar disc as gradient (`Moon_Mosaic` 19_47_45's median at 4
+of 255), neutralising a black sky turned Jupiter green, and the S-curve clipped 53-67 % of every Jupiter. Instead,
+levels off the frame's brightest-channel histogram: black the sky (0 with none, a band between), white the target's
+p99.9, both read off neighbouring pairs so no isolated hot pixel sets them, then `asinh(2x)/asinh(2)` to 0.94. The
+table is `ScaleBasis::MaxChannel`: by luminance, an H-alpha disc clipped red on 99.7 % of it. A per-camera
+`DaylightBalance` (calibrated on the Moon, `POST /api/cameras/daylight-balance/{role}/calibrate`) sets colour,
+never grey-world per frame (Mars went khaki). Guarded by `planetary_render_tests` on `Moon_Mosaic`, `Planets` and
+the drifting Moon.
+
+**Calibration reads the frame, not the settings**: a rendered frame carries the balance it went through
+(`RenderPipelineConfig::daylight_balance`) and keeps its black on (`StretchResult::black_point`; the kernel takes
+it off), so `DaylightBalance::calibrated` corrects that balance and tests clipping on the sensor's values. Against
+the saved balance, a second press after Stop applied the correction twice (blue x2.07 -> x4); tested after the
+black came off, clipped highlights got in (x1.82). A correction past x4 is refused (`TargetNotNeutral`), and a
+camera without a profile starts uncalibrated. The sky fades out of the black point as it nears the target's
+threshold (`SKY_LEVEL_BAND`: it fell 0.068 -> 0 in one frame); a sky past it, daylight Venus's, is not taken
+off — open, the histogram cannot tell it from maria without a daylight fixture.
 
 ### Phase 13: Final Output Mapping & Contrast
 

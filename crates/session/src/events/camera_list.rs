@@ -36,7 +36,7 @@ pub struct CameraInfoResponse {
     pub max_height: u32,
     pub pixel_size_x_um: f64,
     pub pixel_size_y_um: f64,
-    pub sensor_type: String,
+    pub sensor_type: night_amplifier_core::camera::SensorType,
     pub has_cooler: bool,
     pub has_dew_heater: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +62,7 @@ impl CameraInfoResponse {
             max_height: info.max_height,
             pixel_size_x_um: info.pixel_size_x_um,
             pixel_size_y_um: info.pixel_size_y_um,
-            sensor_type: format!("{:?}", info.sensor_type),
+            sensor_type: info.sensor_type,
             has_cooler: info.has_cooler,
             has_dew_heater: info.has_dew_heater,
             min_temp_c: info.min_temp_c,

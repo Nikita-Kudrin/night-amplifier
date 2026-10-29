@@ -17,6 +17,7 @@ mod drop_log;
 mod frame_gate;
 pub mod guide_task;
 pub mod pipeline;
+mod planetary_preview;
 pub(crate) mod push_to_tasks;
 mod render_task;
 /// For the server's stream tests, which drive frames through the real render task.

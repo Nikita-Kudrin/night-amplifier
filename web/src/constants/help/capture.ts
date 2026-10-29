@@ -8,10 +8,13 @@ export const CAPTURE_HELP = {
     focus_mode:
         'Trades image quality for frame rate while you focus or hunt for a target. Holds off the six stages that cost time per frame and buy nothing at a focus mask: background subtraction, shadow saturation boost, row/column pattern removal, colour mottle, structure strength and dithering. Hot pixel rejection keeps running - Push-To cannot plate-solve a frame full of them. Their Settings controls are held while the mode is on and every one goes back to your value when you switch it off. Background Grain is not one of them: it also sets how the stretch trades brightness against grain, which this mode has no business changing.',
     focus_mode_held: 'Greyed settings are held off by Focus/Finder mode.',
+    planetary_held: 'Greyed settings are not used by Planetary, which sets its own levels from the disc, and Black floor only lifts there: the sky is already black. Your choices are kept for Deep Sky.',
     focus_mode_while_stacking:
         'Not available while you are stacking. Focus/Finder mode turns off row/column pattern removal, which runs before the frames reach the stack - and that banding sits in the same place in every frame, so once it is averaged in nothing can take it out again. Stop the capture to focus, or switch to Live view.',
     auto_stretch:
         'Automatically transforms the image to make faint details and colors visible - stretching',
+    auto_stretch_planetary:
+        "Planetary sets its own levels from the disc: the sky goes black and the brightest part of the target lands just under white, whatever the exposure, with a gentle lift for the darker parts. Nothing is clipped, and background removal, saturation boost and contrast are left out. Off shows the frame as the sensor recorded it.",
     stretch_aggressiveness:
         'How hard the dark end of the image is boosted, and with it how bright the background sits.\n• Star Fields: the gentlest. Darker, cleaner background, at the cost of some faint outer structure.\n• Deep Sky: the default, for nebulae, galaxies and clusters alike.\nBoth render stars the same way — the difference is what happens below them.',
     stacking:

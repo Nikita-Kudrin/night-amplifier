@@ -84,6 +84,42 @@ describe('ProcessingSettings', () => {
         expect(findToggleByLabel(wrapper, 'Shadow Saturation Boost').element.checked).toBe(false)
     })
 
+    // Planetary renders through its own levels; the choices stay the observer's for Deep Sky.
+    it('holds what Planetary does not use, and keeps the display controls it does', () => {
+        const wrapper = mountSection({planetary: true}, {background_subtraction: true, saturation_boost: true})
+
+        expect(wrapper.text()).toContain(HELP_TEXTS.planetary_held)
+        for (const label of ['Background Subtraction', 'Shadow Saturation Boost']) {
+            expect(findToggleByLabel(wrapper, label).element.disabled, label).toBe(true)
+            expect(findToggleByLabel(wrapper, label).element.checked, label).toBe(true)
+        }
+        for (const label of ['Color Intensity', 'Black level', 'Saturation Strength']) {
+            expect(slider(wrapper, label).props('disabled'), label).toBe(true)
+        }
+        expect(wrapper.find<HTMLSelectElement>('#bg-algorithm-select').element.disabled).toBe(true)
+        expect(slider(wrapper, 'Black floor').props('disabled')).toBeFalsy()
+        expect(findToggleByLabel(wrapper, 'Dithering').element.disabled).toBe(false)
+        expect(wrapper.emitted('apply')).toBeUndefined()
+    })
+
+    it('holds nothing for Deep Sky', () => {
+        const wrapper = mountSection({planetary: false}, {eyepiece: {black_floor: -0.03}})
+
+        expect(wrapper.text()).not.toContain(HELP_TEXTS.planetary_held)
+        expect(findToggleByLabel(wrapper, 'Background Subtraction').element.disabled).toBe(false)
+        expect(slider(wrapper, 'Color Intensity').props('disabled')).toBeFalsy()
+        expect(findToggleByLabel(wrapper, 'Darker sky').element.disabled).toBe(false)
+    })
+
+    // Darker sky shapes Black floor's darkening half, which Planetary's black sky never runs.
+    it('holds Darker sky for Planetary even with Black floor darkening', () => {
+        const wrapper = mountSection({planetary: true}, {eyepiece: {black_floor: -0.03, darker_sky: true}})
+
+        expect(findToggleByLabel(wrapper, 'Darker sky').element.disabled).toBe(true)
+        expect(findToggleByLabel(wrapper, 'Darker sky').element.checked).toBe(true)
+        expect(slider(wrapper, 'Black floor').props('disabled')).toBeFalsy()
+    })
+
     it('holds dithering, background subtraction and the boost while Focus/Finder mode is on', () => {
         const wrapper = mountSection({focusMode: true})
 

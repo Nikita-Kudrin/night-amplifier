@@ -68,7 +68,9 @@ fn test_camera_info_response_from_info() {
     assert_eq!(response.max_height, 3072);
     assert_eq!(response.pixel_size_x_um, 3.76);
     assert_eq!(response.pixel_size_y_um, 3.76);
-    assert_eq!(response.sensor_type, "Color");
+    assert_eq!(response.sensor_type, SensorType::Color);
+    // The spelling clients have always read, now an enum the UI can compare against.
+    assert_eq!(serde_json::to_value(&response).unwrap()["sensor_type"], "Color");
     assert!(response.has_cooler);
     assert_eq!(response.bit_depth, 14);
     assert_eq!(response.min_exposure_us, 50);

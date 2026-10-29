@@ -52,6 +52,11 @@ impl HttpStatus for ApiError {
             ApiError::SimulatorConfigFailed(_) => StatusCode::BAD_REQUEST,
             ApiError::HardwareBenchmarkRunning => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::BenchmarkDuringCapture => StatusCode::CONFLICT,
+            ApiError::NoFrameToCalibrateOn => StatusCode::CONFLICT,
+            ApiError::CalibrationNeedsPlanetary => StatusCode::CONFLICT,
+            ApiError::CalibrationNeedsColour => StatusCode::BAD_REQUEST,
+            ApiError::NoTargetToCalibrateOn => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::TargetNotNeutral => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

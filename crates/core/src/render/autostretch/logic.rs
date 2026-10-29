@@ -379,14 +379,13 @@ mod tests {
     }
 
     /// Every `black_point_sigma` and `target_background` a solve starts from: the two
-    /// deep-sky profiles, planetary, and the default the exports use.
+    /// deep-sky profiles and the default the exports use.
     fn gate_configs() -> Vec<AutoStretchConfig> {
         use crate::render::autostretch::StretchAggressiveness::{Low, Medium};
         let mut configs: Vec<_> = [Low, Medium]
             .into_iter()
-            .map(|a| AutoStretchConfig::from_profile(false, a))
+            .map(AutoStretchConfig::from_profile)
             .collect();
-        configs.push(AutoStretchConfig::from_profile(true, Medium));
         configs.push(AutoStretchConfig::default());
         // The setting's floor, where the upper gate's `max(1.5)` makes it steepest.
         configs.push(AutoStretchConfig::default().with_black_point_sigma(0.5));

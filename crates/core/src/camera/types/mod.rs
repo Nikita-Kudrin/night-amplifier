@@ -14,8 +14,9 @@ pub use raw_frame::{BufferPool, PooledBuffer, RawFrame};
 use crate::CfaPattern;
 use serde::{Deserialize, Serialize};
 
-/// Camera sensor type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Camera sensor type; on the wire as `"Mono"`/`"Color"`, the spelling it always had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub enum SensorType {
     /// Monochrome sensor
     Mono,

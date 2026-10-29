@@ -26,6 +26,7 @@ use tracing::{debug, error, info, warn};
 use super::install;
 use night_amplifier_core::camera::identity::{self, CameraIdError};
 use night_amplifier_core::camera::{Camera, CameraInfo};
+use night_amplifier_core::render::planetary::DaylightBalance;
 use crate::error::{ApiError, ApiResult};
 use crate::state::{
     AppState, CameraCaptureProfile, CameraPhase, CameraRole, CaptureSettings, CaptureState,
@@ -244,7 +245,7 @@ pub fn camera_profile_key(provider: &str, camera_name: &str, role: CameraRole) -
 
 /// Swap the per-camera profile for `key` into `role`'s live hardware fields (flat
 /// `CaptureSettings` for Main, `guide_camera` for Guide — both can be connected at once
-/// and can't share one set of values), seeding a fresh profile if none exists yet.
+/// and can't share one set of values), seeding a fresh, uncalibrated profile if none exists yet.
 ///
 /// Either way the profile is clamped to what this camera can do, and the clamped copy
 /// written back to the map — clamping the *stored* path too repairs a profile persisted
@@ -258,7 +259,9 @@ pub fn apply_camera_profile_on_connect(
 ) {
     let mut profile = match settings.camera_profiles.get(&key) {
         Some(stored) => stored.clone(),
-        None => settings.profile_for(role),
+        // Seeded from the role's live values, but uncalibrated: their balance is the last
+        // camera's sensor, and a new camera rendered through it took that camera's tint.
+        None => CameraCaptureProfile { daylight_balance: DaylightBalance::IDENTITY, ..settings.profile_for(role) },
     };
     clamp_profile_to_camera(&mut profile, info);
     apply_profile_to_role(settings, role, &profile);
@@ -267,7 +270,8 @@ pub fn apply_camera_profile_on_connect(
 
 /// Bring a profile inside what `info` supports.
 ///
-/// Two kinds of clamp. Capability fields (cooler, sensor mode, dew heater) are
+/// Two kinds of clamp. Capability fields (cooler, sensor mode, dew heater, a mono sensor's
+/// colour balance) are
 /// zeroed when the hardware has none, so a previous camera's settings can't bleed
 /// into a profile that could never use them. Range fields (exposure, gain, binning)
 /// are the three `CaptureConfig::validate` rejects outright, stopping capture — a
@@ -286,6 +290,9 @@ pub(crate) fn clamp_profile_to_camera(profile: &mut CameraCaptureProfile, info: 
     if !info.has_dew_heater {
         profile.dew_heater_enabled = false;
         profile.dew_heater_power = defaults.dew_heater_power;
+    }
+    if info.sensor_type == night_amplifier_core::camera::SensorType::Mono {
+        profile.daylight_balance = defaults.daylight_balance;
     }
     profile.dew_heater_power = profile.dew_heater_power.clamp(0, 100);
 

@@ -9,6 +9,7 @@ pub mod denoise;
 pub mod display;
 pub mod output;
 pub mod pipeline;
+pub mod planetary;
 pub mod scnr;
 pub mod simd;
 pub mod stretch;
@@ -50,8 +51,8 @@ pub use white_balance::{
 
 // Re-export pipeline types for convenient access
 pub use pipeline::{
-    process_frame_deep_sky, process_frame_default, process_frame_planetary, PipelineResult,
-    RenderPipeline, RenderPipelineConfig,
+    process_frame_deep_sky, process_frame_default, PipelineResult, RenderPipeline,
+    RenderPipelineConfig, ToneProfile,
 };
 
 use crate::error::Result;

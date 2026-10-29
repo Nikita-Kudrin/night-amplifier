@@ -30,6 +30,7 @@
 //! - `auto_crop_tests` - `auto_crop` on real sessions: area kept, crop motion, the cut before stretch
 //! - `early_subs_tests` - Bad first subs, streamed against the stack's probation and an oracle
 //! - `planetary` / `planetary_tests` - 2026-10-24's drifting Moon from its SER: shifts and sharpness
+//! - `planetary_render` / `planetary_render_tests` - Planetary's levels on `Moon_Mosaic`, `Planets` and that Moon
 //! - `bad_subs_scan` - Diagnostic: every local session's subs tabulated, to find bad ones
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
@@ -51,6 +52,8 @@ pub mod image_loading;
 pub mod instruments;
 pub mod planetary;
 pub mod planetary_tests;
+pub mod planetary_render;
+pub mod planetary_render_tests;
 pub mod prefetch;
 pub mod render_brightness_tests;
 pub mod replay_cache_tests;

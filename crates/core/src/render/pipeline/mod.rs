@@ -10,7 +10,7 @@ use crate::frame::Frame;
 use tracing::{debug, field, instrument, warn, Span};
 
 mod config;
-pub use config::RenderPipelineConfig;
+pub use config::{RenderPipelineConfig, ToneProfile};
 
 use super::autostretch::{auto_stretch_frame, AutoStretchResult};
 use super::output::apply_contrast_frame;
@@ -224,11 +224,6 @@ pub fn process_frame_deep_sky(frame: &mut Frame) -> Result<PipelineResult> {
     RenderPipeline::new(RenderPipelineConfig::deep_sky()).process(frame)
 }
 
-/// Convenience function: process frame for planetary imaging
-pub fn process_frame_planetary(frame: &mut Frame) -> Result<PipelineResult> {
-    RenderPipeline::new(RenderPipelineConfig::planetary()).process(frame)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,9 +235,6 @@ mod tests {
         assert!(config.background_subtraction);
         assert!(config.auto_stretch);
 
-        let config_p = RenderPipelineConfig::planetary();
-        assert!(!config_p.background_subtraction);
-        assert!(config_p.auto_stretch);
     }
 
     #[test]

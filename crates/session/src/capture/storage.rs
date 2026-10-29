@@ -396,12 +396,12 @@ pub fn save_stacked_result(
     if let Some(stacked_frame) = last_processed_frame {
         let mut fits_frame = stacked_frame.clone();
 
-        // Apply background subtraction to FITS if enabled
-        if settings.background_subtraction {
-            use super::pipeline::get_render_pipeline_config;
+        // Background subtraction where the render config runs it: the setting alone would
+        // run it on a planetary FITS too, which takes none.
+        let pipeline_config = super::pipeline::get_render_pipeline_config(&settings, &state.plugins, true);
+        if pipeline_config.background_subtraction {
             use night_amplifier_core::render::RenderPipeline;
 
-            let pipeline_config = get_render_pipeline_config(&settings, &state.plugins, true);
             let pipeline = RenderPipeline::new(pipeline_config);
             if let Err(e) = pipeline.process(&mut fits_frame) {
                 warn!(error = %e, "Failed to apply background subtraction to FITS");

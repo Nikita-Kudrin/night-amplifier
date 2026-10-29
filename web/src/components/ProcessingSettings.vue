@@ -27,10 +27,15 @@ const props = withDefaults(defineProps<{
   settings: Settings
   /** Focus/Finder mode holds dithering, background subtraction and the boost off. */
   focusMode?: boolean
+  /** Planetary renders through its own levels: colour intensity, Black level, background
+   *  subtraction, the boost and Darker sky do nothing there, so they are held rather than
+   *  hidden. Black floor stays, since its lifting half still applies. */
+  planetary?: boolean
   rbfBackgroundAvailable?: boolean
   saturationBoostAvailable?: boolean
 }>(), {
   focusMode: false,
+  planetary: false,
   rbfBackgroundAvailable: false,
   saturationBoostAvailable: false,
 })
@@ -63,6 +68,7 @@ function applyTone(field: ToneField) {
 <template>
   <div class="settings-section">
     <h3 class="section-title">Processing</h3>
+    <span v-if="planetary" class="hint">{{ HELP.planetary_held }}</span>
 
     <div class="control-group control-group-offset control-group-roomy">
       <BaseSlider
@@ -74,6 +80,7 @@ function applyTone(field: ToneField) {
           :step="AUTO_STRETCH_INTENSITY.step"
           :format-value="formatPercent"
           :help="HELP.auto_stretch_intensity"
+          :disabled="planetary"
           @change="apply('auto_stretch_intensity')"
       />
     </div>
@@ -88,6 +95,7 @@ function applyTone(field: ToneField) {
           :step="BLACK_LEVEL_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.eyepiece_intensity"
+          :disabled="planetary"
           @change="applyTone('intensity')"
       />
     </div>
@@ -110,7 +118,7 @@ function applyTone(field: ToneField) {
       <BaseToggle
           v-model="local.eyepiece.darker_sky"
           label="Darker sky"
-          :disabled="local.eyepiece.black_floor >= 0"
+          :disabled="local.eyepiece.black_floor >= 0 || planetary"
           :help="HELP.eyepiece_darker_sky"
           @update:model-value="applyTone('darker_sky')"
       />
@@ -133,7 +141,7 @@ function applyTone(field: ToneField) {
           v-model="local.background_subtraction"
           label="Background Subtraction"
           :help="HELP.background_subtraction"
-          :disabled="focusMode"
+          :disabled="focusMode || planetary"
           @update:model-value="apply('background_subtraction')"
       />
     </div>
@@ -145,6 +153,7 @@ function applyTone(field: ToneField) {
           label="Algorithm"
           :help="HELP.background_extraction_algorithm"
           :options="BACKGROUND_ALGORITHM_OPTIONS"
+          :disabled="planetary"
           :locked="!rbfBackgroundAvailable"
           pro-feature="RBF Background"
           @change="apply('background_extraction_algorithm')"
@@ -156,7 +165,7 @@ function applyTone(field: ToneField) {
           v-model="local.saturation_boost"
           label="Shadow Saturation Boost"
           :help="HELP.saturation_boost"
-          :disabled="!saturationBoostAvailable || focusMode"
+          :disabled="!saturationBoostAvailable || focusMode || planetary"
           @update:model-value="apply('saturation_boost')"
       >
         <template #label-extra>
@@ -174,7 +183,7 @@ function applyTone(field: ToneField) {
         :max="SATURATION_BOOST_LIMITS.max"
         :step="SATURATION_BOOST_LIMITS.step"
         :format-value="formatPercent"
-        :disabled="!saturationBoostAvailable"
+        :disabled="!saturationBoostAvailable || planetary"
         :help="HELP.saturation_boost_strength"
         @change="apply('saturation_boost_strength')"
     >

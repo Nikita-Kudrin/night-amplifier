@@ -12,6 +12,7 @@ use night_amplifier_core::cfa::SensorCorrectionSettings;
 use night_amplifier_core::planetary::AlignmentRoi;
 use night_amplifier_core::push_to::TelescopeSettings;
 use night_amplifier_core::render::denoise::DenoiseSettings;
+use night_amplifier_core::render::planetary::DaylightBalance;
 use night_amplifier_core::render::StretchAggressiveness;
 use crate::state::{
     CameraCaptureProfile, CameraRole, EyepieceSettings, RawFrameSaving, Resolution,
@@ -150,6 +151,9 @@ pub struct UpdateSettingsRequest {
     /// Anti-dew heater power level (0-100)
     #[serde(default)]
     pub dew_heater_power: Option<i32>,
+    /// The camera's daylight white balance; identity resets it
+    #[serde(default)]
+    pub daylight_balance: Option<DaylightBalance>,
     /// Whether the user has accepted the End User License Agreement
     #[serde(default)]
     pub eula_accepted: Option<bool>,

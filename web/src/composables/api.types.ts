@@ -87,6 +87,8 @@ export interface Settings {
     dew_heater_enabled: boolean
     /** Anti-dew heater power level (0-100) */
     dew_heater_power: number
+    /** The main camera's daylight white balance, which Planetary renders through */
+    daylight_balance: DaylightBalance
     /** Enable "Wanderer" mode for automatic stack reset on movement */
     wanderer_mode: boolean
     /**
@@ -223,7 +225,7 @@ export interface CameraInfo {
     max_height: number
     pixel_size_x_um: number
     pixel_size_y_um: number
-    sensor_type: string
+    sensor_type: SensorType
     has_cooler: boolean
     has_dew_heater: boolean
     min_temp_c?: number | null
@@ -429,6 +431,11 @@ export interface CameraCaptureProfile {
     cooler_fast_mode: boolean
     dew_heater_enabled: boolean
     dew_heater_power: number
+    /**
+     * The camera's colour response to sunlight, which Planetary renders through
+     * (`render::planetary::daylight`). Identity until calibrated on the Moon or the Sun.
+     */
+    daylight_balance: DaylightBalance
 }
 
 /** DTO for CameraPhase serialization (snake_case to match JS event handling). */
@@ -480,6 +487,13 @@ export interface Coordinate {
     dec_degrees: number
     ra_string: string
     dec_string: string
+}
+
+/** Gains on a camera's raw red, green and blue, the smallest 1. */
+export interface DaylightBalance {
+    red: number
+    green: number
+    blue: number
 }
 
 export interface DeepSkyCapabilities {
@@ -791,6 +805,10 @@ export interface SensorMode {
     description?: string
 }
 
+/** Camera sensor type; on the wire as `"Mono"`/`"Color"`, the spelling it always had. */
+export const SENSOR_TYPE_VALUES = ['Mono', 'Color'] as const
+export type SensorType = (typeof SENSOR_TYPE_VALUES)[number]
+
 /**
  * Which attempt of a multi-strategy solve is running — see
  * [`ServerEvent::PlateSolvingProgress`](super::ServerEvent::PlateSolvingProgress).
@@ -945,6 +963,8 @@ export interface UpdateSettingsRequest {
     dew_heater_enabled?: boolean | null
     /** Anti-dew heater power level (0-100) */
     dew_heater_power?: number | null
+    /** The camera's daylight white balance; identity resets it */
+    daylight_balance?: DaylightBalance | null
     /** Whether the user has accepted the End User License Agreement */
     eula_accepted?: boolean | null
     /** INDI server host */
@@ -1061,6 +1081,11 @@ export interface CameraCaptureProfileInput {
     cooler_fast_mode?: boolean
     dew_heater_enabled?: boolean
     dew_heater_power?: number
+    /**
+     * The camera's colour response to sunlight, which Planetary renders through
+     * (`render::planetary::daylight`). Identity until calibrated on the Moon or the Sun.
+     */
+    daylight_balance?: DaylightBalance
 }
 
 /**

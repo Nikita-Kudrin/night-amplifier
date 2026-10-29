@@ -214,6 +214,28 @@ fn every_value_lands_inside_its_range() {
     assert_eq!((remembered.target_temp_c, remembered.dew_heater_power), (Some(-60.0), 100));
 }
 
+/// A daylight balance belongs to the camera it was taken on: it lands on that role's live
+/// values and its remembered profile, normalised, and identity is how a client resets it.
+#[test]
+fn a_daylight_balance_lands_on_the_addressed_camera_and_identity_resets_it() {
+    use night_amplifier_core::render::planetary::DaylightBalance;
+    let mut settings = CaptureSettings::default();
+    let request = |balance| UpdateSettingsRequest { daylight_balance: Some(balance), ..Default::default() };
+
+    apply(request(DaylightBalance { red: 0.53, green: 0.5, blue: 1.035 }), &mut settings, &guide_camera(), &Plugins::none());
+    let normalised = DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 };
+    let close = |a: DaylightBalance, b: DaylightBalance| {
+        (a.red - b.red).abs() < 1e-5 && (a.green - b.green).abs() < 1e-5 && (a.blue - b.blue).abs() < 1e-5
+    };
+    assert!(close(settings.guide_camera.daylight_balance, normalised), "{:?}", settings.guide_camera.daylight_balance);
+    assert!(close(settings.camera_profiles["PlayerOne/Ares-C PRO"].daylight_balance, normalised));
+    assert!(settings.daylight_balance.is_identity(), "the imaging camera was not addressed");
+
+    apply(request(DaylightBalance::IDENTITY), &mut settings, &guide_camera(), &Plugins::none());
+    assert!(settings.guide_camera.daylight_balance.is_identity());
+    assert!(settings.camera_profiles["PlayerOne/Ares-C PRO"].daylight_balance.is_identity());
+}
+
 /// Each reaction is keyed off what the request carried, never off a field it left out.
 #[test]
 fn the_delta_names_what_the_request_touched() {

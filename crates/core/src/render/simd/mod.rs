@@ -25,8 +25,23 @@ mod planar;
 
 pub use interleaved::{
     apply_luminance_preserving_simd, apply_luminance_scale_lut_scalar,
-    apply_luminance_scale_lut_simd,
+    apply_luminance_scale_lut_simd, apply_max_channel_scale_lut_scalar,
+    apply_max_channel_scale_lut_simd,
 };
+
+/// An interleaved row through `scale_lut`, read by the brightness the table is indexed by.
+/// `color_intensity` is the luminance kernel's alone.
+#[inline]
+pub fn apply_scale_lut_simd(data: &mut [f32], black_point: f32, scale_lut: &ScaleLut, color_intensity: f32) {
+    match scale_lut.basis() {
+        crate::render::stretch::ScaleBasis::Luminance => {
+            apply_luminance_scale_lut_simd(data, black_point, scale_lut, color_intensity)
+        }
+        crate::render::stretch::ScaleBasis::MaxChannel => {
+            apply_max_channel_scale_lut_simd(data, black_point, scale_lut)
+        }
+    }
+}
 pub use planar::{
     apply_luminance_preserving_simd_planar, apply_luminance_scale_lut_scalar_planar,
     apply_luminance_scale_lut_simd_planar,
@@ -187,6 +202,57 @@ mod tests {
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             assert!((x - y).abs() < 1e-6, "{ctx}: index {i} differs: {x} vs {y}");
         }
+    }
+
+    fn max_channel_lut() -> ScaleLut {
+        scale_lut_from(|v| crate::render::planetary::curve(v / 0.6) / v)
+            .with_basis(crate::render::stretch::ScaleBasis::MaxChannel)
+    }
+
+    #[test]
+    fn the_max_channel_kernel_matches_its_scalar_body_bit_for_bit() {
+        let lut = max_channel_lut();
+        for pixels in [1usize, 3, 4, 7, 64, 4099] {
+            let base = noise(pixels * 3, 0x5EED_0001);
+            let (mut simd, mut scalar) = (base.clone(), base);
+            apply_max_channel_scale_lut_simd(&mut simd, 0.01, &lut);
+            apply_max_channel_scale_lut_scalar(&mut scalar, 0.01, &lut);
+            let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&simd), bits(&scalar), "{pixels} px");
+        }
+    }
+
+    /// Every channel takes the one scale its brightest reads: hue exactly, and that channel
+    /// lands on the curve, where luminance scaling ran an H-alpha red off it.
+    #[test]
+    fn the_max_channel_kernel_keeps_hue_and_puts_the_brightest_channel_on_the_curve() {
+        let lut = max_channel_lut();
+        let mut row = vec![0.30, 0.03, 0.015, 0.2, 0.25, 0.1, 0.0, 0.0, 0.0, 0.55, 0.5, 0.45];
+        let input = row.clone();
+        apply_scale_lut_simd(&mut row, 0.0, &lut, 1.7);
+        for (out, px) in row.as_chunks::<3>().0.iter().zip(input.as_chunks::<3>().0) {
+            let brightest = px[0].max(px[1]).max(px[2]);
+            if brightest == 0.0 {
+                assert_eq!(*out, [0.0; 3]);
+                continue;
+            }
+            let expected = crate::render::planetary::curve(brightest / 0.6);
+            assert!((out[0].max(out[1]).max(out[2]) - expected).abs() < 2e-3, "{px:?} -> {out:?}");
+            for c in 0..3 {
+                assert!((out[c] * brightest - px[c] * expected).abs() < 2e-3, "{px:?} -> {out:?}: hue moved");
+            }
+        }
+    }
+
+    /// The dispatcher sends a luminance table where the encoder always sent it.
+    #[test]
+    fn a_luminance_table_reads_through_the_dispatcher_as_it_did_directly() {
+        let lut = scale_lut_from(|l| 1.0 + l * 3.0);
+        let base = noise(4099 * 3, 0xC0FF_EE00);
+        let (mut direct, mut dispatched) = (base.clone(), base);
+        apply_luminance_scale_lut_simd(&mut direct, 0.05, &lut, 1.2);
+        apply_scale_lut_simd(&mut dispatched, 0.05, &lut, 1.2);
+        assert_eq!(direct, dispatched);
     }
 
     #[test]

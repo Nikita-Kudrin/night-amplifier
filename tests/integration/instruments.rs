@@ -676,7 +676,7 @@ pub fn replay_held(
             let (mut frame, noise) = cut_held(snapshot.frame.clone(), noise, rect.as_ref(), settings, analysis);
             analysis.note_stack(snapshot.generation);
             let ctx = AnalysisContext { showing_stack: snapshot.depth > 1, stack_depth: snapshot.depth as u32 };
-            let night_amplifier::session::capture::pipeline::PreviewRender { pipeline_config, stretch_result, solve } =
+            let night_amplifier::session::capture::pipeline::PreviewRender { pipeline_config, stretch_result, solve, .. } =
                 night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(&mut frame, settings, &plugins, ctx, analysis)
                     .unwrap();
             let mut renders = Vec::new();

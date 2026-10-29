@@ -40,6 +40,11 @@ export const SERVER_DEFAULT_SETTINGS = {
   "planetary_multi_point_alignment": false,
   "dew_heater_enabled": true,
   "dew_heater_power": 10,
+  "daylight_balance": {
+    "red": 1.0,
+    "green": 1.0,
+    "blue": 1.0
+  },
   "wanderer_mode": false,
   "auto_crop": true,
   "auto_reconnect": true,
@@ -93,7 +98,12 @@ export const SERVER_DEFAULT_SETTINGS = {
     "sensor_mode_override": null,
     "cooler_fast_mode": false,
     "dew_heater_enabled": true,
-    "dew_heater_power": 10
+    "dew_heater_power": 10,
+    "daylight_balance": {
+      "red": 1.0,
+      "green": 1.0,
+      "blue": 1.0
+    }
   },
   "eula_accepted": false,
   "indi_server_host": "127.0.0.1",
