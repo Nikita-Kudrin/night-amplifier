@@ -142,7 +142,7 @@ pub async fn initialize_capture_session(
     resume_dir: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
     let settings = state.settings.snapshot();
-    state.disk_writer.set_enabled(settings.disk_writing_enabled());
+    state.disk_writer.set_enabled(settings.disk_writing_enabled(state.debug_mode()));
 
     // A session can still be open here: a settings update lands between the capture
     // state flipping and this call, or a previous capture ended without one. Either way
@@ -190,7 +190,7 @@ pub async fn sync_disk_session(
     settings: &CaptureSettings,
     capture_active: bool,
 ) {
-    state.disk_writer.set_enabled(settings.disk_writing_enabled());
+    state.disk_writer.set_enabled(settings.disk_writing_enabled(state.debug_mode()));
 
     // Nothing is being captured, so there is nothing to file yet: opening a directory
     // now would leave an empty one behind every time a switch is flipped between
@@ -584,7 +584,8 @@ mod tests {
     /// night). Stacking does name a session, for the stack's file, and still no folder.
     #[tokio::test]
     async fn guide_saving_opens_no_main_session_in_live_view() {
-        let (state, _disk_writer) = AppState::new_for_testing();
+        let (mut state, _disk_writer) = AppState::new_for_testing();
+        state.set_debug_mode(true);
         state.settings.update(|s| {
             s.stacking = false;
             s.save_stacked_image = true;
@@ -602,6 +603,27 @@ mod tests {
         sync_disk_session(&state, &state.settings.snapshot(), true).await;
         let dir = state.disk_writer.session_dir().expect("the stack is named after a session");
         assert!(!dir.exists(), "{dir:?} was created with no raw frame to hold");
+    }
+
+    /// Guide frames are saved only in debug mode, so outside it a guide switch left on
+    /// from a debug run must not bring the writer up with nothing to write.
+    #[tokio::test]
+    async fn a_guide_switch_alone_keeps_the_writer_off_outside_debug_mode() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|s| {
+            s.stacking = false;
+            s.raw_frame_saving = crate::state::RawFrameSaving {
+                guide: true,
+                ..Default::default()
+            }
+        });
+
+        initialize_capture_session(&state, None).await.unwrap();
+        assert!(!state.disk_writer.is_enabled(), "capture start enabled the writer");
+
+        state.disk_writer.set_enabled(true);
+        sync_disk_session(&state, &state.settings.snapshot(), true).await;
+        assert!(!state.disk_writer.is_enabled(), "a settings sync left the writer on");
     }
 
     /// A mode roll the main capture does not save in must not leave the resume plan on

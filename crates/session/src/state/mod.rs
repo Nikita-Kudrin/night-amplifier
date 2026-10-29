@@ -155,6 +155,8 @@ pub struct AppState {
     pub resume: CaptureResume,
     /// Where the ASTAP and catalog installs stand, recorded from their events.
     pub installs: Arc<Installs>,
+    /// See [`Self::debug_mode`].
+    debug_mode: bool,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -253,9 +255,25 @@ impl AppState {
             plugins: night_amplifier_core::plugins::Plugins::installed(),
             discovery_calls: StdMutex::new(HashMap::new()),
             resume: CaptureResume::default(),
+            debug_mode: false,
         };
 
         (state, disk_writer)
+    }
+
+    /// Whether the server runs with debug logging: the UI's diagnostics and guide-frame
+    /// saving are offered only then.
+    ///
+    /// Decided once, by the server, rather than by each crate asking `tracing`: the answer
+    /// is per call site, so `RUST_LOG=night_amplifier_session=debug` would save guide
+    /// frames behind a UI that hid the switch.
+    pub fn debug_mode(&self) -> bool {
+        self.debug_mode
+    }
+
+    /// Set [`Self::debug_mode`]. Takes `&mut`, so it is fixed once the state is shared.
+    pub fn set_debug_mode(&mut self, enabled: bool) {
+        self.debug_mode = enabled;
     }
 
     /// The slot owning `role`'s handle, monitor and reconnect guard.

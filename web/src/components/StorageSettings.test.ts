@@ -1,18 +1,49 @@
+import {ref} from 'vue'
 import {mount} from '@vue/test-utils'
 import StorageSettings from './StorageSettings.vue'
 import ReconnectSettings from './ReconnectSettings.vue'
-import {settings} from '../test/fixtures'
+import {contextProvides} from '../composables/appContext'
+import {capabilities, settings} from '../test/fixtures'
 import type {SettingsOverrides} from '../test/fixtures'
 import {findToggleByLabel} from '../test/settingsPanel'
 
 describe('StorageSettings', () => {
-    function mountSection(server: SettingsOverrides = {}, props: {hasGuideCamera?: boolean} = {}) {
-        return mount(StorageSettings, {props: {settings: settings(server), ...props}})
+    function mountSection(
+        server: SettingsOverrides = {},
+        props: {hasGuideCamera?: boolean} = {},
+        debugLogging = true,
+    ) {
+        return mount(StorageSettings, {
+            props: {settings: settings(server), ...props},
+            global: {provide: contextProvides({capabilities: ref(capabilities({debug_logging: debugLogging}))})},
+        })
     }
 
     it('offers the guide camera\'s switch only with one attached', () => {
         expect(() => findToggleByLabel(mountSection(), 'Guide')).toThrow()
         expect(findToggleByLabel(mountSection({}, {hasGuideCamera: true}), 'Guide')).toBeTruthy()
+    })
+
+    // The server saves guide frames only in debug mode, so the switch is offered only then.
+    it('offers the guide camera\'s switch only in debug mode', () => {
+        expect(() => findToggleByLabel(mountSection({}, {hasGuideCamera: true}, false), 'Guide')).toThrow()
+        expect(findToggleByLabel(mountSection({}, {hasGuideCamera: true}, true), 'Guide')).toBeTruthy()
+    })
+
+    // The server ignores a guide switch outside debug mode rather than clearing it; the
+    // group is sent whole, so editing a shown switch must not clear the hidden one.
+    it('keeps a hidden guide switch when another raw-frame switch is sent', async () => {
+        const wrapper = mountSection(
+            {raw_frame_saving: {live_view: false, wanderer: false, stacking: false, guide: true}},
+            {hasGuideCamera: true},
+            false,
+        )
+
+        await findToggleByLabel(wrapper, 'Stacking').setValue(true)
+
+        expect(wrapper.emitted('apply')).toEqual([
+            ['raw_frame_saving', {live_view: false, wanderer: false, stacking: true, guide: true}],
+        ])
     })
 
     it('offers the stacked image only while Stacking runs without Wanderer', () => {

@@ -71,7 +71,10 @@ What changes once a guide camera is attached:
 - **Its raw frames have their own switch**, under **Settings → Storage → Save Raw
   Frames**, and go to a folder of their own ending `-guide`. Turning the switch off stops
   the writing on the next frame; so does stopping the camera. A stop ends that folder —
-  starting again opens a new one.
+  starting again opens a new one. Saving guide frames is a diagnostic: the switch is
+  offered only when the server runs with debug logging (`RUST_LOG=debug`). Without it no
+  guide frame is saved, even if the switch was left on, and the switch keeps its setting
+  for the next debug run.
 
 The guide camera is only rendered while someone is looking at it. With the switch off it
 still exposes and still solves, but nothing is processed or encoded for the browser.

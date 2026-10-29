@@ -103,7 +103,9 @@ pub struct Server {
 impl Server {
     /// Create a new server with the given configuration
     pub fn new(config: ServerConfig) -> Self {
-        let (state, disk_writer) = AppState::new();
+        let (mut state, disk_writer) = AppState::new();
+        // Logging is initialized before the server, so this reads the level it settled on.
+        state.set_debug_mode(tracing::enabled!(tracing::Level::DEBUG));
         let state_arc = Arc::new(state);
 
         // Initialize Push-To plugin if available

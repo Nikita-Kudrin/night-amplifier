@@ -307,8 +307,11 @@ the server sends no display text the UI does not show.
   process at first call. C `long` is 32-bit on Windows, widen with `i64::from`.
 - **Guide camera is one thread, not the pipeline**: nothing stacked/queued, started by `connect` so solving/preview
   work *while* framing. Post-processing runs only while `guide_stream.has_viewers()`; solving/raw saving sit above
-  both early exits. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's; both
-  encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
+  both early exits. Raw saving is a debug-mode diagnostic (`saves_guide_raw_frames(state.debug_mode())`): outside
+  it a saved switch is ignored, not cleared. `AppState::debug_mode` is set once by the server and is what
+  capabilities report as `debug_logging`, since `tracing::enabled!` answers per crate and the UI could hide a switch the
+  session still obeyed. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's;
+  both encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
 - **QHY and ToupTek handles are pointers** the close frees: every shim call goes through `open_sdk`, which refuses
   once the lease has closed. QHY's frame calls take no length and may write `GetQHYCCDMemLength` bytes, past the
   ROI's frame; a smaller buffer reads through a scratch copy. ToupTek refuses a buffer under its RAW frame.
@@ -709,5 +712,5 @@ renders its own small jitter rather than a hard curve-flip. `IncrementalPixel` (
 read+written whole every frame — already the memory ceiling.
 
 `--span-timings` logs every stage span's duration (per-frame work belongs at `info_span!`, not `debug_span!`, or
-it's invisible); `--features telemetry` adds histograms/counters/queue-depth gauges, and the UI shows the **drop
-rate** over delivered frames. Build `--profile profiling` for `perf`.
+it's invisible); `--features telemetry` adds histograms/counters/queue-depth gauges, and in debug mode the UI
+shows the **drop rate** over delivered frames (beside LiveView's FPS and resolution). Build `--profile profiling` for `perf`.
