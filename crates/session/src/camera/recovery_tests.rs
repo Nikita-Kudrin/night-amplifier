@@ -55,7 +55,7 @@ pub(super) struct FakeCatalog {
     held: Mutex<Option<&'static str>>,
     open_calls: AtomicUsize,
     /// Cameras this bus opens have a cooler.
-    cooled: AtomicBool,
+    pub(super) cooled: AtomicBool,
     /// Shared by every camera this bus opens: a test scripts the next stall, failure,
     /// lost device or `status()` panic, and counts releases, whichever handle the server
     /// holds. `on_dew_heater` runs from inside `install_camera`.

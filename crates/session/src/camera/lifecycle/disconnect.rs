@@ -23,9 +23,12 @@ const WARMUP_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 const WARMUP_WATCH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How long a Disconnect waits for the capture it stopped to wind down and hand the
-/// handle back. The final stack is written first: up to 7.5 s on the Pi (2026-09-20).
+/// handle back. Past it, a cooled camera answers "warming up" and the hand-back starts the
+/// warm-up (`return_from_capture`). Stop's drain is itself 5 s and the stack is saved after
+/// it (up to 7.5 s on the Pi, 2026-09-20), so a Disconnect during a capture usually
+/// answers that way: at once, rather than 15 s on with nothing on screen.
 #[cfg(not(test))]
-const CAPTURE_STOP_WAIT: Duration = Duration::from_secs(15);
+const CAPTURE_STOP_WAIT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 pub(in crate::camera) const CAPTURE_STOP_WAIT: Duration = Duration::from_secs(3);
 
@@ -78,16 +81,27 @@ impl DisconnectCause {
 /// Disconnect a camera, ending its session in bounded time whatever it is doing.
 ///
 /// The observer's Disconnect is a must (2026-09-20: a camera unplugged mid-session could be
-/// neither disconnected nor started until the board was power-cycled). The imaging
-/// camera's capture is stopped first, the stack saved as on any Stop. A cooled camera
-/// warms up first while that can work — answering, with a handle to command — and closes
-/// at once when it cannot or `warmup` says to skip it. A warm-up always ends by
-/// [`WARMUP_DEADLINE`].
+/// neither disconnected nor started until the board was power-cycled). A capture is stopped
+/// first, its stack saved. A cooled camera warms up first while it answers and has a handle
+/// to command, else closes at once; a warm-up always ends by [`WARMUP_DEADLINE`]. On a task
+/// of its own: a dropped caller (a page reload, a phone asleep) stopped 2026-10-24's capture
+/// three times and never warmed up or closed the camera.
 pub async fn disconnect(
     state: &Arc<AppState>,
     camera_id: &str,
     warmup: WarmupPolicy,
 ) -> ApiResult<DisconnectOutcome> {
+    tokio::spawn(disconnect_to_the_end(Arc::clone(state), camera_id.to_string(), warmup))
+        .await
+        .unwrap_or_else(|e| Err(ApiError::Internal(format!("the disconnect failed: {e}"))))
+}
+
+async fn disconnect_to_the_end(
+    state: Arc<AppState>,
+    camera_id: String,
+    warmup: WarmupPolicy,
+) -> ApiResult<DisconnectOutcome> {
+    let (state, camera_id) = (&state, camera_id.as_str());
     let Some(connected) = state.roster.get(camera_id) else {
         warn!(camera_id = %camera_id, "Attempted to disconnect non-connected camera");
         return Err(ApiError::CameraNotConnected(camera_id.to_string()));
