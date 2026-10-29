@@ -133,8 +133,10 @@ unplugged, or one still being reconnected.
 
 - **During a capture**, Disconnect on the imaging camera asks first, then stops the capture
   the way Stop does (the stack is saved) and disconnects. The sub being exposed is
-  discarded rather than waited for. The guide camera disconnects without asking; the
-  capture carries on.
+  discarded rather than waited for. A cooled camera shows *Warming up* within a few
+  seconds, while the stack is still being saved, and its warm-up starts once the capture
+  has finished. Reloading the page or locking the phone in the meantime does not cancel
+  the Disconnect. The guide camera disconnects without asking; the capture carries on.
 - **A cooled camera warms up first**, so its sensor is not shocked or fogged by a sudden
   change. The camera shows *Warming up* with the longest it can still take, and disconnects
   on its own once warm — after about 5½ minutes at most.

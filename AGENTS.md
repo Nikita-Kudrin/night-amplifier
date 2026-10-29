@@ -294,8 +294,10 @@ the server sends no display text the UI does not show.
   `transition` (compare-and-set). Every handle/monitor/cancel-token lives in `slot(role)`. `connect` to a taken role
   swaps while idle, else `CameraRoleBusy`.
 - **Cooler lifecycle**: `Precooling → Idle → Capturing|Guiding → WarmingUp`, ramped ≤5°C/min. **Disconnect** stops
-  capture first and cuts an in-flight sub short (≤15 s, stack saved) before closing the cooler — Stop alone once let
-  a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor.
+  capture first and cuts an in-flight sub short (stack saved) before closing the cooler — Stop alone once let
+  a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor. It waits 5 s for the
+  capture, then answers *WarmingUp* and the hand-back starts the warm-up. It runs on its own task: 2026-10-24's
+  dropped requests (a page reload) only stopped the capture and never warmed up or closed the camera.
 - **Per-camera profiles** are keyed `"{provider}/{model}"`; **telescope profiles** by camera *name*, seeding the
   solver's FOV — without a seed, two bodies of one model share one FOV and ASTAP fails to solve (once cost 19 min).
   A settings write restarts a solve only if the **solver camera's** resolved optics or binning change
