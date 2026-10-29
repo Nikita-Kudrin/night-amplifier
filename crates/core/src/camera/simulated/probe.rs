@@ -7,7 +7,7 @@ use crate::camera::error::{CameraError, CameraResult};
 use crate::camera::types::SensorType;
 use crate::CfaPattern;
 
-use super::registry::{FITS_EXTENSIONS, PNG_EXTENSIONS, TIFF_EXTENSIONS};
+use super::registry::{is_ser_file, FITS_EXTENSIONS, PNG_EXTENSIONS, TIFF_EXTENSIONS};
 
 /// Result of probing an image file
 pub struct ProbeResult {
@@ -27,7 +27,9 @@ pub fn probe_image_dimensions(path: &Path) -> CameraResult<ProbeResult> {
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
 
-    if TIFF_EXTENSIONS.contains(&ext.as_str()) {
+    if is_ser_file(path) {
+        probe_ser_dimensions(path)
+    } else if TIFF_EXTENSIONS.contains(&ext.as_str()) {
         probe_tiff_dimensions(path)
     } else if FITS_EXTENSIONS.contains(&ext.as_str()) {
         probe_fits_dimensions(path)
@@ -39,6 +41,22 @@ pub fn probe_image_dimensions(path: &Path) -> CameraResult<ProbeResult> {
             ext
         )))
     }
+}
+
+/// A SER header names its mosaic; it carries no pixel size.
+fn probe_ser_dimensions(path: &Path) -> CameraResult<ProbeResult> {
+    let reader = crate::ser::SerReader::open(path).map_err(|e| CameraError::ImageReadFailed(e.to_string()))?;
+    let header = reader.header();
+    let bayer_pattern = header.color_id.to_cfa_pattern();
+    let sensor_type = if header.color_id == crate::ser::SerColorId::Mono { SensorType::Mono } else { SensorType::Color };
+    Ok(ProbeResult {
+        width: header.width,
+        height: header.height,
+        sensor_type,
+        bayer_pattern,
+        pixel_size_x: 0.0,
+        pixel_size_y: 0.0,
+    })
 }
 
 fn probe_tiff_dimensions(path: &Path) -> CameraResult<ProbeResult> {

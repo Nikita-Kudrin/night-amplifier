@@ -115,7 +115,7 @@ pub use ffi_safety::{
 
 // Planetary stacking support
 pub use planetary::{
-    compute_alignment, compute_quality, stack_planetary, AlignmentRoi, PlanetaryConfig,
+    compute_quality, stack_planetary, AlignmentRoi, PlanetaryConfig,
     PlanetaryStackMethod, PlanetaryStackStats, PlanetaryStacker, QualityMetric, ScoredFrame,
 };
 

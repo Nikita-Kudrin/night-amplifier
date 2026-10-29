@@ -104,7 +104,8 @@ a stack cut from it put IC 63 0.46 of a frame off); a test wanting one calls
 contents too. Coordinates measured on a stack name its size (`NamedTarget::frame`).
 Measurement instruments (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
 A stacking test replays a fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` →
-`stack_frame`), never a re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
+`stack_frame`; a SER in the directory is one frame per frame it holds, its mosaic served raw), never a re-wired
+copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
 production stacks at 87 %. A whole session at shipped settings is `instruments::replayed` (with `stack_snapshots`/
 `accumulator_snapshots`, always on `load_sub`): stacked once a run into `target/tmp/replay-cache/<run>` (`replay_cache`;
 nextest's run id, else a fresh directory per process: a bare pid repeats in a container), read back bit for bit by
@@ -359,7 +360,10 @@ above the last verdict.
 a drifting stack's border saved grainier than it streamed.
 
 SER (planetary) is uncompressed with per-frame timestamps; color id 0 is Mono, 8-11 are BayerRGGB/GRBG/GBRG/BGGR,
-100/101 are RGB/BGR. Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser`) and
+100/101 are RGB/BGR. **Its header counts its frames before the stack is done**: the storage task finalizes the
+container as it ends (`finish_container`; `EndSession` waits for every pipeline thread, and 2026-10-24's 26.5 GB Moon
+kept a count of 0 behind a stacker until the power went), and the writer rewrites the count every 32 frames and on
+every flush. `SerReader` trusts a header the file size agrees with, else reads the whole frames the file holds. Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser`) and
 `captures/stacked/...-stacking.fits`. **A resumed capture rejoins its folder and must not overwrite it**: the
 resume plan carries `next_frame`, and video writes `capture_2.ser`, etc. **A session is a name, not a folder**:
 the worker creates the folder with the first frame (eager creation once left 23 empty `-live` folders in a night),
@@ -486,8 +490,24 @@ set: nebula maxima, M42's fat stars). It replaced a 25 % match share that a thin
 detections) never reaches. A vote also pays for the ~10^4 offsets it searched (`Support::searched`): unpriced, 1
 in ~100 unrelated sparse fields passed. A refit with < 8 pairs holds scale at 1 (a thin fit carried 1.0034).
 
-**Planetary**: surface feature cross-correlation in an ROI (no stars needed). **Comet** [Pro]: centroids the
-nucleus so stars trail while the comet stacks sharp.
+**Planetary**: surface cross-correlation in a window half the frame's short side (on the reference's centroid with
+auto-tracking), searched **coarse to fine** (`planetary::alignment`): exhaustive only on the coarsest 2^k level of a
+`LuminancePyramid`, then a climb to a 3x3 local maximum on each finer one, whose neighbours the subpixel fit reuses
+(fixed ±2 px boxes could hand back their own edge); the reference's windows are built once (`AlignmentReference`).
+The exhaustive ±50 px search over 1504² took 134 s a frame on the Pi (2026-10-24's Moon) and Stop waited behind it;
+now ~8 ms on 20 x86 cores. The search starts at the **last correlated shift**, then ±200 px around the centroids'
+estimate: that Moon drifted 255 px in 80 s, and 77 % of its frames matched on the edge of a ±50 px search around 0.
+A match on the search's or the frame's edge (`TargetOutOfReach`) or under 0.3 (`SurfaceNotFound`) is **not
+stacked**, and the status bar says which; only a flat window stacks by centroids. Pro's multi-point gets the global
+shift as its `Search` (±8 px a point) and the session's pyramids, building none.
+
+**The window keeps 16 px from the frame's edges** (an eighth of a short side at most): clamped against one, a
+frame that had not moved peaked where its outward neighbour lay off the frame, so a planet off to one side lost
+every frame that had not moved in. Its NCC sums are taken about the reference's mean: one-pass f32 `E[x²]-E[x]²`
+placed a 0.07 %-contrast surface 3 px off at NCC 0.99. Guarded on the `moon-drifting-imx533-ser` fixture
+(`planetary_tests`, oracle shifts in `planetary::FRAMES`) and `planetary_moon_benchmark`.
+
+**Comet** [Pro]: centroids the nucleus so stars trail while the comet stacks sharp.
 
 A sub that **will not register** is explained before it is called movement (`FrameGate::explain_unregistered`):
 doubled stars (a bump: companion offsets that *agree*, `detection::doubled_star_share`, judged against the
@@ -677,7 +697,9 @@ INFO events, self-contained, collected on `spawn_blocking` under a 5 s timeout. 
 
 A dropped *capture* frame is signal lost for good, so render/stacking favour stacking: the display copy is gated
 by `want_display` but the frame always stacks; the capture→stacking queue is **latency-bounded** at 2s of
-exposures; per-stack estimates (white balance, background) are reused and refreshed only on proportional depth
+exposures. **Except after Stop**: queued frames stack for `STOP_DRAIN` (5 s, from the first Stop, `cancelled_for`),
+then are taken off unstacked and the stack saved (`capture::stop_drain`; their raw files and the SER are kept) —
+2026-10-24 sat 42 minutes in *Stopping* behind 19 frames. A capture that ends on its own still drains whole. Per-stack estimates (white balance, background) are reused and refreshed only on proportional depth
 growth.
 
 **A static sky must render the same frame after frame**: live view re-solves everything every frame, which is what

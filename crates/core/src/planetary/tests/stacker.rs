@@ -1,4 +1,4 @@
-use super::common::{create_planetary_frame, create_test_frame};
+use super::common::{create_planetary_frame, create_test_frame, textured_frame};
 use super::*;
 
 #[test]
@@ -252,4 +252,19 @@ fn test_auto_tracking() {
     let stats = stacker.statistics();
     // The stacker should successfully find the large offset
     assert!(stats.max_offset > 14.0);
+}
+
+/// A frame the reference's window cannot place is scored but left out: stacked at its best
+/// guess, an unrelated or out-of-reach frame smeared the stack.
+#[test]
+fn a_frame_the_window_cannot_place_is_left_out() {
+    let config = PlanetaryConfig { search_radius: 10, auto_tracking: false, ..Default::default() };
+    let mut stacker = PlanetaryStacker::new(config);
+    stacker.add_frame(&textured_frame(256, 256, (0.0, 0.0), 41)).unwrap();
+    stacker.add_frame(&textured_frame(256, 256, (3.0, -2.0), 41)).unwrap();
+    stacker.add_frame(&textured_frame(256, 256, (0.0, 0.0), 42)).unwrap();
+    stacker.add_frame(&textured_frame(256, 256, (40.0, 0.0), 41)).unwrap();
+    assert_eq!(stacker.frame_count(), 2, "an unrelated frame and one 40 px off a ±10 px search were stacked");
+    let offset = stacker.frames[1].offset;
+    assert!((offset.0 + 3.0).abs() < 0.3 && (offset.1 - 2.0).abs() < 0.3, "{offset:?}");
 }

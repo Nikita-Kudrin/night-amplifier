@@ -8,7 +8,7 @@ Traditional star-based alignment. The software detects stars, matches triangles 
 Short sub-exposures of a bright object work too. Noise on a bright nebula breaks it into dozens of false "stars", brighter than the real ones, so the matcher keeps only the brightest detection in each patch of sky. If that still finds no alignment, the software looks for the one shift that most star pairs agree on, trying a few small turns as well, since the field of an alt-az mount slowly rotates. That is enough for a handful of real stars among hundreds of detections: 0.7 s subs of the Cat's Eye Nebula hold about 15. A shift found this way has to stand out from all the shifts it was picked from, so a different patch of sky is not mistaken for this one. Longer exposures or more gain still give more stars to align on.
 
 ## Planetary Stacking
-(Also known as Lucky Imaging). This mode uses correlation-based alignment for high-framerate planetary or lunar targets where stars are absent. It uses percentile stacking (e.g., top 10% of frames) based on sharpness metrics.
+For the Moon, the Sun and the planets: high frame rates and no stars. Each frame is aligned on the target's surface by correlation, over a window half the frame's short side, centred on the target with **Auto tracking** on. The search follows the target as it drifts, so a Moon that wanders hundreds of pixels across the sensor during a capture stays aligned, and a frame it cannot place is left out of the stack rather than stacked in the wrong place: the status bar says whether the target moved farther than alignment can follow (it has drifted out of the window's reach; re-centre it and start again) or nothing in the frame matched (cloud, or a frame off the target). A planet placed off to one side, to drift across an untracked field, aligns as well as a centred one. The stack averages every frame the stacker keeps up with; all of them are in the SER video either way. With Pro, **Multi-point alignment** also takes out the small local distortions seeing adds.
 
 ## Comet Stacking (Pro)
 Uses an ROI (Region of Interest) around the comet's nucleus to align frames on the moving comet, while aggressive rejection algorithms drop trailing stars.
@@ -192,8 +192,12 @@ saved frames get their own notice when the guide camera stops — **Saving guide
 so wait for both if both were saving. Settings are written the same way
 each time you change them.
 
-On a slow card **Stop** can take a while: the camera is free again at once (a disconnect starts
-warming it up), but the capture reads *Stopping* until the files are on the card. If the drive stops
+**Stop** stops: frames still waiting to be stacked join the stack for up to 5 seconds, then the
+stack is saved without the rest (their raw frames, or the whole SER video, are saved regardless). The
+SER video's frame count is written as soon as its last frame is, and every few frames while it
+records, so a power cut costs at most its last second or two. On a slow card **Stop** can still take
+a while: the camera is free again once the stack is saved (a disconnect starts warming it up then),
+but the capture reads *Stopping* until the files are on the card. If the drive stops
 responding altogether — unplugged, or a card that hangs — the app gives up after a minute without
 progress and says **Captures not confirmed on disk**, rather than staying in *Stopping* all night;
 if the stack itself could not be handed over, it says so too.

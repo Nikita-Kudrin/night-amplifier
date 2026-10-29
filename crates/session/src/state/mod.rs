@@ -509,6 +509,11 @@ impl AppState {
         self.capture.reset_cancel();
     }
 
+    /// How long ago Stop (or a Disconnect or shutdown, which stop first) was asked for.
+    pub fn cancelled_for(&self) -> Option<std::time::Duration> {
+        self.capture.cancelled_for()
+    }
+
     /// Reset the counters for a new capture, and stamp its start.
     pub fn reset_session(&self) {
         let now_ms = std::time::SystemTime::now()

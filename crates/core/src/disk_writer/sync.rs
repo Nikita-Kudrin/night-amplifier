@@ -277,6 +277,36 @@ mod tests {
         assert_eq!(reader.header().frame_count, 3);
     }
 
+    /// The storage task finishes the container when its frames end, so its header counts
+    /// them while the session stays open for a stack that may come minutes later; the end
+    /// of the session leaves it as it was.
+    #[test]
+    fn a_finished_container_counts_its_frames_with_the_session_still_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(dir.path()));
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        let session = handle.start_session(WritingSessionType::VideoContainer, "-planetary").unwrap();
+        for n in 1..=3 {
+            assert!(queue_raw(&handle, n));
+        }
+        handle.finish_container(SyncGroup::Owned);
+        let after_other_group = handle.sync(SyncGroup::Shared).unwrap();
+        let open_count = crate::ser::SerReader::open(session.join("capture.ser")).unwrap().header().frame_count;
+        handle.finish_container(SyncGroup::Shared);
+        let _ = handle.sync(SyncGroup::Shared).unwrap();
+        let finished = std::fs::read(session.join("capture.ser")).unwrap();
+        assert_eq!(handle.session_dir().as_deref(), Some(session.as_path()), "the session stays open");
+        handle.end_session();
+        drop(handle);
+        writer_task.join().unwrap();
+
+        assert_eq!(after_other_group.failed, 0);
+        assert_eq!(open_count, 3, "a sync of the open container counts its frames too");
+        assert_eq!(u32::from_le_bytes(finished[38..42].try_into().unwrap()), 3);
+        assert_eq!(std::fs::read(session.join("capture.ser")).unwrap(), finished, "ending the session rewrote it");
+    }
+
     /// A container still open when a sync comes has its buffered frames pushed out first:
     /// synced from under a `BufWriter`, the file on disk held the header alone.
     #[test]

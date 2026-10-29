@@ -103,6 +103,8 @@ pub enum DiskWriterMessage {
     WriteFrame(Box<WriteRequest>),
     /// End the current capture session
     EndSession,
+    /// Finalize the group's open SER container, leaving its session open for the stack.
+    FinishContainer(super::SyncGroup),
     /// Sync everything the group wrote so far to the device, then answer. Queued behind
     /// every write before it, so the answer covers them all.
     Sync(super::SyncGroup, std::sync::mpsc::Sender<super::SyncReport>),

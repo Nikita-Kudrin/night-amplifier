@@ -21,7 +21,7 @@ mod stacker;
 mod tests;
 
 // Re-export public types
-pub use alignment::{compute_alignment, compute_centroid};
+pub use alignment::{align, compute_centroid, Alignment, AlignmentReference, Fit, LuminancePyramid, Search};
 pub use config::{
     AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats, QualityMetric,
 };

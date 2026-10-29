@@ -144,6 +144,11 @@ impl DiskWriter {
                     }
                 }
                 DiskWriterMessage::EndSession => self.finalize_ser(),
+                DiskWriterMessage::FinishContainer(group) => {
+                    if self.ser_writer.as_ref().is_some_and(|active| active.group == group) {
+                        self.finalize_ser();
+                    }
+                }
                 DiskWriterMessage::Sync(group, reply) => {
                     let job = self.take_for_sync(group, reply);
                     if let Err(mpsc::SendError(job)) = syncer.send(job) {
@@ -182,8 +187,8 @@ impl DiskWriter {
     /// Close the open SER container, writing its frame count into the header.
     ///
     /// A container left unfinalized is unreadable, so every path that stops writing to
-    /// one goes through here: the session ending, a session roll, and the writer thread
-    /// shutting down.
+    /// one goes through here: its frames ending, the session ending, a session roll, and the
+    /// writer thread shutting down.
     fn finalize_ser(&mut self) {
         let Some(active) = self.ser_writer.take() else {
             return;
@@ -200,8 +205,8 @@ impl DiskWriter {
     }
 
     /// Hand over everything `group` wrote since the last sync. A container still open is
-    /// flushed out of its buffer first, so the sync covers its frames (its header's count is
-    /// written only when it is finalized), and stays recorded for the next sync, which must
+    /// flushed out of its buffer first, its header counting them, so the sync covers a file a
+    /// reader trusting the header reads whole; it stays recorded for the next sync, which must
     /// cover what is appended to it and finalized after this one.
     fn take_for_sync(&mut self, group: SyncGroup, reply: mpsc::Sender<super::SyncReport>) -> SyncJob {
         let open = self.ser_writer.as_mut().filter(|active| active.group == group);

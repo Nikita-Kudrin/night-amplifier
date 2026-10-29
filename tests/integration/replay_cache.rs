@@ -465,6 +465,8 @@ impl Record for RejectionReason {
             StarsDoubled => 6,
             StackerError => 7,
             Outvoted => 8,
+            TargetOutOfReach => 9,
+            SurfaceNotFound => 10,
         };
         w.u32(code)
     }
@@ -481,6 +483,8 @@ impl Record for RejectionReason {
             6 => StarsDoubled,
             7 => StackerError,
             8 => Outvoted,
+            9 => TargetOutOfReach,
+            10 => SurfaceNotFound,
             code => return Err(invalid(format!("no rejection reason {code}"))),
         })
     }

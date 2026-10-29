@@ -4,6 +4,9 @@ use super::color_id::SerColorId;
 use super::SER_SIGNATURE;
 use crate::error::{Result, StackError};
 
+/// Where the header's frame count sits: the writer rewrites it in place while recording.
+pub const FRAME_COUNT_OFFSET: u64 = 38;
+
 /// SER file header (178 bytes).
 #[derive(Debug, Clone)]
 pub struct SerHeader {
@@ -113,7 +116,7 @@ impl SerHeader {
         let width = read_u32_le(bytes, 26);
         let height = read_u32_le(bytes, 30);
         let bit_depth = read_u32_le(bytes, 34);
-        let frame_count = read_u32_le(bytes, 38);
+        let frame_count = read_u32_le(bytes, FRAME_COUNT_OFFSET as usize);
 
         let color_id = SerColorId::from_u32(color_id_raw).ok_or_else(|| {
             StackError::InvalidConfiguration(format!("Unknown SER color ID: {}", color_id_raw))

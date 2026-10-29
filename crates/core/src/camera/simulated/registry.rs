@@ -18,6 +18,8 @@ pub const TIFF_EXTENSIONS: &[&str] = &["tif", "tiff"];
 pub const FITS_EXTENSIONS: &[&str] = &["fit", "fits"];
 /// Supported image file extensions for PNG
 pub const PNG_EXTENSIONS: &[&str] = &["png"];
+/// SER video, one source per frame it holds
+pub const SER_EXTENSIONS: &[&str] = &["ser"];
 
 /// Global state for simulated camera directories
 /// Supports multiple directories, each representing a separate simulated camera
@@ -157,8 +159,16 @@ pub fn is_supported_image_file(path: &Path) -> bool {
             TIFF_EXTENSIONS.contains(&ext_lower.as_str())
                 || FITS_EXTENSIONS.contains(&ext_lower.as_str())
                 || PNG_EXTENSIONS.contains(&ext_lower.as_str())
+                || SER_EXTENSIONS.contains(&ext_lower.as_str())
         })
         .unwrap_or(false)
+}
+
+/// Whether `path` is a SER video rather than a single image.
+pub fn is_ser_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| SER_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
 }
 
 /// Provider for simulated cameras

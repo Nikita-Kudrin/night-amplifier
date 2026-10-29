@@ -49,8 +49,8 @@ impl Wanderer {
 /// couldn't be placed against the reference counts — before the frame gate existed,
 /// every rejection meant that, but the gate also rejects frames that aligned fine yet
 /// were soft or loose, and resetting on those would restart the stack every time a
-/// cloud crosses. A mode reporting no reason (comet, planetary) keeps the original
-/// behaviour: not stacking is the only signal available.
+/// cloud crosses. A mode reporting no reason (comet) keeps the original behaviour: not
+/// stacking is the only signal available.
 fn detected_movement(
     wanderer_mode: bool,
     stacking_enabled: bool,
@@ -77,6 +77,8 @@ mod tests {
             RejectionReason::TooFewStars,
             RejectionReason::RegistrationFailed,
             RejectionReason::TooFewCorrespondences,
+            RejectionReason::TargetOutOfReach,
+            RejectionReason::SurfaceNotFound,
         ] {
             assert!(
                 moved(true, true, false, Some(reason)),

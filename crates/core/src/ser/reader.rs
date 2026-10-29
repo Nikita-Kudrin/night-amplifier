@@ -7,6 +7,7 @@ use crate::frame::{Frame, PixelFormat};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use tracing::warn;
 
 /// Header size in bytes.
 const HEADER_SIZE: u64 = 178;
@@ -31,8 +32,24 @@ impl SerReader {
             StackError::InvalidConfiguration(format!("Failed to read SER header: {}", e))
         })?;
 
-        let header = SerHeader::from_bytes(&header_bytes)?;
-        let timestamps = read_timestamps(&mut reader, &header)?;
+        let mut header = SerHeader::from_bytes(&header_bytes)?;
+        let file_size = reader
+            .seek(SeekFrom::End(0))
+            .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?;
+        let layout = FrameLayout::of(&header, file_size);
+        if layout.frames != header.frame_count {
+            warn!(
+                path = %path.as_ref().display(),
+                header_frames = header.frame_count,
+                frames = layout.frames,
+                "SER header's frame count disagrees with the file; reading the frames it holds"
+            );
+            header.frame_count = layout.frames;
+        }
+        let timestamps = if layout.timestamps { Some(read_timestamps(&mut reader, &header)?) } else { None };
+        reader
+            .seek(SeekFrom::Start(HEADER_SIZE))
+            .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?;
 
         Ok(Self {
             reader,
@@ -63,11 +80,27 @@ impl SerReader {
 
     /// Reads a specific frame by index.
     pub fn read_frame(&mut self, index: u32) -> Result<Frame> {
+        self.seek_to(index)?;
+        self.read_next_frame()
+    }
+
+    /// Reads a frame as the sensor wrote it: a Bayer or mono frame stays one plane, for a
+    /// pipeline that runs its own raw-CFA stage and demosaic (the simulated camera's).
+    pub fn read_mosaic(&mut self, index: u32) -> Result<Frame> {
+        self.seek_to(index)?;
+        let buffer = self.read_frame_bytes()?;
+        let (width, height) = (self.header.width as usize, self.header.height as usize);
+        if self.header.color_id.channels() == 1 {
+            return Frame::from_raw(&buffer, width, height, 1, determine_bayer_format(&self.header));
+        }
+        decode_frame(&buffer, &self.header)
+    }
+
+    fn seek_to(&mut self, index: u32) -> Result<()> {
         if index >= self.header.frame_count {
             return Err(StackError::InvalidConfiguration(format!(
-                "Frame index {} out of range (max {})",
-                index,
-                self.header.frame_count - 1
+                "Frame index {} out of range ({} frames)",
+                index, self.header.frame_count
             )));
         }
 
@@ -75,19 +108,20 @@ impl SerReader {
         self.reader
             .seek(SeekFrom::Start(frame_offset))
             .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?;
+        Ok(())
+    }
 
-        self.read_next_frame()
+    fn read_frame_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buffer = vec![0u8; self.header.frame_size()];
+        self.reader.read_exact(&mut buffer).map_err(|e| {
+            StackError::InvalidConfiguration(format!("Failed to read frame data: {}", e))
+        })?;
+        Ok(buffer)
     }
 
     /// Reads the next frame sequentially.
     pub fn read_next_frame(&mut self) -> Result<Frame> {
-        let frame_size = self.header.frame_size();
-        let mut buffer = vec![0u8; frame_size];
-
-        self.reader.read_exact(&mut buffer).map_err(|e| {
-            StackError::InvalidConfiguration(format!("Failed to read frame data: {}", e))
-        })?;
-
+        let buffer = self.read_frame_bytes()?;
         decode_frame(&buffer, &self.header)
     }
 
@@ -124,42 +158,49 @@ impl<'a> Iterator for SerFrameIterator<'a> {
     }
 }
 
-fn read_timestamps(reader: &mut BufReader<File>, header: &SerHeader) -> Result<Option<Vec<u64>>> {
-    let frame_data_size = HEADER_SIZE as usize + header.frame_size() * header.frame_count as usize;
-    let timestamp_size = header.frame_count as usize * 8;
+/// How many whole frames a file holds, and whether its timestamp trailer is there.
+///
+/// The header is trusted when the size agrees with it, trailer or not. Otherwise the size
+/// decides: the writer rewrites the count only every few frames (and a capture that never
+/// finalized, like 2026-10-24's 26.5 GB Moon, kept 0), so frames past it, and a frame cut
+/// short by a power loss, are read as the frames that are whole.
+#[derive(Debug, PartialEq, Eq)]
+struct FrameLayout {
+    frames: u32,
+    timestamps: bool,
+}
 
-    let file_size = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?
-        as usize;
-
-    if file_size >= frame_data_size + timestamp_size {
-        reader
-            .seek(SeekFrom::Start(frame_data_size as u64))
-            .map_err(|e| {
-                StackError::InvalidConfiguration(format!("Seek to timestamps failed: {}", e))
-            })?;
-
-        let mut timestamps = Vec::with_capacity(header.frame_count as usize);
-        for _ in 0..header.frame_count {
-            let mut ts_bytes = [0u8; 8];
-            reader.read_exact(&mut ts_bytes).map_err(|e| {
-                StackError::InvalidConfiguration(format!("Failed to read timestamp: {}", e))
-            })?;
-            timestamps.push(u64::from_le_bytes(ts_bytes));
+impl FrameLayout {
+    fn of(header: &SerHeader, file_size: u64) -> Self {
+        let frame_size = header.frame_size().max(1) as u64;
+        let claimed = u64::from(header.frame_count);
+        let data_end = HEADER_SIZE + claimed * frame_size;
+        if claimed > 0 && file_size == data_end + claimed * 8 {
+            return Self { frames: header.frame_count, timestamps: true };
         }
-
-        reader
-            .seek(SeekFrom::Start(HEADER_SIZE))
-            .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?;
-
-        Ok(Some(timestamps))
-    } else {
-        reader
-            .seek(SeekFrom::Start(HEADER_SIZE))
-            .map_err(|e| StackError::InvalidConfiguration(format!("Seek failed: {}", e)))?;
-        Ok(None)
+        if file_size == data_end {
+            return Self { frames: header.frame_count, timestamps: false };
+        }
+        let whole = file_size.saturating_sub(HEADER_SIZE) / frame_size;
+        Self { frames: u32::try_from(whole).unwrap_or(u32::MAX), timestamps: false }
     }
+}
+
+fn read_timestamps(reader: &mut BufReader<File>, header: &SerHeader) -> Result<Vec<u64>> {
+    let frame_data_size = HEADER_SIZE + header.frame_size() as u64 * u64::from(header.frame_count);
+    reader
+        .seek(SeekFrom::Start(frame_data_size))
+        .map_err(|e| StackError::InvalidConfiguration(format!("Seek to timestamps failed: {}", e)))?;
+
+    let mut timestamps = Vec::with_capacity(header.frame_count as usize);
+    for _ in 0..header.frame_count {
+        let mut ts_bytes = [0u8; 8];
+        reader.read_exact(&mut ts_bytes).map_err(|e| {
+            StackError::InvalidConfiguration(format!("Failed to read timestamp: {}", e))
+        })?;
+        timestamps.push(u64::from_le_bytes(ts_bytes));
+    }
+    Ok(timestamps)
 }
 
 fn decode_frame(buffer: &[u8], header: &SerHeader) -> Result<Frame> {

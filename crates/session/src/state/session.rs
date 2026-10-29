@@ -319,6 +319,20 @@ mod tests {
     }
 
     #[test]
+    fn the_cancel_is_timed_from_the_first_request_until_reset() {
+        let capture = CaptureControl::default();
+        assert_eq!(capture.cancelled_for(), None);
+        capture.request_cancel();
+        std::thread::sleep(Duration::from_millis(30));
+        capture.request_cancel();
+        let since = capture.cancelled_for().expect("cancelled");
+        assert!(since >= Duration::from_millis(30), "a second Stop restarted the clock: {since:?}");
+        capture.reset_cancel();
+        assert_eq!(capture.cancelled_for(), None);
+        assert!(!capture.is_cancelled());
+    }
+
+    #[test]
     fn a_resume_plan_follows_its_capture_until_cleared() {
         let resume = CaptureResume::default();
         resume.edit_plan(|_| panic!("no plan to edit"));
@@ -434,6 +448,9 @@ impl CaptureResume {
 pub struct CaptureControl {
     state: Mutex<CaptureState>,
     cancel: AtomicBool,
+    /// When the cancel was first asked for: the stacker's drain is timed from it, and
+    /// 2026-10-24 saw one Stop and three Disconnects, none of which may push it back.
+    cancelled_at: Mutex<Option<Instant>>,
 }
 
 impl CaptureControl {
@@ -462,11 +479,18 @@ impl CaptureControl {
     }
 
     pub fn request_cancel(&self) {
+        self.cancelled_at.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Instant::now);
         self.cancel.store(true, Ordering::SeqCst);
     }
 
     pub fn reset_cancel(&self) {
         self.cancel.store(false, Ordering::SeqCst);
+        *self.cancelled_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// How long ago the cancel was first asked for; `None` while it stands reset.
+    pub fn cancelled_for(&self) -> Option<Duration> {
+        self.cancelled_at.lock().unwrap_or_else(|e| e.into_inner()).map(|at| at.elapsed())
     }
 }
 
