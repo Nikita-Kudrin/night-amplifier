@@ -170,43 +170,34 @@ impl AutoStretchConfig {
         }
     }
 
-    pub fn from_profile(is_planetary: bool, aggressiveness: StretchAggressiveness) -> Self {
-        if is_planetary {
-            Self {
-                target_background: 0.05,
-                black_point_sigma: 3.0,
+    /// The deep-sky stretch for `aggressiveness`. Planetary has no profile here: its levels
+    /// are read off the target (`render::planetary`).
+    pub fn from_profile(aggressiveness: StretchAggressiveness) -> Self {
+        match aggressiveness {
+            // Star Fields, and **asinh on purpose**: a product decision. The mode shows a field of
+            // stars, not nebulosity/galaxy structure, so asinh's gentler curve and brighter sky are
+            // wanted. Cost, measured on a 3028-frame M27: asinh pins the star peak at ~160 output
+            // levels however tuned (MTF reaches 220), and shows fewer stars than either MTF profile
+            // (2398/MP above sky+20 vs Deep Sky's 2777; 976 vs 1721 above sky+60). Raising
+            // `target_background` recovers count only by lifting the sky too (0.16 -> 3096 stars,
+            // sky 40); bounding `max_stretch` worsens both — these are the best asinh numbers at sky
+            // 24, not a local optimum.
+            StretchAggressiveness::Low => Self {
+                target_background: 0.10,
+                black_point_sigma: 1.5,
                 tone_mapping: ToneMappingAlgorithm::Asinh,
-                min_stretch: 0.1,
-                max_stretch: 2.0,
+                min_stretch: 1.0,
+                max_stretch: 10000.0,
                 ..Default::default()
-            }
-        } else {
-            match aggressiveness {
-                // Star Fields, and **asinh on purpose**: a product decision. The mode shows a field of
-                // stars, not nebulosity/galaxy structure, so asinh's gentler curve and brighter sky are
-                // wanted. Cost, measured on a 3028-frame M27: asinh pins the star peak at ~160 output
-                // levels however tuned (MTF reaches 220), and shows fewer stars than either MTF profile
-                // (2398/MP above sky+20 vs Deep Sky's 2777; 976 vs 1721 above sky+60). Raising
-                // `target_background` recovers count only by lifting the sky too (0.16 -> 3096 stars,
-                // sky 40); bounding `max_stretch` worsens both — these are the best asinh numbers at sky
-                // 24, not a local optimum.
-                StretchAggressiveness::Low => Self {
-                    target_background: 0.10,
-                    black_point_sigma: 1.5,
-                    tone_mapping: ToneMappingAlgorithm::Asinh,
-                    min_stretch: 1.0,
-                    max_stretch: 10000.0,
-                    ..Default::default()
-                },
-                StretchAggressiveness::Medium => Self {
-                    target_background: 0.08,
-                    black_point_sigma: 1.5,
-                    tone_mapping: ToneMappingAlgorithm::Mtf,
-                    min_stretch: 0.01,
-                    max_stretch: 0.5,
-                    ..Default::default()
-                },
-            }
+            },
+            StretchAggressiveness::Medium => Self {
+                target_background: 0.08,
+                black_point_sigma: 1.5,
+                tone_mapping: ToneMappingAlgorithm::Mtf,
+                min_stretch: 0.01,
+                max_stretch: 0.5,
+                ..Default::default()
+            },
         }
     }
 }

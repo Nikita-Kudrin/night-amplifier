@@ -5,7 +5,7 @@
 //! `Frame` equivalents see [`super::planar`].
 
 use super::{luminance_x4, scale_lut_lookup, scale_lut_lookup_x4};
-use crate::render::stretch::ScaleLut;
+use crate::render::stretch::{ScaleBasis, ScaleLut};
 use crate::frame::luminance;
 use wide::f32x4;
 
@@ -22,6 +22,7 @@ pub fn apply_luminance_scale_lut_simd(
     scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     let len = data.len();
     if len < 12 {
         apply_luminance_scale_lut_scalar(data, black_point, scale_lut, color_intensity);
@@ -103,6 +104,7 @@ pub fn apply_luminance_scale_lut_scalar(
     scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     for pixel in data.as_chunks_mut::<3>().0 {
         let r = (pixel[0] - black_point).max(0.0);
         let g = (pixel[1] - black_point).max(0.0);
@@ -118,6 +120,44 @@ pub fn apply_luminance_scale_lut_scalar(
         pixel[0] = (r * channel_mul + base_add).clamp(0.0, 1.0);
         pixel[1] = (g * channel_mul + base_add).clamp(0.0, 1.0);
         pixel[2] = (b * channel_mul + base_add).clamp(0.0, 1.0);
+    }
+}
+
+/// [`apply_luminance_scale_lut_simd`] indexed by each pixel's brightest channel, every channel
+/// scaled by that one entry: hue is kept exactly, and no channel passes the curve. No colour
+/// intensity: there is no luminance for the channels to be pulled toward.
+#[inline]
+pub fn apply_max_channel_scale_lut_simd(data: &mut [f32], black_point: f32, scale_lut: &ScaleLut) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::MaxChannel);
+    let chunks = data.len() / 12;
+    let bp = f32x4::splat(black_point);
+    let (zero, one) = (f32x4::ZERO, f32x4::ONE);
+    for pixels in data[..chunks * 12].as_chunks_mut::<12>().0 {
+        let lane = |c: usize| f32x4::new([pixels[c], pixels[c + 3], pixels[c + 6], pixels[c + 9]]);
+        let (r, g, b) = ((lane(0) - bp).max(zero), (lane(1) - bp).max(zero), (lane(2) - bp).max(zero));
+        let scale = scale_lut_lookup_x4(scale_lut, r.max(g).max(b));
+        for (c, channel) in [r, g, b].into_iter().enumerate() {
+            let out = (channel * scale).max(zero).min(one).to_array();
+            for (k, value) in out.into_iter().enumerate() {
+                pixels[c + 3 * k] = value;
+            }
+        }
+    }
+    apply_max_channel_scale_lut_scalar(&mut data[chunks * 12..], black_point, scale_lut);
+}
+
+/// The scalar body of [`apply_max_channel_scale_lut_simd`], and its tail.
+#[inline]
+pub fn apply_max_channel_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &ScaleLut) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::MaxChannel);
+    for pixel in data.as_chunks_mut::<3>().0 {
+        let r = (pixel[0] - black_point).max(0.0);
+        let g = (pixel[1] - black_point).max(0.0);
+        let b = (pixel[2] - black_point).max(0.0);
+        let scale = scale_lut_lookup(scale_lut, r.max(g).max(b));
+        pixel[0] = (r * scale).clamp(0.0, 1.0);
+        pixel[1] = (g * scale).clamp(0.0, 1.0);
+        pixel[2] = (b * scale).clamp(0.0, 1.0);
     }
 }
 

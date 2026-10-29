@@ -5,7 +5,7 @@
 //! gathers the [`super::interleaved`] variants need.
 
 use super::{luminance_x4, scale_lut_lookup, scale_lut_lookup_x4};
-use crate::render::stretch::ScaleLut;
+use crate::render::stretch::{ScaleBasis, ScaleLut};
 use crate::frame::luminance;
 use wide::f32x4;
 
@@ -19,6 +19,7 @@ pub fn apply_luminance_scale_lut_simd_planar(
     scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     let len = r_plane.len();
     if len < 4 {
         apply_luminance_scale_lut_scalar_planar(
@@ -99,6 +100,7 @@ pub fn apply_luminance_scale_lut_scalar_planar(
     scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     for i in 0..r_plane.len() {
         let r = (r_plane[i] - black_point).max(0.0);
         let g = (g_plane[i] - black_point).max(0.0);

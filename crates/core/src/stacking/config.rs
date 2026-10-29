@@ -83,12 +83,12 @@ impl StackingType {
         }
     }
 
-    /// Whether this stacking type needs aggressive stretch for preview
-    pub fn uses_aggressive_stretch(&self) -> bool {
+    /// The tone its frames render with: Planetary's levels for lucky imaging, whose targets
+    /// are bright discs on black, the deep-sky stretch for every type that solves a sky.
+    pub fn tone_profile(&self) -> crate::render::ToneProfile {
         match self {
-            StackingType::DeepSky => true,
-            StackingType::Planetary => false,
-            StackingType::Comet => true,
+            StackingType::DeepSky | StackingType::Comet => crate::render::ToneProfile::DeepSky,
+            StackingType::Planetary => crate::render::ToneProfile::Planetary,
         }
     }
 

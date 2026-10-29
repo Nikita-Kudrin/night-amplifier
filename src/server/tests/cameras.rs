@@ -484,3 +484,126 @@ async fn dismissing_names_a_role() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// What a stream holds after a render: `frame` as the encoders were handed it.
+fn rendered(frame: crate::Frame, tone: crate::render::ToneProfile) -> Arc<crate::render::display::RenderReadyFrame> {
+    rendered_through(frame, tone, crate::render::planetary::DaylightBalance::IDENTITY)
+}
+
+/// [`rendered`], `frame` having gone through `daylight_balance`.
+fn rendered_through(
+    frame: crate::Frame,
+    tone: crate::render::ToneProfile,
+    daylight_balance: crate::render::planetary::DaylightBalance,
+) -> Arc<crate::render::display::RenderReadyFrame> {
+    Arc::new(crate::render::display::RenderReadyFrame {
+        noise: None,
+        linear_frame: Arc::new(frame),
+        pipeline_config: crate::render::RenderPipelineConfig { tone, daylight_balance, ..Default::default() },
+        stretch_result: None,
+    })
+}
+
+/// A 0.3-0.7 disc of `radius` px, each channel times `tint`, on a black sky.
+fn tinted_disc(radius: f32, tint: [f32; 3], channels: usize) -> crate::Frame {
+    let (w, h) = (300, 200);
+    let mut frame = crate::Frame::zeros(w, h, channels).unwrap();
+    for y in 0..h {
+        for x in 0..w {
+            let r = (x as f32 - 150.0).hypot(y as f32 - 100.0) / radius;
+            let level = if r < 1.0 { 0.3 + 0.4 * (1.0 - r * r).sqrt() } else { 0.0 };
+            for (c, t) in tint.iter().take(channels).enumerate() {
+                frame.set_pixel(x, y, c, level * t);
+            }
+        }
+    }
+    frame
+}
+
+const RAW_IMX533: [f32; 3] = [0.943, 1.0, 0.484];
+
+/// Calibrate reads the Moon the camera's stream last rendered and saves the balance to that
+/// camera; every client hears the settings change.
+#[tokio::test]
+async fn calibrating_on_a_rendered_moon_saves_the_balance_that_greys_it() {
+    use crate::render::ToneProfile;
+    let state = create_test_state();
+    state.stream(CameraRole::Main).set_latest_raw_frame(rendered(tinted_disc(80.0, RAW_IMX533, 3), ToneProfile::Planetary));
+    let mut events = state.subscribe_events();
+    let app = crate::server::api::create_router().with_state(Arc::clone(&state));
+
+    let (status, body) = post_json(&app, "/cameras/daylight-balance/main/calibrate", json!({})).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let blue = body["data"]["blue"].as_f64().unwrap();
+    assert!((blue - 1.0 / 0.484).abs() < 0.03, "{body}");
+    let saved = state.settings.snapshot().daylight_balance;
+    assert!((f64::from(saved.blue) - blue).abs() < 1e-6, "{saved:?}");
+    assert!(matches!(events.try_recv(), Ok(ServerEvent::SettingsUpdated)));
+}
+
+/// After Stop nothing renders again, so the stream holds the frame the old balance made: a
+/// second press on it must save the same balance, not the correction applied twice.
+#[tokio::test]
+async fn calibrating_twice_on_the_same_frame_saves_one_balance() {
+    use crate::render::ToneProfile;
+    let state = create_test_state();
+    state.stream(CameraRole::Main).set_latest_raw_frame(rendered(tinted_disc(80.0, RAW_IMX533, 3), ToneProfile::Planetary));
+    let app = crate::server::api::create_router().with_state(Arc::clone(&state));
+    let calibrate = || post_json(&app, "/cameras/daylight-balance/main/calibrate", json!({}));
+
+    let (_, first) = calibrate().await;
+    let (status, second) = calibrate().await;
+
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let blue = |body: &serde_json::Value| body["data"]["blue"].as_f64().unwrap();
+    assert!((blue(&second) - blue(&first)).abs() < 0.01, "first {first}, second {second}");
+}
+
+/// Reset, then Calibrate on the frame held from before it: that frame went through the old
+/// balance, so calibrating it gives that balance back rather than none at all.
+#[tokio::test]
+async fn calibrating_after_a_reset_on_a_frame_rendered_before_it_saves_the_balance_back() {
+    use crate::render::planetary::DaylightBalance;
+    use crate::render::ToneProfile;
+    let state = create_test_state();
+    let moon = DaylightBalance { red: 1.0 / 0.943, green: 1.0, blue: 1.0 / 0.484 }.sanitized();
+    let mut balanced = tinted_disc(80.0, RAW_IMX533, 3);
+    moon.apply(&mut balanced);
+    state.stream(CameraRole::Main).set_latest_raw_frame(rendered_through(balanced, ToneProfile::Planetary, moon));
+    assert!(state.settings.snapshot().daylight_balance.is_identity(), "reset: nothing saved");
+    let app = crate::server::api::create_router().with_state(Arc::clone(&state));
+
+    let (status, body) = post_json(&app, "/cameras/daylight-balance/main/calibrate", json!({})).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = state.settings.snapshot().daylight_balance;
+    assert!((saved.red - moon.red).abs() < 0.01 && (saved.blue - moon.blue).abs() < 0.02, "{saved:?} for {moon:?}");
+}
+
+/// Each refusal names what to change, at its own status.
+#[tokio::test]
+async fn calibration_refuses_what_it_cannot_measure() {
+    use crate::render::ToneProfile;
+    let state = create_test_state();
+    let app = crate::server::api::create_router().with_state(Arc::clone(&state));
+    let calibrate = || post_json(&app, "/cameras/daylight-balance/main/calibrate", json!({}));
+
+    assert_eq!(calibrate().await.0, StatusCode::CONFLICT, "nothing rendered yet");
+    let stream = state.stream(CameraRole::Main);
+    for (frame, tone, refused) in [
+        (tinted_disc(80.0, RAW_IMX533, 3), ToneProfile::DeepSky, StatusCode::CONFLICT),
+        (tinted_disc(80.0, RAW_IMX533, 1), ToneProfile::Planetary, StatusCode::BAD_REQUEST),
+        (tinted_disc(8.0, RAW_IMX533, 3), ToneProfile::Planetary, StatusCode::UNPROCESSABLE_ENTITY),
+        (tinted_disc(80.0, [1.0, 0.2, 0.15], 3), ToneProfile::Planetary, StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        stream.set_latest_raw_frame(rendered(frame, tone));
+        let (status, body) = calibrate().await;
+        assert_eq!(status, refused, "{tone:?}: {body}");
+        assert_eq!(body["success"], false);
+    }
+    let error = calibrate().await.1["error"].as_str().unwrap_or_default().to_owned();
+    assert!(error.contains("too coloured"), "an H-alpha disc is named as coloured, not missing: {error}");
+    assert!(state.settings.snapshot().daylight_balance.is_identity(), "a refusal saves nothing");
+    assert_eq!(post_json(&app, "/cameras/daylight-balance/finder/calibrate", json!({})).await.0, StatusCode::BAD_REQUEST);
+}

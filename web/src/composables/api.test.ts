@@ -52,6 +52,7 @@ const CALLS: Call[] = [
     call('listCameras', [], '/api/cameras', 'GET'),
     call('listCameras', [{discover: false}], '/api/cameras?discover=false', 'GET'),
     call('dismissRecoveryFailure', ['guide'], '/api/cameras/recovery/guide', 'DELETE'),
+    call('calibrateDaylightBalance', ['guide'], '/api/cameras/daylight-balance/guide/calibrate', 'POST'),
     call('connectCamera', ['zwo_0'], '/api/cameras/zwo_0/connect', 'POST', {role: 'main'}),
     call('connectCamera', ['zwo_0', 'guide'], '/api/cameras/zwo_0/connect', 'POST', {role: 'guide'}),
     call('connectCamera', ['camera/with/slashes'], '/api/cameras/camera%2Fwith%2Fslashes/connect', 'POST', {role: 'main'}),

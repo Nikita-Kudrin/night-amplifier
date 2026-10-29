@@ -1,4 +1,5 @@
-//! Benchmarks for the luminance scale LUT kernel (SIMD vs scalar).
+//! Benchmarks for the scale LUT kernels (SIMD vs scalar, luminance vs Planetary's max channel)
+//! and Planetary's levels solve.
 //!
 //! Split out of `render_benchmark` rather than added as a fourth group there: at the
 //! ~100 ms floor the frame-mutation kernels in that file already fill its ~30 s budget
@@ -131,8 +132,59 @@ fn bench_scale_lut(c: &mut Criterion) {
         });
     }
 
+    // Planetary's table, read by each pixel's brightest channel, in the same row shape: its
+    // cost against `simd_row` above is the whole price of the basis.
+    let planetary_lut = night_amplifier::render::planetary::scale_lut(0.6);
+    group.bench_function(format!("max_channel_row_x{ROWS}"), |b| {
+        b.iter_batched_ref(
+            || rows.clone(),
+            |buf| {
+                for test_row in buf.chunks_mut(ROW_LEN) {
+                    night_amplifier::render::simd::apply_max_channel_scale_lut_simd(
+                        black_box(test_row),
+                        BLACK_POINT,
+                        black_box(&planetary_lut),
+                    )
+                }
+            },
+            BatchSize::LargeInput,
+        )
+    });
     group.finish();
 }
 
-criterion_group!(benches, bench_scale_lut);
+/// Planetary's levels, solved every frame: one full-resolution histogram pass of a 3008²
+/// Moon-sized disc. One solve is a few ms, so `SOLVES` run per iteration.
+fn bench_planetary_levels(c: &mut Criterion) {
+    const SIZE: usize = 3008;
+    const SOLVES: usize = 16;
+    let mut data = vec![0.0f32; SIZE * SIZE * 3];
+    let plane = SIZE * SIZE;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let r = ((x as f32 - 1504.0).hypot(y as f32 - 1504.0)) / 1350.0;
+            let level = if r < 1.0 { 0.25 + 0.5 * (1.0 - r * r).sqrt() } else { 0.003 };
+            for (c, tint) in [0.94f32, 1.0, 0.48].into_iter().enumerate() {
+                data[c * plane + y * SIZE + x] = level * tint;
+            }
+        }
+    }
+    let frame = night_amplifier::Frame::from_f32_vec(data, SIZE, SIZE, 3).unwrap();
+
+    let mut group = c.benchmark_group("planetary_levels");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function(format!("solve_3008sq_x{SOLVES}"), |b| {
+        b.iter(|| {
+            for _ in 0..SOLVES {
+                black_box(night_amplifier::render::planetary::PlanetaryLevels::solve(black_box(&frame)));
+            }
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_scale_lut, bench_planetary_levels);
 criterion_main!(benches);

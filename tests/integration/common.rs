@@ -521,6 +521,21 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
         url: "https://drive.usercontent.google.com/download?id=1hzROA7FMnl2vJ34eK7WjTj3eLgLSApYf&export=download&confirm=t",
         contents: Contents { files: 1, bytes: 542_884_018 },
     },
+    // 2025-12-04's full Moon (Neptune-C II, IMX464, 2712x1538, 2.6 ms, gain 0): eleven
+    // mosaic panels as SharpCap's linear 16-bit RGB stacks, the limb in a different corner
+    // of each and one with no sky at all; `planetary_render::MOSAIC` says which.
+    Fixture {
+        name: "Moon_Mosaic",
+        url: "https://drive.usercontent.google.com/download?id=1MMzdDgSfzobGpD_VF4BrGu5BLGJ_ue0Q&export=download&confirm=t",
+        contents: Contents { files: 11, bytes: 275_392_942 },
+    },
+    // Jupiter three ways and Uranus (IMX464, SharpCap linear 16-bit RGB stacks): small discs
+    // on a black sky, one near saturation, and Uranus a 675 px dot on a twilight sky.
+    Fixture {
+        name: "Planets",
+        url: "https://drive.usercontent.google.com/download?id=1WIM2SZ1ErshSLFprSLVKjbZzdIChZXnH&export=download&confirm=t",
+        contents: Contents { files: 4, bytes: 100_142_888 },
+    },
     Fixture {
         name: "iris-nebula-imx533",
         url: "https://drive.usercontent.google.com/download?id=1e91M7PAjp_VxjVDaST7BN05vHVfal6IB&export=download&confirm=t",

@@ -10,6 +10,33 @@ Short sub-exposures of a bright object work too. Noise on a bright nebula breaks
 ## Planetary Stacking
 For the Moon, the Sun and the planets: high frame rates and no stars. Each frame is aligned on the target's surface by correlation, over a window half the frame's short side, centred on the target with **Auto tracking** on. The search follows the target as it drifts, so a Moon that wanders hundreds of pixels across the sensor during a capture stays aligned, and a frame it cannot place is left out of the stack rather than stacked in the wrong place: the status bar says whether the target moved farther than alignment can follow (it has drifted out of the window's reach; re-centre it and start again) or nothing in the frame matched (cloud, or a frame off the target). A planet placed off to one side, to drift across an untracked field, aligns as well as a centred one. The stack averages every frame the stacker keeps up with; all of them are in the SER video either way. With Pro, **Multi-point alignment** also takes out the small local distortions seeing adds.
 
+### How a planetary picture is rendered
+
+The deep-sky stretch is built to lift a faint sky out of the noise, which on a bright disc burns it
+to white. Planetary sets its own levels from the target instead: the sky goes black, the brightest
+part of the disc lands just under white, and a gentle curve lifts the darker parts — Jupiter's
+belts and moons, the Moon's maria, the Sun's limb. It works the same whatever the exposure, so an
+under-exposed Jupiter at a high frame rate looks like a well-exposed one, only noisier, and nothing
+on the disc is clipped. A Moon or Sun filling the frame, with no sky at all, keeps the sensor's
+own black. Colours keep their hue: an H-alpha Sun stays red rather than clipping. A bright sky —
+daytime, deep twilight, or haze lit by the Moon — fades out of the black point as it nears an eighth
+of the disc's brightness, and past that shows grey rather than black.
+
+Background removal, the shadow saturation boost, the contrast curve, **Color Intensity**,
+**Black level** and **Darker sky** are not used for Planetary: Settings shows them greyed, and keeps
+your choices for Deep Sky. **Black floor** only lifts there, since the sky is already black. The capture panel's **Color mode** switch turns the levels off, showing the frame as the
+sensor recorded it, and has no profile to pick for Planetary. Each frame sets its own levels, so
+the panels of a mosaic can differ in brightness on screen. The saved SER and FITS files are never
+touched by any of this.
+
+**Daylight White Balance** (Settings, for a colour camera) takes care of colour. Calibrate it once
+per camera while Planetary shows the Moon, or the Sun through a white-light filter, unclipped and
+filling a good part of the frame: its average colour becomes neutral. Every target is lit by the
+Sun, so the same balance shows each in its own colour — Mars stays orange and an H-alpha Sun red.
+Pressing **Calibrate** again on the same picture changes nothing, and a target too coloured to be
+neutral, such as an H-alpha Sun, is refused. A camera connected for the first time starts
+uncalibrated. **Reset** goes back to the camera's raw colour.
+
 ## Comet Stacking (Pro)
 Uses an ROI (Region of Interest) around the comet's nucleus to align frames on the moving comet, while aggressive rejection algorithms drop trailing stars.
 
@@ -110,6 +137,7 @@ moon, the horizon and uncorrected vignetting lay over the sky, including a glow 
 one edge or a corner. The galaxy, nebula or cluster you are looking at is kept out of the
 background model: anything that brightens *inside* the frame is treated as a target, anything
 that brightens *towards an edge* as glow. The whole gradient is removed in every stretch mode.
+Planetary takes none: a lunar disc filling the frame would be read as a gradient and removed.
 
 Narrow bands along an edge — stray light inside the tube, the edge of an uncorrected vignette —
 are removed from the stacked picture too: they run the whole length of the edge, which a target

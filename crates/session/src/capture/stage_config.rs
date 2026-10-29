@@ -196,10 +196,12 @@ pub(crate) fn requested_denoise(settings: &CaptureSettings) -> night_amplifier_c
 }
 
 /// The settings the guide camera's stream renders with: the observer's, less the AI
-/// denoiser. Nothing stacks there, a frame arrives every second or two, and each pass
+/// denoiser, through the guide camera's own daylight balance (the flat one is the imaging
+/// camera's). Nothing stacks there, a frame arrives every second or two, and each AI pass
 /// would take its cores from the imaging camera's stacking.
 pub(crate) fn guide_render_settings(mut settings: CaptureSettings) -> CaptureSettings {
     settings.denoise.ai = false;
+    settings.daylight_balance = settings.guide_camera.daylight_balance;
     settings
 }
 
@@ -243,7 +245,15 @@ pub fn get_render_pipeline_config(
     plugins: &Plugins,
     for_fits: bool,
 ) -> night_amplifier_core::render::RenderPipelineConfig {
-    use night_amplifier_core::render::{AutoStretchConfig, RenderPipelineConfig};
+    use night_amplifier_core::render::{AutoStretchConfig, RenderPipelineConfig, ToneProfile};
+
+    // Planetary runs none of the deep-sky stages, whatever the settings say, and leaves the
+    // saved choices alone (the rule `denoise_config` states). The gradient model read a lunar
+    // disc as gradient (maria to black, its grid printed past the limb, Moon_Mosaic 19_47_45's
+    // median at 4 of 255), neutralising a black sky turned Jupiter green, and the S-curve
+    // clipped every disc past ~48 % of full scale. Background off holds neutralisation off too.
+    let tone = settings.stacking_type.tone_profile();
+    let deep_sky = tone == ToneProfile::DeepSky;
 
     // Set configuration first, then explicit toggle last to override the config's auto-enable
     let mut config = RenderPipelineConfig::new()
@@ -251,7 +261,11 @@ pub fn get_render_pipeline_config(
         .with_background_config(
             get_background_config(settings).with_algorithm(resolve_background_algorithm(settings, plugins)),
         )
-        .with_background_subtraction(settings.background_subtraction);
+        .with_background_subtraction(settings.background_subtraction && deep_sky);
+    config.tone = tone;
+    if !deep_sky {
+        config.daylight_balance = settings.daylight_balance;
+    }
 
     if settings.stacking_type == night_amplifier_core::stacking::StackingType::DeepSky
         || settings.stacking_type == night_amplifier_core::stacking::StackingType::Comet
@@ -260,11 +274,7 @@ pub fn get_render_pipeline_config(
     }
 
     if !for_fits {
-        let use_aggressive_stretch = settings.stacking_type.uses_aggressive_stretch();
-        let stretch_config = AutoStretchConfig::from_profile(
-            !use_aggressive_stretch,
-            settings.stretch_aggressiveness,
-        )
+        let stretch_config = AutoStretchConfig::from_profile(settings.stretch_aggressiveness)
         .with_color_intensity(1.0 + settings.auto_stretch_intensity)
         // The expensive half of the Background Grain dial. It belongs here, with the
         // profile, and not at `AutoStretchConfig::default()`: the default is what an
@@ -279,8 +289,8 @@ pub fn get_render_pipeline_config(
             .with_saturation_config(saturation_config)
             // Gated on the plugin, not just the setting: a boost that cannot run still
             // kept the contrast out of the scale LUT, a separate pass for nothing.
-            .with_saturation_boost(settings.saturation_boost && plugins.saturation().is_some())
-            .with_contrast(settings.auto_stretch);
+            .with_saturation_boost(settings.saturation_boost && plugins.saturation().is_some() && deep_sky)
+            .with_contrast(settings.auto_stretch && deep_sky);
 
         // The 8-bit conversion is not a pipeline stage; the encoders apply it
         // where they write output bytes. It is set unconditionally because a
@@ -313,7 +323,7 @@ pub fn get_render_pipeline_config(
 
         // Apply eyepiece dark background enhancement
         let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;
-        if intensity > 0.0 && config.auto_stretch {
+        if intensity > 0.0 && config.auto_stretch && deep_sky {
             // Interpolate target_background down for a darker sky
             config.stretch_config.target_background = config.stretch_config.target_background
                 * (1.0 - intensity)
@@ -706,6 +716,94 @@ mod tests {
                 !config.shadow_floor.is_none(),
                 "{stacking_type:?} lost the floor along with Planetary"
             );
+        }
+    }
+
+    /// Every deep-sky stage asked for, with a plugin to run each: Planetary takes none of them,
+    /// Deep Sky and Comet all, and the observer's saved choices stay as they were.
+    #[test]
+    fn planetary_runs_none_of_the_deep_sky_stages_whatever_the_settings_ask() {
+        use night_amplifier_core::render::stretch::{SaturationBoostConfig, SaturationPlugin};
+        use night_amplifier_core::render::ToneProfile;
+        struct Boost;
+        impl SaturationPlugin for Boost {
+            fn apply_boost(&self, _: &mut Frame, _: &SaturationBoostConfig) -> night_amplifier_core::error::Result<()> {
+                Ok(())
+            }
+            fn apply_boost_slice(&self, _: &mut [f32], _: &SaturationBoostConfig) {}
+        }
+        let plugins = Plugins::none().with_saturation(std::sync::Arc::new(Boost)).always_licensed();
+        let mut settings = CaptureSettings {
+            background_subtraction: true,
+            saturation_boost: true,
+            auto_stretch: true,
+            ..Default::default()
+        };
+        settings.eyepiece.intensity = 1.0;
+
+        for (stacking_type, tone) in [
+            (StackingType::Planetary, ToneProfile::Planetary),
+            (StackingType::DeepSky, ToneProfile::DeepSky),
+            (StackingType::Comet, ToneProfile::DeepSky),
+        ] {
+            settings.stacking_type = stacking_type;
+            let deep_sky = tone == ToneProfile::DeepSky;
+            let config = get_render_pipeline_config(&settings, &plugins, false);
+            assert_eq!(config.tone, tone, "{stacking_type:?}");
+            assert_eq!(config.background_subtraction, deep_sky, "{stacking_type:?}: background");
+            assert_eq!(config.saturation_boost, deep_sky, "{stacking_type:?}: saturation boost");
+            assert_eq!(config.contrast, deep_sky, "{stacking_type:?}: S-curve");
+            assert!(config.auto_stretch, "{stacking_type:?}: the stretch stays the observer's");
+            let fits = get_render_pipeline_config(&settings, &plugins, true);
+            assert_eq!(fits.background_subtraction, deep_sky, "{stacking_type:?}: the saved FITS");
+        }
+        assert!(settings.background_subtraction && settings.saturation_boost, "saved choices untouched");
+    }
+
+    /// Eyepiece intensity moves the deep-sky solve's sky target and black point; Planetary
+    /// solves neither, so the slider must leave its config as it found it.
+    #[test]
+    fn eyepiece_intensity_leaves_a_planetary_config_alone() {
+        let mut settings = CaptureSettings { stacking_type: StackingType::Planetary, ..Default::default() };
+        let still = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        settings.eyepiece.intensity = 1.0;
+        let moved = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert_eq!(moved.stretch_config.target_background, still.stretch_config.target_background);
+        assert_eq!(moved.stretch_config.black_point_sigma, still.stretch_config.black_point_sigma);
+        assert!(!moved.contrast);
+    }
+
+    /// The flat daylight balance is the imaging camera's: the guide stream renders through
+    /// the guide camera's own.
+    #[test]
+    fn the_guide_stream_renders_through_the_guide_cameras_daylight_balance() {
+        use night_amplifier_core::render::planetary::DaylightBalance;
+        let mut settings = CaptureSettings {
+            stacking_type: StackingType::Planetary,
+            daylight_balance: DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 },
+            ..Default::default()
+        };
+        settings.guide_camera.daylight_balance = DaylightBalance { red: 1.3, green: 1.0, blue: 1.6 };
+        let guide = guide_render_settings(settings.clone());
+        assert_eq!(guide.daylight_balance, settings.guide_camera.daylight_balance);
+        let config = get_render_pipeline_config(&guide, &Plugins::none(), false);
+        assert_eq!(config.daylight_balance, settings.guide_camera.daylight_balance, "carried by the guide's frames");
+    }
+
+    /// A frame says which balance it renders through, which calibration corrects: the camera's
+    /// for Planetary, none for the tones that solve a sky, whatever is saved.
+    #[test]
+    fn a_frames_config_carries_the_balance_it_renders_through() {
+        use night_amplifier_core::render::planetary::DaylightBalance;
+        let balance = DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 };
+        for (stacking_type, expected) in [
+            (StackingType::Planetary, balance),
+            (StackingType::DeepSky, DaylightBalance::IDENTITY),
+            (StackingType::Comet, DaylightBalance::IDENTITY),
+        ] {
+            let settings = CaptureSettings { stacking_type, daylight_balance: balance, ..Default::default() };
+            let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+            assert_eq!(config.daylight_balance, expected, "{stacking_type:?}");
         }
     }
 

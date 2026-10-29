@@ -371,7 +371,7 @@ impl<'a> RowTail<'a> {
     /// The stretch alone: the image the AI denoiser reads.
     fn apply_tone(&self, f32_row: &mut [f32]) {
         if let Some((black_point, scale_lut)) = &self.stretch {
-            crate::render::simd::apply_luminance_scale_lut_simd(
+            crate::render::simd::apply_scale_lut_simd(
                 f32_row,
                 *black_point,
                 scale_lut,

@@ -223,6 +223,8 @@ pub struct PreviewRender {
     /// The solve `stretch_result` was built from, for diagnostics: its black point is the
     /// one already subtracted, so reads 0.
     pub solve: Option<night_amplifier_core::render::AutoStretchResult>,
+    /// A Planetary frame's levels, for diagnostics, in place of `solve`.
+    pub levels: Option<night_amplifier_core::render::planetary::PlanetaryLevels>,
 }
 
 /// A moved crop's two sides, `(left, entered)` (`PreviewAnalysis::take_window_probe`): the
@@ -304,6 +306,9 @@ pub fn process_preview_frame_with_analysis(
     .entered();
 
     let mut pipeline_config = get_render_pipeline_config(settings, plugins, false);
+    if pipeline_config.tone == night_amplifier_core::render::ToneProfile::Planetary {
+        return Ok(super::planetary_preview::render(frame, pipeline_config));
+    }
     // How deep the stack is decides how much of its noise reduction the stretch
     // spends on a calmer sky (`render::autostretch::depth_grain_gain`). Set here
     // rather than in `get_render_pipeline_config`, which only sees settings.
@@ -489,6 +494,7 @@ pub fn process_preview_frame_with_analysis(
         pipeline_config,
         stretch_result,
         solve,
+        levels: None,
     })
 }
 

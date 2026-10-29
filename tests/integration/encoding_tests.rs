@@ -562,10 +562,7 @@ fn probe_render_task_stage_breakdown() {
     let live_config = || {
         RenderPipelineConfig::new()
             .with_background_subtraction(false)
-            .with_stretch_config(AutoStretchConfig::from_profile(
-                false,
-                StretchAggressiveness::Medium,
-            ))
+            .with_stretch_config(AutoStretchConfig::from_profile(StretchAggressiveness::Medium))
             .with_auto_stretch(true)
             .with_contrast(true)
     };
@@ -696,7 +693,7 @@ fn probe_fused_render_clamp_difference() {
             continue;
         };
 
-        let stretch_config = AutoStretchConfig::from_profile(false, StretchAggressiveness::Medium);
+        let stretch_config = AutoStretchConfig::from_profile(StretchAggressiveness::Medium);
         let contrast_config = ContrastConfig::default();
 
         // Reference: the three separate passes, i.e. stretch with no contrast fused in,
