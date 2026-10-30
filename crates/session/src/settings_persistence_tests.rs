@@ -71,6 +71,7 @@ fn non_default_settings() -> CaptureSettings {
         dew_heater_enabled: true,
         dew_heater_power: 30,
         daylight_balance: night_amplifier_core::render::planetary::DaylightBalance { red: 1.2, green: 1.0, blue: 1.9 },
+        daylight_balance_source: night_amplifier_core::render::planetary::DaylightBalanceSource::Moon,
         wanderer_mode: true,
         auto_crop: true,
         sensor_correction: SensorCorrectionSettings {
@@ -138,6 +139,7 @@ fn non_default_settings() -> CaptureSettings {
                     dew_heater_enabled: true,
                     dew_heater_power: 15,
                     daylight_balance: night_amplifier_core::render::planetary::DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 },
+                    daylight_balance_source: night_amplifier_core::render::planetary::DaylightBalanceSource::Moon,
                 },
             ),
             (
@@ -153,7 +155,8 @@ fn non_default_settings() -> CaptureSettings {
                     cooler_fast_mode: true,
                     dew_heater_enabled: false,
                     dew_heater_power: 0,
-                    daylight_balance: night_amplifier_core::render::planetary::DaylightBalance::IDENTITY,
+                    daylight_balance: night_amplifier_core::render::planetary::DaylightBalance::PRIOR,
+                    daylight_balance_source: night_amplifier_core::render::planetary::DaylightBalanceSource::Prior,
                 },
             ),
         ]),
@@ -461,6 +464,7 @@ fn test_save_and_load_settings() {
         dew_heater_enabled: false,
         dew_heater_power: 0,
         daylight_balance: night_amplifier_core::render::planetary::DaylightBalance { red: 1.0, green: 1.3, blue: 2.5 },
+        daylight_balance_source: night_amplifier_core::render::planetary::DaylightBalanceSource::Moon,
         eula_accepted: false,
         indi_server_host: "127.0.0.1".to_string(),
         indi_server_port: 7624,

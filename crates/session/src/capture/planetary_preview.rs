@@ -4,8 +4,8 @@
 //! either. A solve is one histogram pass over the frame.
 //!
 //! The frame leaves balanced but with its black point on, which travels in the `StretchResult`
-//! for the kernel to take off: so the stream holds what calibration must read (a clipped channel
-//! still at 1), and a full-resolution pass over three planes is saved.
+//! for the kernel to take off: so the stream holds what the Moon measure reads (a clipped channel
+//! still at 1; `capture::daylight_tracker`), and a full-resolution pass over three planes is saved.
 
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::render::display::StretchResult;
@@ -86,7 +86,11 @@ mod tests {
     /// every pixel, with its black point beside it, so no spatial stage ran.
     #[test]
     fn a_planetary_frame_leaves_as_its_input_with_its_black_point_beside_it() {
-        let settings = CaptureSettings { stacking_type: StackingType::Planetary, ..Default::default() };
+        let settings = CaptureSettings {
+            stacking_type: StackingType::Planetary,
+            daylight_balance: DaylightBalance::IDENTITY,
+            ..Default::default()
+        };
         assert!(settings.background_subtraction);
         let input = disc([1.0; 3]);
         let mut frame = input.clone();

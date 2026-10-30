@@ -4,7 +4,7 @@
 //! Jupiter; Deep Sky's own profile clipped them whole.
 
 use night_amplifier::frame::Frame;
-use night_amplifier::render::planetary::curve;
+use night_amplifier::render::planetary::{curve, DaylightBalance, NotTheMoon, PlanetaryLevels, TargetMeasure, MOON_COLOUR};
 
 use super::instruments::{load_sub, Replay};
 use super::planetary::{moon, planetary_settings as moon_settings};
@@ -116,4 +116,117 @@ fn an_underexposed_jupiter_renders_like_a_well_exposed_one() {
     let (bright, faint) = (measure(&frame, &bright), measure(&frame, &faint));
     println!("well exposed {bright:?}\nat a fifth   {faint:?}");
     assert!((bright.p50 - faint.p50).abs() < 6.0 && (bright.p99 - faint.p99).abs() < 6.0, "{bright:?} against {faint:?}");
+}
+
+/// `frame` as the stream shows it through `balance`, measured, and the verdict on it.
+fn seen_through(frame: &Frame, balance: &DaylightBalance) -> (TargetMeasure, Result<DaylightBalance, NotTheMoon>) {
+    let mut shown = frame.clone();
+    balance.apply(&mut shown);
+    let measure = TargetMeasure::of(&shown, &PlanetaryLevels::solve(&shown));
+    (measure, measure.moon(balance))
+}
+
+fn print_measure(name: &str, m: &TargetMeasure, verdict: &Result<DaylightBalance, NotTheMoon>) {
+    println!("{name:28} diameter {:6.0}  texture {:+.4}  limb {:>5}  haze {:.4}  clipped {:5.2} %  {:?}",
+        m.diameter, m.texture_excess(), m.limb.map_or("-".into(), |l| format!("{l:.2}")), m.haze,
+        100.0 * m.clipped as f32 / (m.clipped + m.unclipped).max(1) as f32, verdict);
+}
+
+/// Every mosaic panel is the Moon: undarkened to its limb where one is seen, textured, and
+/// (SharpCap having balanced it already) implying the Moon's own colour over identity.
+#[test]
+#[ignore]
+fn every_moon_mosaic_panel_is_read_as_the_moon() {
+    let dir = fixture(MOSAIC);
+    let expected = DaylightBalance { red: MOON_COLOUR[0], green: MOON_COLOUR[1], blue: MOON_COLOUR[2] }.sanitized();
+    for (time, why) in MOSAIC_PANELS {
+        let frame = load_sub(&mosaic_panel(&dir, time)).frame;
+        let (m, verdict) = seen_through(&frame, &DaylightBalance::IDENTITY);
+        print_measure(&format!("{MOSAIC} {time}"), &m, &verdict);
+        let balance = verdict.unwrap_or_else(|why| panic!("{time} ({why:?}): {m:?}"));
+        assert!(m.texture_excess() > 0.01 && m.limb.is_none_or(|l| l > 0.75), "{time} ({why}): {m:?}");
+        assert!(!balance.differs_from(&expected, 0.1), "{time}: {balance:?} against {expected:?}");
+    }
+}
+
+/// No planet is the Moon: Jupiter darkens to its limb, Uranus's twilight frame is smooth.
+#[test]
+#[ignore]
+fn no_planet_is_read_as_the_moon() {
+    let dir = fixture(PLANETS);
+    for (file, why) in PLANET_FILES {
+        let frame = load_sub(&dir.join(file)).frame;
+        let (m, verdict) = seen_through(&frame, &DaylightBalance::IDENTITY);
+        print_measure(&format!("{PLANETS} {file}"), &m, &verdict);
+        assert!(
+            matches!(verdict, Err(NotTheMoon::LimbDarkened | NotTheMoon::Smooth | NotTheMoon::TooSmall)),
+            "{file} ({why}): {verdict:?} on {m:?}"
+        );
+    }
+}
+
+/// The raw drifting Moon through the prior: the Moon, implying the balance that colours it
+/// like one, the same to a percent on every frame, the one that drifted half out included.
+#[test]
+#[ignore]
+fn the_drifting_moon_calibrates_the_camera_on_every_frame() {
+    const RAW: [f32; 3] = [0.944, 1.0, 0.487];
+    let expected = DaylightBalance { red: MOON_COLOUR[0] / RAW[0], green: 1.0, blue: MOON_COLOUR[2] / RAW[2] }.sanitized();
+    let mut replay = Replay::with_settings(&moon(), planetary_settings(false));
+    let mut n = 0;
+    while let Some(frame) = replay.capture() {
+        let (m, verdict) = seen_through(&frame, &DaylightBalance::PRIOR);
+        print_measure(&format!("moon frame {n}"), &m, &verdict);
+        let balance = verdict.unwrap_or_else(|why| panic!("frame {n} ({why:?}): {m:?}"));
+        assert!(!balance.differs_from(&expected, 0.03), "frame {n}: {balance:?} against {expected:?}");
+        n += 1;
+    }
+    assert!(n >= 30, "{n} frames");
+}
+
+/// The preview's bin (1-4, by its resolution) does not decide what is the Moon: binned, the
+/// drifting Moon reads the same verdict and a balance within 2 % of the unbinned one's.
+#[test]
+#[ignore]
+fn the_drifting_moon_reads_alike_at_every_preview_bin() {
+    let mut replay = Replay::with_settings(&moon(), planetary_settings(false));
+    let mut n = 0;
+    while let Some(frame) = replay.capture() {
+        let at = |bin: usize| {
+            let binned = if bin == 1 { frame.clone() } else { frame.downsample(bin).unwrap() };
+            let (m, _) = seen_through(&binned, &DaylightBalance::PRIOR);
+            let m = m.binned(bin);
+            (m, m.moon(&DaylightBalance::PRIOR))
+        };
+        let (_, unbinned) = at(1);
+        let unbinned = unbinned.unwrap_or_else(|why| panic!("frame {n} unbinned: {why:?}"));
+        for bin in 2..=4 {
+            let (m, verdict) = at(bin);
+            print_measure(&format!("moon frame {n} bin {bin}"), &m, &verdict);
+            let balance = verdict.unwrap_or_else(|why| panic!("frame {n} bin {bin} ({why:?}): {m:?}"));
+            assert!(!balance.differs_from(&unbinned, 0.02), "frame {n} bin {bin}: {balance:?} against {unbinned:?}");
+        }
+        n += 1;
+    }
+    assert!(n >= 30, "{n} frames");
+}
+
+/// Review of 4a3778e: the pre-balanced fixtures (SharpCap stacks) through the prior a fresh
+/// profile renders with, as the simulator would replay them.
+#[test]
+#[ignore]
+fn review_prebalanced_fixtures_through_the_prior() {
+    let dir = fixture(MOSAIC);
+    for (time, _) in MOSAIC_PANELS {
+        let frame = load_sub(&mosaic_panel(&dir, time)).frame;
+        let (m, verdict) = seen_through(&frame, &DaylightBalance::PRIOR);
+        print_measure(&format!("PRIOR {MOSAIC} {time}"), &m, &verdict);
+    }
+    let dir = fixture(PLANETS);
+    for (file, _) in PLANET_FILES {
+        let frame = load_sub(&dir.join(file)).frame;
+        let (m, verdict) = seen_through(&frame, &DaylightBalance::PRIOR);
+        print_measure(&format!("PRIOR {PLANETS} {file}"), &m, &verdict);
+        println!("{:28} colour {:?}", "", m.colour);
+    }
 }

@@ -810,7 +810,8 @@ fn connect_loads_existing_profile() {
             cooler_fast_mode: false,
             dew_heater_enabled: true,
             dew_heater_power: 30,
-            daylight_balance: night_amplifier_core::render::planetary::DaylightBalance::IDENTITY,
+            daylight_balance: night_amplifier_core::render::planetary::DaylightBalance::PRIOR,
+            daylight_balance_source: night_amplifier_core::render::planetary::DaylightBalanceSource::Prior,
         },
     );
 
@@ -923,27 +924,26 @@ fn connect_clamps_sensor_mode_for_camera_without_modes() {
 }
 
 /// A mono sensor has no colour to balance: a balance carried over from a colour camera, or
-/// hand-edited into its profile, is cleared on connect. A colour camera keeps its own.
+/// hand-edited into its profile, goes back to the prior on connect. A colour camera keeps its own.
 #[test]
 fn connect_clears_the_daylight_balance_of_a_mono_camera_only() {
     use crate::state::{CameraCaptureProfile, CaptureSettings};
     use night_amplifier_core::camera::SensorType;
     use night_amplifier_core::render::planetary::DaylightBalance;
 
+    use night_amplifier_core::render::planetary::DaylightBalanceSource;
     let balance = DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 };
     for (sensor_type, kept) in [(SensorType::Mono, false), (SensorType::Color, true)] {
         let mut settings = CaptureSettings::default();
         let key = "PlayerOne/Neptune-C II".to_string();
-        settings.camera_profiles.insert(
-            key.clone(),
-            CameraCaptureProfile { daylight_balance: balance, ..Default::default() },
-        );
+        settings.camera_profiles.insert(key.clone(), CameraCaptureProfile::default().calibrated_on_the_moon(balance));
         let info = CameraInfo { sensor_type, ..test_camera_info(false, false, false) };
         lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), CameraRole::Main, &info);
 
-        let expected = if kept { balance } else { DaylightBalance::IDENTITY };
-        assert_eq!(settings.daylight_balance, expected, "{sensor_type:?}");
-        assert_eq!(settings.camera_profiles[&key].daylight_balance, expected, "{sensor_type:?}");
+        let expected = if kept { (balance, DaylightBalanceSource::Moon) } else { (DaylightBalance::PRIOR, DaylightBalanceSource::Prior) };
+        assert_eq!((settings.daylight_balance, settings.daylight_balance_source), expected, "{sensor_type:?}");
+        let profile = &settings.camera_profiles[&key];
+        assert_eq!((profile.daylight_balance, profile.daylight_balance_source), expected, "{sensor_type:?}");
     }
 }
 
@@ -958,17 +958,15 @@ fn a_new_colour_camera_does_not_inherit_the_previous_cameras_daylight_balance() 
     let balance = DaylightBalance { red: 1.06, green: 1.0, blue: 2.07 };
     let info = CameraInfo { sensor_type: SensorType::Color, ..test_camera_info(false, false, false) };
     let mut settings = CaptureSettings::default();
-    settings.camera_profiles.insert(
-        "ZWO/ASI585MC".to_string(),
-        CameraCaptureProfile { daylight_balance: balance, ..Default::default() },
-    );
+    settings.camera_profiles.insert("ZWO/ASI585MC".to_string(), CameraCaptureProfile::default().calibrated_on_the_moon(balance));
     lifecycle::apply_camera_profile_on_connect(&mut settings, "ZWO/ASI585MC".to_string(), CameraRole::Main, &info);
     assert_eq!(settings.daylight_balance, balance);
 
     let fresh = "PlayerOne/Neptune-C II".to_string();
     lifecycle::apply_camera_profile_on_connect(&mut settings, fresh.clone(), CameraRole::Main, &info);
-    assert_eq!(settings.daylight_balance, DaylightBalance::IDENTITY, "live values");
-    assert_eq!(settings.camera_profiles[&fresh].daylight_balance, DaylightBalance::IDENTITY, "seeded profile");
+    assert_eq!(settings.daylight_balance, DaylightBalance::PRIOR, "live values");
+    assert_eq!(settings.camera_profiles[&fresh].daylight_balance, DaylightBalance::PRIOR, "seeded profile");
+    assert_eq!(settings.camera_profiles[&fresh].daylight_balance_source, night_amplifier_core::render::planetary::DaylightBalanceSource::Prior);
 }
 
 // ----------------------------------------------------------------------------

@@ -103,24 +103,6 @@ pub enum ApiError {
     #[error("Stop the capture to measure the hardware again")]
     BenchmarkDuringCapture,
 
-    /// A daylight balance is read off the frame the camera's stream last rendered.
-    #[error("Nothing from this camera has been rendered yet; calibrate while it shows the Moon or the Sun")]
-    NoFrameToCalibrateOn,
-
-    #[error("Calibrate on a Planetary view of the Moon or the Sun")]
-    CalibrationNeedsPlanetary,
-
-    #[error("A mono camera has no colour to balance")]
-    CalibrationNeedsColour,
-
-    /// Too little unclipped target in the frame to average: a speck, or a clipped disc.
-    #[error("No neutral target to calibrate on: frame the Moon or the Sun, unclipped")]
-    NoTargetToCalibrateOn,
-
-    /// Greying the target needs gains past the balance's range: an H-alpha Sun, a planet.
-    #[error("The target is too coloured to calibrate on: frame the Moon, or the Sun through a white-light filter")]
-    TargetNotNeutral,
-
     #[error("Internal error: {0}")]
     Internal(String),
 }

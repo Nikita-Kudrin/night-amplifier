@@ -16,7 +16,6 @@ import type {
     ConfigureSimulatorRequest,
     ConnectCameraRequest,
     Coordinate,
-    DaylightBalance,
     DatabaseType,
     DisconnectCameraRequest,
     Disconnection,
@@ -107,7 +106,6 @@ type HardwareField =
     | 'sensor_mode_override'
     | 'dew_heater_enabled'
     | 'dew_heater_power'
-    | 'daylight_balance'
 
 /** A hardware edit for `updateSettings`; leaving the role out does not compile. */
 export type HardwarePatch = Pick<UpdateSettingsRequest, HardwareField> & {camera_role: CameraRole}
@@ -380,15 +378,6 @@ export async function listCameras({discover = true}: {discover?: boolean} = {}):
  */
 export async function dismissRecoveryFailure(role: CameraRole): Promise<Message> {
     return del(`/cameras/recovery/${encodeURIComponent(role)}`)
-}
-
-/**
- * Calibrate `role`'s daylight white balance on the Planetary frame its stream last rendered
- * (the Moon or a white-light Sun) and save it to that camera; every client hears
- * `settings_updated`. Answers the balance saved.
- */
-export async function calibrateDaylightBalance(role: CameraRole): Promise<DaylightBalance> {
-    return post(`/cameras/daylight-balance/${encodeURIComponent(role)}/calibrate`)
 }
 
 /** Connect to a camera in the position `role` names; omitted means the imaging camera. */

@@ -41,10 +41,11 @@ export const SERVER_DEFAULT_SETTINGS = {
   "dew_heater_enabled": true,
   "dew_heater_power": 10,
   "daylight_balance": {
-    "red": 1.0,
+    "red": 1.1,
     "green": 1.0,
-    "blue": 1.0
+    "blue": 1.95
   },
+  "daylight_balance_source": "prior",
   "wanderer_mode": false,
   "auto_crop": true,
   "auto_reconnect": true,
@@ -100,10 +101,11 @@ export const SERVER_DEFAULT_SETTINGS = {
     "dew_heater_enabled": true,
     "dew_heater_power": 10,
     "daylight_balance": {
-      "red": 1.0,
+      "red": 1.1,
       "green": 1.0,
-      "blue": 1.0
-    }
+      "blue": 1.95
+    },
+    "daylight_balance_source": "prior"
   },
   "eula_accepted": false,
   "indi_server_host": "127.0.0.1",

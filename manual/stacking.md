@@ -29,13 +29,13 @@ sensor recorded it, and has no profile to pick for Planetary. Each frame sets it
 the panels of a mosaic can differ in brightness on screen. The saved SER and FITS files are never
 touched by any of this.
 
-**Daylight White Balance** (Settings, for a colour camera) takes care of colour. Calibrate it once
-per camera while Planetary shows the Moon, or the Sun through a white-light filter, unclipped and
-filling a good part of the frame: its average colour becomes neutral. Every target is lit by the
-Sun, so the same balance shows each in its own colour — Mars stays orange and an H-alpha Sun red.
-Pressing **Calibrate** again on the same picture changes nothing, and a target too coloured to be
-neutral, such as an H-alpha Sun, is refused. A camera connected for the first time starts
-uncalibrated. **Reset** goes back to the camera's raw colour.
+**Daylight White Balance** (Settings, for a colour camera) takes care of colour, by itself. Every target is lit
+by the Sun, so one balance per camera shows each in its own colour, and the Moon is how it is found: whenever
+Planetary shows the Moon, its colour is measured every two seconds and the balance that gives it its real, faintly
+warm grey is remembered for that camera. Mars stays orange and an H-alpha Sun red through the same balance; a
+planet, an eclipsed Moon or a coloured filter never sets it. A dim exposure, a twilight sky, auto-stretch off and
+the preview resolution do not stop it; a sky glowing unevenly around the Moon, as in haze, does. Until the Moon
+has been seen, a balance typical of colour cameras is used, and Settings says which of the two is in force.
 
 ## Comet Stacking (Pro)
 Uses an ROI (Region of Interest) around the comet's nucleus to align frames on the moving comet, while aggressive rejection algorithms drop trailing stars.

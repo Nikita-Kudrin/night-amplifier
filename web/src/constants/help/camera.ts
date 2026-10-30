@@ -16,7 +16,7 @@ export const CAMERA_HELP = {
     dew_heater_power:
         'Controls the power level of the anti-dew heater.',
     daylight_balance:
-        "How this camera's colours look in sunlight, which lights every planet, the Moon and the Sun. Calibrate once while Planetary shows the Moon (or the Sun through a white-light filter), unclipped and filling a good part of the frame: its average colour becomes neutral, and every other target keeps its own colour through the same balance — Mars stays orange, an H-alpha Sun red. Remembered per camera. Used by Planetary only; saved FITS and SER files keep the sensor's colour.",
+        "How this camera's colours look in sunlight, which lights every planet, the Moon and the Sun. Read off the Moon by itself: whenever Planetary shows one, at any exposure and with or without auto-stretch, its colour is measured every two seconds and the balance that gives the Moon its real, faintly warm grey is remembered for this camera. Every other target keeps its own colour through the same balance — Mars stays orange, an H-alpha Sun red. Until the Moon has been seen, a balance typical of colour cameras is used. Used by Planetary only; saved FITS and SER files keep the sensor's colour.",
     show_focus_image:
         'Displays a focusing image instead of "Waiting for frames" on the eyepiece endpoints to help with screen setup and focus adjustments.',
     force_focus_image_now:

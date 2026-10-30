@@ -213,41 +213,6 @@ impl CameraService {
         state.recovery_status.dismiss_failure(role)
     }
 
-    /// Calibrate `role`'s daylight balance on the frame its stream last rendered, which must
-    /// be a Planetary colour frame of a neutral target (the Moon, a white-light Sun), and save
-    /// it to that camera's profile; every client hears `settings_updated`. It corrects the
-    /// balance the frame carries, not the one saved: after a Stop the held frame predates the
-    /// last calibration, and a second press on it once applied the correction twice.
-    pub async fn calibrate_daylight_balance(
-        state: &Arc<AppState>,
-        role: CameraRole,
-    ) -> ApiResult<night_amplifier_core::render::planetary::DaylightBalance> {
-        use night_amplifier_core::render::planetary::CalibrationRefusal;
-        let frame = state.stream(role).get_latest_raw_frame().ok_or(ApiError::NoFrameToCalibrateOn)?;
-        if frame.pipeline_config.tone != night_amplifier_core::render::ToneProfile::Planetary {
-            return Err(ApiError::CalibrationNeedsPlanetary);
-        }
-        if frame.linear_frame.channels() != 3 {
-            return Err(ApiError::CalibrationNeedsColour);
-        }
-        let balance = tokio::task::spawn_blocking(move || {
-            frame.pipeline_config.daylight_balance.calibrated(&frame.linear_frame)
-        })
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|refusal| match refusal {
-            CalibrationRefusal::NoTarget => ApiError::NoTargetToCalibrateOn,
-            CalibrationRefusal::NotNeutral => ApiError::TargetNotNeutral,
-        })?;
-        let request = crate::services::UpdateSettingsRequest {
-            camera_role: Some(role),
-            daylight_balance: Some(balance),
-            ..Default::default()
-        };
-        let settings = crate::services::SettingsService::update(state, request).await?;
-        Ok(settings.profile_for(role).daylight_balance)
-    }
-
     /// Show `role`'s camera on the eyepiece pages; a change reaches every client as an event.
     pub fn select_viewed_camera(state: &AppState, role: CameraRole) -> ApiResult<()> {
         match state
