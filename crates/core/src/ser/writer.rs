@@ -1,12 +1,16 @@
 //! SER file writer for saving planetary video captures.
 
 use super::color_id::SerColorId;
-use super::header::SerHeader;
+use super::header::{SerHeader, FRAME_COUNT_OFFSET};
 use crate::error::{Result, StackError};
 use crate::frame::{luminance, Frame};
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
+
+/// Frames between rewrites of the header's count while recording: at 18 fps of 3008² that
+/// is under 2 s of a capture a power loss could hide from a reader trusting the header.
+const COUNT_REFRESH_FRAMES: u32 = 32;
 
 /// SER file writer for saving planetary video captures.
 pub struct SerWriter {
@@ -73,6 +77,9 @@ impl SerWriter {
 
         self.frames_written += 1;
         self.record_timestamp(timestamp);
+        if self.frames_written.is_multiple_of(COUNT_REFRESH_FRAMES) {
+            self.write_count()?;
+        }
 
         Ok(())
     }
@@ -92,6 +99,9 @@ impl SerWriter {
 
         self.frames_written += 1;
         self.record_timestamp(timestamp);
+        if self.frames_written.is_multiple_of(COUNT_REFRESH_FRAMES) {
+            self.write_count()?;
+        }
 
         Ok(())
     }
@@ -104,11 +114,17 @@ impl SerWriter {
         }
     }
 
-    /// Push buffered frames to the OS, so a sync of the file covers them.
+    /// Push buffered frames to the OS, with the header counting them, so a sync of the
+    /// file covers a file a reader trusting its header reads whole.
     pub fn flush(&mut self) -> Result<()> {
-        self.writer
-            .flush()
-            .map_err(|e| StackError::InvalidConfiguration(format!("Failed to flush: {}", e)))
+        self.write_count()
+    }
+
+    /// Flushes the frames, then writes their count into the header in place.
+    fn write_count(&mut self) -> Result<()> {
+        let failed = |e: std::io::Error| StackError::InvalidConfiguration(format!("Failed to update SER header: {}", e));
+        self.writer.flush().map_err(failed)?;
+        rewrite_count(self.writer.get_mut(), self.frames_written).map_err(failed)
     }
 
     /// Finalizes the file, writing timestamps and updating header.
@@ -142,6 +158,14 @@ impl SerWriter {
 
         Ok(())
     }
+}
+
+/// Writes `count` into the header of `file` and returns to its end, whether or not the
+/// write went through: left at the header, the next frame would be written over it.
+fn rewrite_count(file: &mut (impl Write + Seek), count: u32) -> std::io::Result<()> {
+    let written = file.seek(SeekFrom::Start(FRAME_COUNT_OFFSET)).and_then(|_| file.write_all(&count.to_le_bytes()));
+    let back = file.seek(SeekFrom::End(0));
+    written.and(back.map(|_| ()))
 }
 
 fn encode_frame(frame: &Frame, header: &SerHeader) -> Vec<u8> {
@@ -261,4 +285,48 @@ fn encode_16bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
     }
 
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    const END: u64 = 178 + 64;
+
+    /// A file whose writes fail, as a pulled card's do, and that seeks as a file does.
+    struct Refusing(Cursor<Vec<u8>>);
+
+    impl Write for Refusing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("the card is gone"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for Refusing {
+        fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+            self.0.seek(to)
+        }
+    }
+
+    #[test]
+    fn a_count_rewrite_writes_the_header_and_returns_to_the_end() {
+        let mut file = Cursor::new(vec![0u8; END as usize]);
+        file.seek(SeekFrom::End(0)).unwrap();
+        rewrite_count(&mut file, 0x0102_0304).unwrap();
+        assert_eq!(file.position(), END);
+        assert_eq!(&file.get_ref()[38..42], &[4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn a_failed_count_rewrite_leaves_the_file_at_its_end() {
+        let mut file = Refusing(Cursor::new(vec![0u8; END as usize]));
+        file.0.seek(SeekFrom::End(0)).unwrap();
+        assert!(rewrite_count(&mut file, 3).is_err());
+        assert_eq!(file.0.position(), END, "the next frame would land on the header");
+    }
 }

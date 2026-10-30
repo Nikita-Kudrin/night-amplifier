@@ -72,6 +72,8 @@ pub const MANAGED_FIXTURE_SETS: &[&str] = &[
     "130mm-imx464-dumbell-nebulae-png",
     "130mm-imx464-ring-nebulae-png",
     "cats-eye-nebula-imx533",
+    "hercules-globular-cluster-imx533-fixture",
+    "iris-nebula-imx533",
 ];
 
 /// Supported image file extensions
@@ -496,6 +498,49 @@ pub const DEFAULT_FIXTURES: &[Fixture] = &[
         url: "https://drive.usercontent.google.com/download?id=1bM7sDcimSbVvQtK4hL9-iYNFbYsn9Nlg&export=download&confirm=t",
         contents: Contents { files: 11, bytes: 242_332_133 },
     },
+    // Four 2026-10-24 IMX533 sessions cut like `background-gradient-stacks` but auto-cropped
+    // as production shows them (Pro's `cut_capture_stacks`): M57 and the Iris beside an
+    // instrument glow peaking at 0.85-0.90 of the sensor width, NGC 40, and M13 filling the
+    // frame. The glow is what both models left as a band on screen.
+    Fixture {
+        name: "background-capture-stacks",
+        url: "https://drive.usercontent.google.com/download?id=1rEYLT7PrxGedIYcJPatNdcd6o4v3LoeS&export=download&confirm=t",
+        contents: Contents { files: 5, bytes: 101_998_167 },
+    },
+    // Two of those sessions' raw subs, whole (Ares-C PRO, 3008², gain 126): M13 filling the
+    // frame in 75 subs of 0.4 s, and the Iris (NGC 7023) in 63 of 5 s.
+    Fixture {
+        name: "hercules-globular-cluster-imx533-fixture",
+        url: "https://drive.usercontent.google.com/download?id=1EXDudBM5ovlbTq10OId3sR7TjKt-Uux9&export=download&confirm=t",
+        contents: Contents { files: 75, bytes: 1_357_560_000 },
+    },
+    // 30 frames of 2026-10-24's Moon SER (Ares-C PRO, 3008², 10 ms), cut from the 1467 of a
+    // drifting, jittering capture; `planetary::FRAMES` says which and why.
+    Fixture {
+        name: "moon-drifting-imx533-ser",
+        url: "https://drive.usercontent.google.com/download?id=1hzROA7FMnl2vJ34eK7WjTj3eLgLSApYf&export=download&confirm=t",
+        contents: Contents { files: 1, bytes: 542_884_018 },
+    },
+    // 2025-12-04's full Moon (Neptune-C II, IMX464, 2712x1538, 2.6 ms, gain 0): eleven
+    // mosaic panels as SharpCap's linear 16-bit RGB stacks, the limb in a different corner
+    // of each and one with no sky at all; `planetary_render::MOSAIC` says which.
+    Fixture {
+        name: "Moon_Mosaic",
+        url: "https://drive.usercontent.google.com/download?id=1MMzdDgSfzobGpD_VF4BrGu5BLGJ_ue0Q&export=download&confirm=t",
+        contents: Contents { files: 11, bytes: 275_392_942 },
+    },
+    // Jupiter three ways and Uranus (IMX464, SharpCap linear 16-bit RGB stacks): small discs
+    // on a black sky, one near saturation, and Uranus a 675 px dot on a twilight sky.
+    Fixture {
+        name: "Planets",
+        url: "https://drive.usercontent.google.com/download?id=1WIM2SZ1ErshSLFprSLVKjbZzdIChZXnH&export=download&confirm=t",
+        contents: Contents { files: 4, bytes: 100_142_888 },
+    },
+    Fixture {
+        name: "iris-nebula-imx533",
+        url: "https://drive.usercontent.google.com/download?id=1e91M7PAjp_VxjVDaST7BN05vHVfal6IB&export=download&confirm=t",
+        contents: Contents { files: 63, bytes: 1_140_350_400 },
+    },
 ];
 
 /// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.
@@ -803,17 +848,13 @@ pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToRes
     })?;
 
     let status = response.status();
-    let is_html = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.contains("text/html"));
 
     // Google Drive can return the virus scan warning as either a non-success
     // status or as a 200 with Content-Type: text/html (for large files via
     // drive.usercontent.google.com).
-    if !status.is_success() || is_html {
-        let body = response.text().await.unwrap_or_default();
+    if !status.is_success() || is_html(&response) {
+        let body = read_unexpected(response).await;
+        let title = page_title(&body).unwrap_or("untitled");
         if body.contains("Google Drive") || body.contains("virus scan") || body.contains("confirm=")
         {
             info!("Hit Google Drive virus scan warning page");
@@ -823,26 +864,72 @@ pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToRes
                     format!("Confirmation download request failed: {}", e)
                 })?;
 
-                if !response.status().is_success() {
-                    return Err(format!(
-                        "Confirmation download failed: HTTP {}",
-                        response.status()
-                    ));
+                let status = response.status();
+                if !status.is_success() || is_html(&response) {
+                    let body = read_unexpected(response).await;
+                    let title = page_title(&body).unwrap_or("untitled");
+                    return Err(format!("Confirmation download failed: HTTP {status}, page \"{title}\""));
                 }
                 return download_with_progress(response, dest, component).await;
             }
-            return Err(
-                "Google Drive virus scan page: could not extract download link".to_string(),
-            );
+            return Err(format!("Google Drive page with no download link: \"{title}\""));
         }
 
         if !status.is_success() {
-            return Err(format!("Download failed: HTTP {}", status));
+            return Err(format!("Download failed: HTTP {status}, page \"{title}\""));
         }
-        return Err("Download returned HTML instead of binary content".to_string());
+        return Err(format!("Download returned HTML instead of binary content: \"{title}\""));
     }
 
     download_with_progress(response, dest, component).await
+}
+
+fn is_html(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/html"))
+}
+
+/// Reads a response that is not the archive and prints it: Drive refuses with a page, not
+/// an error code, and a test's output is all CI keeps of why (2026-10-28 lost 71 tests to a
+/// page nobody saw).
+async fn read_unexpected(response: reqwest::Response) -> String {
+    let status = response.status();
+    let url = response.url().to_string();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("no content type")
+        .to_string();
+    let body = response.text().await.unwrap_or_default();
+    eprintln!("{}", unexpected_page_report(&url, status, &content_type, &body));
+    body
+}
+
+/// A page longer than this is cut: the reason sits near the top, and every retry prints it.
+pub(crate) const MAX_LOGGED_PAGE: usize = 64 * 1024;
+
+pub(crate) fn unexpected_page_report(
+    url: &str,
+    status: reqwest::StatusCode,
+    content_type: &str,
+    body: &str,
+) -> String {
+    let shown = &body[..body.floor_char_boundary(MAX_LOGGED_PAGE)];
+    let cut = if shown.len() < body.len() { "\n[truncated]" } else { "" };
+    format!(
+        "{url} answered HTTP {status} ({content_type}, {} bytes) instead of the archive:\n{shown}{cut}",
+        body.len()
+    )
+}
+
+pub(crate) fn page_title(html: &str) -> Option<&str> {
+    let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
+    let title = re.captures(html)?.get(1)?.as_str().trim();
+    (!title.is_empty()).then_some(title)
 }
 
 async fn download_with_progress(

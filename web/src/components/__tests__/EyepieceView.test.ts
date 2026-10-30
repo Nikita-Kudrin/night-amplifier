@@ -73,6 +73,9 @@ import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility'
 import {contextProvides} from '../../composables/appContext'
 import { createEventStreamStub } from '../../test/eventStream'
 import { camera, capabilities, catalogEntry, clientDirection, settings } from '../../test/fixtures'
+import { FAILED_SOLVE_HOLD_MS, SOLVING_HOLD_MS } from '../../constants'
+import { NOT_SOLVING } from '../../composables/events/pushToEvents'
+import type { PlateSolving } from '../../composables/events/pushToEvents'
 
 const fetchEyepieceSnapshot = vi.mocked(api.fetchEyepieceSnapshot)
 
@@ -284,7 +287,7 @@ describe('EyepieceView.vue Layout', () => {
     expect(arrows.length).toBe(1)
   })
 
-  it('does not render GuideArrow when pushDirection is null', async () => {
+  it('does not render GuideArrow when pushDirection is null and nothing is solving', async () => {
     installResizeObserverStub()
 
     const EyepieceView = (await import('../EyepieceView.vue')).default
@@ -866,6 +869,30 @@ describe('EyepieceView.vue follows the operator', () => {
     expect(arrowFov()).toBeCloseTo(field(imagingOptics), 6)
   })
 
+  // 2026-10-24: the guide's 2712x1538 frame, a 60.1° push 10° off. `/` read 3.4 screens and
+  // this page 6.9, counting its circle; both count frames of the camera image now.
+  it('counts screens in frames on the circular view, as `/` does', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: false, circular_view: true }, {
+      eventStream: {
+        viewedCamera: ref<CameraRole>('guide'),
+        pushDirection: clientDirection({
+          angleDeg: 60.14, distanceDeg: 10, isClose: false, directionHint: 'NW', fovDeg: 1.45, solvedCamera: 'Guide Cam',
+        }),
+        currentTarget: catalogEntry(),
+      },
+      provide: {
+        guideCamera: ref(camera({ name: 'Guide Cam' })),
+        mainCamera: ref(camera({ name: 'Imaging Cam' })),
+      },
+    })
+    lastStream().dimensions.value = { width: 2712, height: 1538 }
+    await nextTick()
+
+    expect(wrapper.find('.screen-size').text()).toBe('3.4× screen')
+  })
+
   it('keeps the chevron only on the camera whose solve oriented it', async () => {
     setPath('/eyepiece_quality')
     await loadEyepieceView()
@@ -950,12 +977,14 @@ describe('EyepieceView.vue follows the operator', () => {
       const arrowBox = () => {
         return wrapper.findComponent({ name: 'GuideArrow' }).props('bounds')
       }
+      const arrowFrame = () => wrapper.findComponent({ name: 'GuideArrow' }).props('frame')
       const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
 
       stream.dimensions.value = { width: 3008, height: 3008 }
       stream.frameData.value = jpeg ? new Blob() : new Uint8Array(4)
       await settle()
       expect(arrowBox()).toEqual(box)
+      expect(arrowFrame()).toEqual({ width: 3008, height: 3008 })
 
       // The guide camera's first frame arrives on the same socket.
       box = { left: 0, top: 175, width: 800, height: 450 }
@@ -963,6 +992,7 @@ describe('EyepieceView.vue follows the operator', () => {
       stream.frameData.value = jpeg ? new Blob() : new Uint8Array(4)
       await settle()
       expect(arrowBox()).toEqual(box)
+      expect(arrowFrame()).toEqual({ width: 1920, height: 1080 })
     } finally {
       for (const name of Object.keys(props)) {
         Reflect.deleteProperty(HTMLCanvasElement.prototype, name)
@@ -996,5 +1026,135 @@ describe('EyepieceView.vue Teardown', () => {
     wrapper.unmount()
 
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+/**
+ * The eyepiece has no status bar, so the compass over the chevrons is the only sign that
+ * Push-To is solving rather than stopped.
+ */
+describe('EyepieceView.vue Push-To solving', () => {
+  const SOLVING: PlateSolving = { ...NOT_SOLVING, inProgress: true, targetName: 'M31' }
+  const POINTING = clientDirection({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE' })
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    setPath('/eyepiece')
+    installResizeObserverStub()
+    await loadEyepieceView()
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('shows the compass alone while a new target\'s first solve runs', () => {
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving: SOLVING },
+    })
+
+    const arrow = wrapper.findComponent({ name: 'GuideArrow' })
+    expect(arrow.props('direction')).toBeNull()
+    expect(arrow.props('solving')).toBe(true)
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+  })
+
+  it('shows nothing for a solve with no target', () => {
+    const wrapper = mountEyepiece(undefined, { eventStream: { plateSolving: SOLVING } })
+
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).exists()).toBe(false)
+  })
+
+  it('turns the compass in place of the readout, and hands it the step', () => {
+    const stage = { label: 'blind', attempt: 2, total: 3 }
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), pushDirection: POINTING, plateSolving: { ...SOLVING, stage } },
+    })
+
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).props('solveStage')).toEqual(stage)
+    expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
+    expect(wrapper.find('.step').text()).toBe('step 2/3')
+    expect(wrapper.find('.distance').exists()).toBe(false)
+  })
+
+  it('keeps the compass one turn after the solve ends, then gives the readout back', async () => {
+    vi.useFakeTimers()
+    const plateSolving = ref<PlateSolving>(SOLVING)
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), pushDirection: POINTING, plateSolving },
+    })
+
+    plateSolving.value = { ...NOT_SOLVING, targetName: 'M31', lastResult: 'success' }
+    await nextTick()
+    vi.advanceTimersByTime(SOLVING_HOLD_MS - 1)
+    await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+
+    vi.advanceTimersByTime(1)
+    await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+    expect(wrapper.find('.distance').exists()).toBe(true)
+  })
+
+  it('drops a first solve\'s compass once the hold is over, when the solve found nothing', async () => {
+    vi.useFakeTimers()
+    const plateSolving = ref<PlateSolving>(SOLVING)
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving },
+    })
+
+    plateSolving.value = { ...NOT_SOLVING, targetName: 'M31', lastResult: 'failed' }
+    await nextTick()
+    // Longer than after a success: the next attempt follows about 2 s after a failure.
+    vi.advanceTimersByTime(FAILED_SOLVE_HOLD_MS - 1)
+    await nextTick()
+    expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+
+    vi.advanceTimersByTime(1)
+    await nextTick()
+    expect(wrapper.findComponent({ name: 'GuideArrow' }).exists()).toBe(false)
+  })
+
+  it('dims the readout as the last fix once a solve failed, in each eye', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: {
+        currentTarget: catalogEntry(),
+        pushDirection: { ...POINTING, stale: true },
+        plateSolving: { ...NOT_SOLVING, targetName: 'M31', lastResult: 'failed' },
+      },
+    })
+
+    expect(wrapper.findAll('.last-fix')).toHaveLength(2)
+    expect(wrapper.findAll('.distance-info.stale')).toHaveLength(2)
+  })
+
+  // `no_frame` on a camera switch zeroes the stream; the count measures the sensor till a frame lands.
+  it('hands the arrow the viewed camera\'s sensor while the stream has no frame', async () => {
+    const wrapper = mountEyepiece(undefined, {
+      eventStream: { viewedCamera: ref<CameraRole>('guide'), currentTarget: catalogEntry(), pushDirection: POINTING },
+      provide: {
+        guideCamera: ref(camera({ name: 'Guide Cam', info: { max_width: 2712, max_height: 1538 } })),
+        mainCamera: ref(camera({ name: 'Imaging Cam' })),
+      },
+    })
+    const arrowFrame = () => wrapper.findComponent({ name: 'GuideArrow' }).props('frame')
+
+    expect(arrowFrame()).toEqual({ width: 2712, height: 1538 })
+    lastStream().dimensions.value = { width: 1356, height: 769 }
+    await nextTick()
+    expect(arrowFrame()).toEqual({ width: 1356, height: 769 })
+  })
+
+  it('turns a compass in each eye of a binoview', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: { currentTarget: catalogEntry(), plateSolving: SOLVING },
+    })
+
+    expect(wrapper.find('.left-eye .push-to-solving').exists()).toBe(true)
+    expect(wrapper.find('.right-eye .push-to-solving').exists()).toBe(true)
   })
 })

@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 use super::channel::{CapturedFrame, QueueDepth};
 use super::drop_log::DropLog;
 use night_amplifier_core::camera::RawFrame;
-use night_amplifier_core::disk_writer::WritingSessionType;
+use night_amplifier_core::disk_writer::{SyncGroup, WritingSessionType};
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::plugins::Plugins;
 use crate::state::{
@@ -49,6 +49,9 @@ pub fn run_storage_task(
     }
 
     warnings.finish(&state);
+    // The container's last frame is queued: its header counts them now, not once the
+    // stacker behind it has finished.
+    state.disk_writer.finish_container(SyncGroup::Shared);
 
     debug!("Storage task ended");
 }
@@ -139,7 +142,7 @@ pub async fn initialize_capture_session(
     resume_dir: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
     let settings = state.settings.snapshot();
-    state.disk_writer.set_enabled(settings.disk_writing_enabled());
+    state.disk_writer.set_enabled(settings.disk_writing_enabled(state.debug_mode()));
 
     // A session can still be open here: a settings update lands between the capture
     // state flipping and this call, or a previous capture ended without one. Either way
@@ -187,7 +190,7 @@ pub async fn sync_disk_session(
     settings: &CaptureSettings,
     capture_active: bool,
 ) {
-    state.disk_writer.set_enabled(settings.disk_writing_enabled());
+    state.disk_writer.set_enabled(settings.disk_writing_enabled(state.debug_mode()));
 
     // Nothing is being captured, so there is nothing to file yet: opening a directory
     // now would leave an empty one behind every time a switch is flipped between
@@ -322,13 +325,15 @@ pub fn should_stop_on_errors(state: &AppState) -> bool {
 /// live only in the streaming encoders, AGENTS.md's *Spatial denoising*) — the
 /// direct path once silently dropped noise reduction. `pub` so Pro can test that
 /// regression directly. `coverage`: without it a thin border saved grainier than
-/// observed live (5.7% of bytes differed over a thinly covered quarter).
+/// observed live (5.7% of bytes differed over a thinly covered quarter). `noise_window`:
+/// the window the live view carried the stack's noise figure through (`StackNoiseWindow`).
 pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
     plugins: &Plugins,
     stack_depth: u32,
     coverage: Option<night_amplifier_core::frame::NoiseField>,
+    noise_window: f32,
 ) -> night_amplifier_core::error::Result<(Vec<u8>, u32, u32)> {
     use super::analysis::{AnalysisContext, PreviewAnalysis};
     use super::pipeline::process_preview_frame_with_analysis;
@@ -347,7 +352,7 @@ pub fn render_stacked_png(
             showing_stack: true,
             stack_depth,
         },
-        &mut PreviewAnalysis::new(),
+        &mut PreviewAnalysis::through_noise_window(noise_window),
     )?;
     let ready_frame = RenderReadyFrame {
         linear_frame: Arc::new(frame),
@@ -362,15 +367,16 @@ pub fn render_stacked_png(
 
 /// Save stacked result if stacking was enabled and we have frames.
 ///
-/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`]. `crop` is
-/// where `auto_crop` already cut the frame from the stack (see `capture::stack_crop`), which
-/// the FITS records as its subframe origin.
+/// `coverage` and `noise_window` travel with the frame for the PNG — see
+/// [`render_stacked_png`]. `crop` is where `auto_crop` already cut the frame from the stack
+/// (see `capture::stack_crop`), which the FITS records as its subframe origin.
 pub fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
     stack_depth: u32,
     coverage: Option<night_amplifier_core::frame::NoiseField>,
     crop: Option<night_amplifier_core::stacking::CropRect>,
+    noise_window: f32,
     camera_info: &ConnectedCameraInfo,
 ) {
     use night_amplifier_core::fits::FitsMetadata;
@@ -390,12 +396,12 @@ pub fn save_stacked_result(
     if let Some(stacked_frame) = last_processed_frame {
         let mut fits_frame = stacked_frame.clone();
 
-        // Apply background subtraction to FITS if enabled
-        if settings.background_subtraction {
-            use super::pipeline::get_render_pipeline_config;
+        // Background subtraction where the render config runs it: the setting alone would
+        // run it on a planetary FITS too, which takes none.
+        let pipeline_config = super::pipeline::get_render_pipeline_config(&settings, &state.plugins, true);
+        if pipeline_config.background_subtraction {
             use night_amplifier_core::render::RenderPipeline;
 
-            let pipeline_config = get_render_pipeline_config(&settings, &state.plugins, true);
             let pipeline = RenderPipeline::new(pipeline_config);
             if let Err(e) = pipeline.process(&mut fits_frame) {
                 warn!(error = %e, "Failed to apply background subtraction to FITS");
@@ -431,7 +437,7 @@ pub fn save_stacked_result(
             state.send_error(format!("The stack was not saved: {e}"));
         }
 
-        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {
+        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage, noise_window) {
             Ok((rgb8, width, height)) => {
                 if let Err(e) = state.disk_writer.queue_stacked_png(
                     Arc::new(rgb8),
@@ -561,7 +567,7 @@ mod tests {
         };
 
         let stack = Frame::filled(8, 8, 3, 0.25).unwrap();
-        save_stacked_result(&state, Some(stack), 1, None, None, &camera);
+        save_stacked_result(&state, Some(stack), 1, None, None, 1.0, &camera);
 
         let errors: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|event| match event {
@@ -578,7 +584,8 @@ mod tests {
     /// night). Stacking does name a session, for the stack's file, and still no folder.
     #[tokio::test]
     async fn guide_saving_opens_no_main_session_in_live_view() {
-        let (state, _disk_writer) = AppState::new_for_testing();
+        let (mut state, _disk_writer) = AppState::new_for_testing();
+        state.set_debug_mode(true);
         state.settings.update(|s| {
             s.stacking = false;
             s.save_stacked_image = true;
@@ -596,6 +603,27 @@ mod tests {
         sync_disk_session(&state, &state.settings.snapshot(), true).await;
         let dir = state.disk_writer.session_dir().expect("the stack is named after a session");
         assert!(!dir.exists(), "{dir:?} was created with no raw frame to hold");
+    }
+
+    /// Guide frames are saved only in debug mode, so outside it a guide switch left on
+    /// from a debug run must not bring the writer up with nothing to write.
+    #[tokio::test]
+    async fn a_guide_switch_alone_keeps_the_writer_off_outside_debug_mode() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|s| {
+            s.stacking = false;
+            s.raw_frame_saving = crate::state::RawFrameSaving {
+                guide: true,
+                ..Default::default()
+            }
+        });
+
+        initialize_capture_session(&state, None).await.unwrap();
+        assert!(!state.disk_writer.is_enabled(), "capture start enabled the writer");
+
+        state.disk_writer.set_enabled(true);
+        sync_disk_session(&state, &state.settings.snapshot(), true).await;
+        assert!(!state.disk_writer.is_enabled(), "a settings sync left the writer on");
     }
 
     /// A mode roll the main capture does not save in must not leave the resume plan on
@@ -751,7 +779,7 @@ mod tests {
         }
         let frame = night_amplifier_core::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        let (rgb8, width, _height) = render_stacked_png(frame, &settings, &Plugins::none(), 1, None).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings, &Plugins::none(), 1, None, 1.0).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
@@ -815,9 +843,9 @@ mod tests {
         settings.denoise.luma_strength = 0.0;
 
         settings.background_subtraction = false;
-        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
         settings.background_subtraction = true;
-        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
 
         let kept = edge_difference(&kept, w as usize, h as usize).abs();
         let removed = edge_difference(&removed, w as usize, h as usize).abs();
@@ -861,7 +889,7 @@ mod tests {
         settings.denoise.luma_strength = 1.0;
 
         let (exported, _, _) =
-            render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 40, Some(coverage.clone())).unwrap();
+            render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 40, Some(coverage.clone()), 1.0).unwrap();
 
         let mut live = gradient_frame();
         let rendered = process_preview_frame_with_analysis(
@@ -905,8 +933,8 @@ mod tests {
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
-        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
-        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 64, None).unwrap();
+        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None, 1.0).unwrap();
+        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 64, None, 1.0).unwrap();
 
         assert!(
             shallow != deep,

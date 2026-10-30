@@ -51,9 +51,23 @@ names it; the imaging camera's own first solve brings the arrow back.
 
 The readout beside an arrow gives the distance in degrees and in screens: how many frames
 you would push across, measured the way the arrow points, so a sideways push on a wide
-guide frame counts widths and a push up or down counts heights. The screens count needs
+guide frame counts widths and a push up or down counts heights. Every page gives the same
+count, the round eyepiece too: it counts frames of the camera image, not the circle, though
+the arrow still moves to the circle's edge once the target is hidden behind it. The screens count needs
 the field of the camera on screen: its focal length under **Push-To → Equipment**, or a
 plate solve on that same camera. Without either, only the degrees are shown.
+
+While Push-To is plate solving, a turning compass — the header's Push-To icon — takes the
+readout's place, with the step a long search is on (*step 2/3*); the arrow keeps pointing
+the last known way. When the compass stops and the readout returns, the numbers are fresh —
+unless that solve failed: then the readout comes back dimmed and marked *last fix*, the
+numbers from before it, until a solve succeeds. After a failure the compass keeps turning a
+few seconds longer, since Push-To tries again with the next frame. Right after you pick a
+target there is no arrow yet, so the compass turns alone in the middle of the view until the
+first solve lands.
+
+The screens count needs the camera's picture too: between captures, or while the stream
+reconnects, it is measured on the camera's sensor until the next frame arrives.
 
 ## Running it as a dedicated display
 

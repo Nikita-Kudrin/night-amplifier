@@ -44,3 +44,16 @@ export const TOUCH_SLOP_PX = 6
 
 /** How long a settings control waits after the last edit before it saves. */
 export const SETTINGS_DEBOUNCE_MS = 300
+
+/**
+ * How long the Push-To compass keeps turning after a solve ends: one turn of its needle, so a
+ * hinted solve under a second does not flash it against the readout.
+ */
+export const SOLVING_HOLD_MS = 1000
+
+/**
+ * The compass's hold after a failed solve: past Pro's 2 s retry of an unusable frame plus a
+ * guide exposure, so a run of quick failures turns one compass rather than flashing the
+ * last fix's readout between them.
+ */
+export const FAILED_SOLVE_HOLD_MS = 3500

@@ -25,9 +25,12 @@
 //! - `display_output_tests` - Black floor, stream resolution and both denoisers, in output levels
 //! - `dither_tests` - The blue-noise dither against the Bayer matrix: lattice lines, what JPEG keeps
 //! - `instruments` - The measurement instruments, shared with Pro by `#[path]`: no `crate::` there
+//! - `replay_cache_tests` - Replays shared across a run: bit for bit, keyed on their inputs, made once
 //! - `render_brightness_tests` - The brightness-against-grain trade, on the instruments that judge it
 //! - `auto_crop_tests` - `auto_crop` on real sessions: area kept, crop motion, the cut before stretch
 //! - `early_subs_tests` - Bad first subs, streamed against the stack's probation and an oracle
+//! - `planetary` / `planetary_tests` - 2026-10-24's drifting Moon from its SER: shifts and sharpness
+//! - `planetary_render` / `planetary_render_tests` - Planetary's levels on `Moon_Mosaic`, `Planets` and that Moon
 //! - `bad_subs_scan` - Diagnostic: every local session's subs tabulated, to find bad ones
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
@@ -47,8 +50,13 @@ pub mod fixture_contents_tests;
 pub mod fixture_processing;
 pub mod image_loading;
 pub mod instruments;
+pub mod planetary;
+pub mod planetary_tests;
+pub mod planetary_render;
+pub mod planetary_render_tests;
 pub mod prefetch;
 pub mod render_brightness_tests;
+pub mod replay_cache_tests;
 pub mod sky_estimate_tests;
 pub mod stack_depth_grain_tests;
 pub mod stack_quality_tests;

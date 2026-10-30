@@ -54,7 +54,8 @@ function handleClick(event: Event, value: T) {
   background: var(--surface-hover);
 }
 
-.btn-option.active {
+.btn-option.active,
+.btn-option.active:hover:not(:disabled) {
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);

@@ -104,8 +104,19 @@ a stack cut from it put IC 63 0.46 of a frame off); a test wanting one calls
 contents too. Coordinates measured on a stack name its size (`NamedTarget::frame`).
 Measurement instruments (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
 A stacking test replays a fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` →
-`stack_frame`), never a re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
-production stacks at 87 %.
+`stack_frame`; a SER in the directory is one frame per frame it holds, its mosaic served raw), never a re-wired
+copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set
+production stacks at 87 %. A whole session at shipped settings is `instruments::replayed` (with `stack_snapshots`/
+`accumulator_snapshots`, always on `load_sub`): stacked once a run into `target/tmp/replay-cache/<run>` (`replay_cache`;
+nextest's run id, else a fresh directory per process: a bare pid repeats in a container), read back bit for bit by
+every other test, never by another run — an earlier build's stack would pass for this one's. Its key names each
+plugin slot's type (`Plugins::implementations`), not the plugin's state. An entry is about a frame per depth; a run's
+entries stay until the next run. CI runs every module reading it on one runner (`REPLAY_MODULES` in `ci.yml`); the
+other partitions set `NA_REPLAY_CACHE=elsewhere`, which fails a test that reaches it (`off` turns it off; any other
+value moves it). A test rendering a stack's depths renders every one through `instruments::replay_held`
+(one `PreviewAnalysis` and `StackCrop` per order, cut by `cut_for_render` as the render task holds and cuts them,
+so its crop moves are probed), never a fresh analysis per depth:
+fresh renders gave M33 back 4 levels production never shows, and hid the deep dumbbell's 3 at an auto-crop change.
 Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
 count calls at runtime), not a hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and
 `AppState::new_for_testing` via `test-support`.
@@ -165,8 +176,9 @@ have answered mid-test.
 | `detection/`       | Star detection, CoM centroiding, FWHM/SNR                                      |
 | `registration/`    | Triangle matching + RANSAC → `AffineTransform`                                 |
 | `stacking/`        | `MasterStack` accumulator, rejection, warping                                  |
-| `background/`      | Gradient model: node layout, sky/target classifier, catalog protection         |
+| `background/`      | Gradient model: node layout, sky/target classifier, catalog protection, edge profiles |
 | `render/`          | Stretch, autostretch solver, white balance, S-curve; `display/` the f32 → RGB8 kernels and PNG |
+| `render/planetary/` | Planetary's levels, max-channel curve and per-camera daylight balance          |
 | `camera/`          | Traits + vendor SDKs + simulator                                               |
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
 | `disk_writer/`     | Async bounded-queue frame writer                                               |
@@ -265,7 +277,8 @@ Pro feature is optional uses `ignoreProOnly`, never a bare `catch {}`. Formatter
 splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`. Styles take tokens from `main.css`
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.ts` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
-components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
+components' error icons). A `.btn-x.active` rule needs its `:hover:not(:disabled)` twin (the test checks): a touch
+screen leaves `.btn:hover` stuck on the tapped button, which hid the Settings and Push-To tabs' active colour. Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
 `createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts` and
 complete (its fields over the event's required ones, a nullable one `null`: a handler reads them without a fallback),
 `settings(overrides)` (a partial group over its default; the panel's `settingsMirror` is a plain copy), `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
@@ -282,8 +295,10 @@ the server sends no display text the UI does not show.
   `transition` (compare-and-set). Every handle/monitor/cancel-token lives in `slot(role)`. `connect` to a taken role
   swaps while idle, else `CameraRoleBusy`.
 - **Cooler lifecycle**: `Precooling → Idle → Capturing|Guiding → WarmingUp`, ramped ≤5°C/min. **Disconnect** stops
-  capture first and cuts an in-flight sub short (≤15 s, stack saved) before closing the cooler — Stop alone once let
-  a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor.
+  capture first and cuts an in-flight sub short (stack saved) before closing the cooler — Stop alone once let
+  a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor. It waits 5 s for the
+  capture, then answers *WarmingUp* and the hand-back starts the warm-up. It runs on its own task: 2026-10-24's
+  dropped requests (a page reload) only stopped the capture and never warmed up or closed the camera.
 - **Per-camera profiles** are keyed `"{provider}/{model}"`; **telescope profiles** by camera *name*, seeding the
   solver's FOV — without a seed, two bodies of one model share one FOV and ASTAP fails to solve (once cost 19 min).
   A settings write restarts a solve only if the **solver camera's** resolved optics or binning change
@@ -295,8 +310,11 @@ the server sends no display text the UI does not show.
   process at first call. C `long` is 32-bit on Windows, widen with `i64::from`.
 - **Guide camera is one thread, not the pipeline**: nothing stacked/queued, started by `connect` so solving/preview
   work *while* framing. Post-processing runs only while `guide_stream.has_viewers()`; solving/raw saving sit above
-  both early exits. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's; both
-  encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
+  both early exits. Raw saving is a debug-mode diagnostic (`saves_guide_raw_frames(state.debug_mode())`): outside
+  it a saved switch is ignored, not cleared. `AppState::debug_mode` is set once by the server and is what
+  capabilities report as `debug_logging`, since `tracing::enabled!` answers per crate and the UI could hide a switch the
+  session still obeyed. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's;
+  both encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
 - **QHY and ToupTek handles are pointers** the close frees: every shim call goes through `open_sdk`, which refuses
   once the lease has closed. QHY's frame calls take no length and may write `GetQHYCCDMemLength` bytes, past the
   ROI's frame; a smaller buffer reads through a scratch copy. ToupTek refuses a buffer under its RAW frame.
@@ -348,7 +366,10 @@ above the last verdict.
 a drifting stack's border saved grainier than it streamed.
 
 SER (planetary) is uncompressed with per-frame timestamps; color id 0 is Mono, 8-11 are BayerRGGB/GRBG/GBRG/BGGR,
-100/101 are RGB/BGR. Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser`) and
+100/101 are RGB/BGR. **Its header counts its frames before the stack is done**: the storage task finalizes the
+container as it ends (`finish_container`; `EndSession` waits for every pipeline thread, and 2026-10-24's 26.5 GB Moon
+kept a count of 0 behind a stacker until the power went), and the writer rewrites the count every 32 frames and on
+every flush. `SerReader` trusts a header the file size agrees with, else reads the whole frames the file holds. Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser`) and
 `captures/stacked/...-stacking.fits`. **A resumed capture rejoins its folder and must not overwrite it**: the
 resume plan carries `next_frame`, and video writes `capture_2.ser`, etc. **A session is a name, not a folder**:
 the worker creates the folder with the first frame (eager creation once left 23 empty `-live` folders in a night),
@@ -414,7 +435,7 @@ lattice). WebGL needs `UNPACK_ALIGNMENT` 1 for the frontend's unpadded RGB rows.
 ## Adding a Stacking Type / Settings Persistence
 
 Add a `StackingType` variant (`crates/core/src/stacking/config.rs`), update `all()`, and implement its capability methods
-(`display_name`, `uses_star_registration`, `uses_fpn_removal`, etc.). A type with its own accumulator also gets a
+(`display_name`, `uses_star_registration`, `uses_fpn_removal`, `tone_profile`, etc.). A type with its own accumulator also gets a
 `LiveStacker` impl (`crates/session/src/capture/context/`) and a `create_live_stacker` arm; the stacking task drives every mode
 through that trait, and a carried stack only resumes under its own `kind()`.
 
@@ -475,8 +496,24 @@ set: nebula maxima, M42's fat stars). It replaced a 25 % match share that a thin
 detections) never reaches. A vote also pays for the ~10^4 offsets it searched (`Support::searched`): unpriced, 1
 in ~100 unrelated sparse fields passed. A refit with < 8 pairs holds scale at 1 (a thin fit carried 1.0034).
 
-**Planetary**: surface feature cross-correlation in an ROI (no stars needed). **Comet** [Pro]: centroids the
-nucleus so stars trail while the comet stacks sharp.
+**Planetary**: surface cross-correlation in a window half the frame's short side (on the reference's centroid with
+auto-tracking), searched **coarse to fine** (`planetary::alignment`): exhaustive only on the coarsest 2^k level of a
+`LuminancePyramid`, then a climb to a 3x3 local maximum on each finer one, whose neighbours the subpixel fit reuses
+(fixed ±2 px boxes could hand back their own edge); the reference's windows are built once (`AlignmentReference`).
+The exhaustive ±50 px search over 1504² took 134 s a frame on the Pi (2026-10-24's Moon) and Stop waited behind it;
+now ~8 ms on 20 x86 cores. The search starts at the **last correlated shift**, then ±200 px around the centroids'
+estimate: that Moon drifted 255 px in 80 s, and 77 % of its frames matched on the edge of a ±50 px search around 0.
+A match on the search's or the frame's edge (`TargetOutOfReach`) or under 0.3 (`SurfaceNotFound`) is **not
+stacked**, and the status bar says which; only a flat window stacks by centroids. Pro's multi-point gets the global
+shift as its `Search` (±8 px a point) and the session's pyramids, building none.
+
+**The window keeps 16 px from the frame's edges** (an eighth of a short side at most): clamped against one, a
+frame that had not moved peaked where its outward neighbour lay off the frame, so a planet off to one side lost
+every frame that had not moved in. Its NCC sums are taken about the reference's mean: one-pass f32 `E[x²]-E[x]²`
+placed a 0.07 %-contrast surface 3 px off at NCC 0.99. Guarded on the `moon-drifting-imx533-ser` fixture
+(`planetary_tests`, oracle shifts in `planetary::FRAMES`) and `planetary_moon_benchmark`.
+
+**Comet** [Pro]: centroids the nucleus so stars trail while the comet stacks sharp.
 
 A sub that **will not register** is explained before it is called movement (`FrameGate::explain_unregistered`):
 doubled stars (a bump: companion offsets that *agree*, `detection::doubled_star_share`, judged against the
@@ -497,6 +534,11 @@ ones winsorised to the threshold — cosmic rays can't widen the window, but a c
 geometrically. `RejectionMethod` has four variants but the live path implements only two (`MinMax` would need
 per-pixel min/max, +650 MB); the plain-mean path maintains `m2` too, so a settings toggle lands mid-stack without
 opening a gap.
+
+**The warp re-anchors its row walk** every `ANCHOR_EVERY` (32) pixels (`stacking::warp`): stepping a whole 3008 px
+row in f32 drifted samples up to 0.37 px (a 1.2e-4 rad turn is half an ulp past 2048), now 0.005; computing every
+pixel from its index cost 10 % of a rotated warp. Registration is held to a least-squares oracle on the same subs
+(`registration_keeps_what_a_least_squares_fit_would`), which seeing cannot fail as it fails a sub-vs-stack size.
 
 **A stack's first six subs are on probation** (`context::probation`): sub 1 used to become the
 reference unjudged (a bumped one: stars +40 %), and Pro cannot clip a pixel's first three samples.
@@ -524,22 +566,54 @@ the stretch is solved from by 13-20 %. The bin is resolved on the uncropped size
 `stack_crop_changed` names the live frame size the cut arrives at, and the live view waits for that frame:
 the two travel on different sockets, and reframing an old frame still in flight lost the zoom.
 
+**A crop move is not a change in the noise** (`capture::analysis`, `NoiseTrend::move_window`). The frame MAD reads
+the target's structure too, so a move that cut sky rose it +14 % in one sub (the 106-sub dumbbell at 41) and gave
+back 3 levels of target contrast by 64. Each move is measured **two-sided**: the stack's rows on the crop it left
+(`render_task::cut_for_render` hands them over) and the frame's on the one it entered, through the last window's white
+balance and model (`BackgroundModel::windowed`, ≤ 3.5 % past it; `every_nth_row`), ~400k pixels a side on rows of the
+stack's grid, so the overlap reads the same pixels (~10 ms a move). Their ratio sets the window, kept for the stack
+across settings and Processing Resolution changes, and by the saved PNG with the crop it was measured on
+(`StackNoiseWindow`). Measured against the trend instead, each move took the trend's error once its exponent froze
+(0.61 by 300 subs; the dumbbell 0.81, now 0.87). The frame still refits on schedule and that step is served, not
+bridged: refits of consecutive subs read 1.3-2.8 ADU on Fireworks and 6.1-8.7 on M31.
+
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
-**One node classifier for both models** (`background::classify`; bilinear here, Pro's TPS through the same completed
-grid): a robust polynomial ladder (degree <= 4) rejects nodes 3 sigma above it, **a rejected node whose climb up the
-excess ends at the frame edge is glow** and readmitted, targets grow through their wing (1 sigma, 3x3 mean, <= 2
-lines) and by their own radius (1-3 lines); holes refill from the fit, never above the node's own value, stepping
-down a degree where it would (a frame-filling M27 rendered black) and flat where the sky is one corner. Nodes hug
-both edges plus an inset line at 3.5 % (edge falloff), and the model subtracts the **whole** gradient: the 0.7 the
-stretch profiles set, a brightness prune and a crowding disc that landed off-target on every real stack once left
-M57's moon band at 22 output levels and a 35 mm corner glow at 70 (now 4 each). **Pro plate-solves each stack once**
-(`capture::field_solve`, depth >= 6, 90 s, never blind) and catalog footprints (`FieldProtection`, a generation in
-the analysis key) stay out of the sky. It solves on the **stack's** rig (the imaging camera's, not a guide holding
-Push-To, whose FOV refused every stack) and leaves Push-To's state alone: sharing it left a Push-To spinner up and
-sent Push-To's next bad frame blind. Push-To comes first — a Push-To solve cancels it — and a cancel (or Stop)
-retries on the next sub, never gives the stack up. Real-data guard: Pro's `background_gradient_regression` on
-`background-gradient-stacks`; `background_gradient_diagnostics` cuts it.
+**One node classifier for both models** (`background::classify`; monotone cubic (PCHIP) here, Pro's TPS through the
+same completed grid): a robust polynomial ladder (degree <= 4) rejects nodes 3 sigma above it, **a rejected node
+whose climb up the excess ends at the frame edge is glow** and readmitted, targets grow through their wing (1 sigma,
+3x3 mean, <= 2 lines) and by their own radius (1-3 lines); holes refill from the fit, never above the node's own
+value, stepping down a degree where it would (a frame-filling M27 rendered black) and flat where the sky is one
+corner. Nodes hug both edges plus an inset line at 3.5 % (edge falloff), and the model subtracts the **whole**
+gradient: the 0.7 the stretch profiles set, a brightness prune and a crowding disc that landed off-target on every
+real stack once left M57's moon band at 22 output levels and a 35 mm corner glow at 70 (now 4 each). **Pro
+plate-solves each stack once** (`capture::field_solve`, depth >= 6, 90 s, never blind) and catalog footprints
+(`FieldProtection`, a generation in the analysis key) stay out of the sky. It solves on the **stack's** rig (the
+imaging camera's, not a guide holding Push-To, whose FOV refused every stack) and leaves Push-To's state alone:
+sharing it left a Push-To spinner up and sent Push-To's next bad frame blind. Push-To comes first — a Push-To solve
+cancels it — and a cancel (or Stop) retries on the next sub, never gives the stack up. Real-data guard: Pro's
+`background_gradient_regression` on `background-gradient-stacks` and `background-capture-stacks`;
+`background_gradient_diagnostics` cuts both.
+
+**Edge profiles** (`background::edges`) take what either model leaves along the frame's edges: per edge, a profile
+across its outer 20 %, the median of five segments along it (a target touching the edge fills one or two), each
+segment's least-trimmed-squares line removed first (the grid follows smooth slopes; a plain fit through a band left
+the edge 3 sigma low). 2026-10-24's M57 and Iris carried an *instrument* band at 0.85-0.90 of the sensor width (same
+place on every target that night), which bilinear nodes cut and the old 0.01 RBF ridge flattened. Off for a single
+frame (`edge_profiles`, from `showing_stack`): live view re-estimates every frame and a sub's noise buries a band;
+~3.5-5.5 ms an estimate at 2712x1538 on 20 x86 cores. Keep 12 nodes: denser grids rejected the band as a target,
+since the classifier's reach constants count node lines. `background_injection_regression` scores injected
+gradients and faint nebulae on every stack, as `out(base + g + n) - out(base) - n`, so the stack's own unknown
+background cancels.
+
+**What the profiles must not take**: samples inside the classifier's catalog footprints (`protected_regions`; a
+protected 15 sigma filament along an edge lost 14.6), and a **thin-coverage strip** by the edge, found as the leading
+steps noisier than 1.25x the band's inner half (`THIN`; ring-2's registration border read 4.5, auto-cropped stacks
+0.87-1.13) and left as the grid has it: profiled through, it printed a line 8 output levels brighter. Steps are 0.5 %
+of the frame, joined linearly — held whole they jumped 1.5 sigma between neighbouring rows. The model is read at
+sampled pixels (`BackgroundModel::sampler`), not rendered into a buffer: 20 threads page-faulting a fresh 6.5 MB
+plane were a quarter of the estimate. Guarded by `no_line_is_printed_along_an_edge` and
+`the_edge_correction_has_no_steps` (Pro), which see the outer 1 % every other measure leaves out.
 
 ### Phase 7-8: Statistics & Auto-Color
 
@@ -554,12 +628,52 @@ level comes from the **samples** the refined peak points at, whose own spread us
 only (their *lower quartile*) — safe *upwards* against a frame-filling target and *downwards* against a population
 darker than the sky.
 
+**Where a target fills the frame the mode is the target** (M33 at 250 mm: its disk), and the real sky at the edges
+sinks under a black point that closes in with depth (10 -> 5 output levels by 34 subs). Open: a real-sky anchor
+(8b43910, reverted 2026-10-28) lifted M33 3 levels on average but coarsened its disk and lost its outer halo.
+
 ### Phase 10-12: Saturation Boost, Tone Mapping & Autostretch Solver
 
 Optional shadow saturation boost, then the core asinh/MTF stretch. **Asinh** solves for `stretch_factor` such that
 `input = adjusted_median` maps to `output = target_background` (default 0.15), via Newton-Raphson/Bisection. **MTF**
 solves algebraically for `m`. Steps: compute statistics → black point `= Median - c×Sigma` → solve the tone
 parameter → subtract black point → apply the stretch.
+
+**The gap's sigma stays the frame's MAD**, though under structure it lies flat (M33's read 1.39x the sky's noise at
+34 subs, the 106-sub M27 crop's 1.85x) and the depth gain then spends depth on nothing. Counting the gap in the sky's
+noise was tried and dropped: calibrated on six sky-dominated sessions (0.88-1.05x the MAD), it put the grain back on
+the curve (M33 0.59x a sub's, the deep dumbbell 0.60x against 0.46x), but the structure's MAD was also what kept
+bright targets in range — M27's core burned (197 -> 251 levels) and M31 at 250 mm, whose MAD is 4.5x its faint
+disk's noise, rendered core/mid/outer at 241/241/241 against 239/181/117. It needs a re-tuned depth curve and a way
+to tell a frame with no sky from one with a sky ring.
+
+### Planetary tone (`render::planetary`)
+
+**Planetary runs none of the deep-sky stages** (`ToneProfile::Planetary`, set in `get_render_pipeline_config`
+whatever the settings say): the gradient model read a lunar disc as gradient (`Moon_Mosaic` 19_47_45's median at 4
+of 255), neutralising a black sky turned Jupiter green, and the S-curve clipped 53-67 % of every Jupiter. Instead,
+levels off the frame's brightest-channel histogram: black the sky (0 with none, a band between), white the target's
+p99.9, both read off neighbouring pairs so no isolated hot pixel sets them, then `asinh(2x)/asinh(2)` to 0.94. The
+table is `ScaleBasis::MaxChannel`: by luminance, an H-alpha disc clipped red on 99.7 % of it. A per-camera
+`DaylightBalance` sets colour, never grey-world per frame (Mars went khaki). Guarded by `planetary_render_tests` on
+`Moon_Mosaic`, `Planets` and the drifting Moon.
+
+**The balance is read off the Moon, automatically** (`render::planetary::target`, `capture::daylight_tracker`): a
+colour camera starts at `DaylightBalance::PRIOR` (R x1.10, B x1.95: within 25 % of any Sony sensor behind a UV/IR
+cut, where identity left the Moon yellow-green), and every 2 s of Planetary the render task measures the frame on
+screen. It is the Moon if its limb is as bright as its centre (Jupiter darkens to 0.40-0.44), it has texture past
+its own grain (a featureless disc or a twilight sky has none), its sky is flat (16 px blocks spread under 2 % of
+the target: a glow towards the disc is not) and its colour under the balance in force is within x2 in red and x1.33
+in blue of the Moon's (Mars, an eclipse, the ice giants are not). Colour, texture and limb are read above the sky's
+per-channel block median (`planetary::sky`): one black point once counted a 0.6 % pedestal times the blue gain as
+haze, refusing a Moon at a fifth of full scale. Sizes count sensor pixels through the preview's bin, and with the
+stretch off the tracker solves the levels itself. The balance that renders it as `MOON_COLOUR` (1.10, 1, 0.92: between B-V's 0.85 blue and seven
+IMX533 Sun-like stars' 0.99) replaces the camera's when it moves past 0.5 %, saved to the profile as
+`daylight_balance_source: Moon` and announced as `settings_updated`; a profile with source `Prior` renders the prior
+whatever gains it carries, so pre-measure files with identity migrate. Planets render through the stored balance,
+never re-greyed. A mono camera's goes back to the prior on connect. The sky fades out of the black point as it nears
+the target's threshold (`SKY_LEVEL_BAND`: it fell 0.068 -> 0 in one frame); a sky past it, daylight Venus's, is not
+taken off — open, the histogram cannot tell it from maria without a daylight fixture.
 
 ### Phase 13: Final Output Mapping & Contrast
 
@@ -587,7 +701,13 @@ matrix, since an 8x8 Bayer tile once quantised a smooth sky into a visible latti
 since JPEG takes most of it back. `black_point_sigma` is scale-invariant; `depth_grain_gain` scales it by `N^s`, so
 **any** renderer of a stack must pass `stack_depth` through `AnalysisContext`, never `stacked_count`. The fused
 scale LUT's cache key is quantised *relatively*, not by an absolute step — the latter once let two tone curves 3%
-apart collide, so whichever rendered *second* silently reused the first's curve.
+apart collide, so whichever rendered *second* silently reused the first's curve. **The table is indexed by the
+luminance's float bits** (`stretch::scale_lut_position`: 512 entries an octave from 2^-24 to 1, 12289 entries,
+0.2 % apart at every level; within 0.15 of a level of the exact curve at any solve, `stretch::tests`). Spread evenly,
+its 8192 entries stepped 2 ADU of a 14-bit sensor: once the gap fell under a step the sky was interpolated from the
+curve's limit at zero and sank with depth (Cat's Eye 10.9 -> 6.2 levels by 27 subs, Ring-2 and Globular 64 too),
+its grain with it. A table is a `ScaleLut` (`scale_lut_from`), whose fixed length rules out one of another
+layout (a short one read silently wrong); `asinh` takes a series under 0.01, as f32's `ln` loses it.
 
 **The darkening half of the black floor** (`black_floor` negative) is a spatial gain from a 3x3 local mean — the
 sky itself is measured in-kernel as the *darkest* histogram peak holding ≥20% of samples, not the median, or a
@@ -611,7 +731,9 @@ INFO events, self-contained, collected on `spawn_blocking` under a 5 s timeout. 
 
 A dropped *capture* frame is signal lost for good, so render/stacking favour stacking: the display copy is gated
 by `want_display` but the frame always stacks; the capture→stacking queue is **latency-bounded** at 2s of
-exposures; per-stack estimates (white balance, background) are reused and refreshed only on proportional depth
+exposures. **Except after Stop**: queued frames stack for `STOP_DRAIN` (5 s, from the first Stop, `cancelled_for`),
+then are taken off unstacked and the stack saved (`capture::stop_drain`; their raw files and the SER are kept) —
+2026-10-24 sat 42 minutes in *Stopping* behind 19 frames. A capture that ends on its own still drains whole. Per-stack estimates (white balance, background) are reused and refreshed only on proportional depth
 growth.
 
 **A static sky must render the same frame after frame**: live view re-solves everything every frame, which is what
@@ -621,5 +743,5 @@ renders its own small jitter rather than a hard curve-flip. `IncrementalPixel` (
 read+written whole every frame — already the memory ceiling.
 
 `--span-timings` logs every stage span's duration (per-frame work belongs at `info_span!`, not `debug_span!`, or
-it's invisible); `--features telemetry` adds histograms/counters/queue-depth gauges, and the UI shows the **drop
-rate** over delivered frames. Build `--profile profiling` for `perf`.
+it's invisible); `--features telemetry` adds histograms/counters/queue-depth gauges, and in debug mode the UI
+shows the **drop rate** over delivered frames (beside LiveView's FPS and resolution). Build `--profile profiling` for `perf`.

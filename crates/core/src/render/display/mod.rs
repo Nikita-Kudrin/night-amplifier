@@ -22,7 +22,7 @@ pub use png::{encode_rgb8_png, encode_rgba8_png, write_png};
 #[derive(Clone)]
 pub struct StretchResult {
     pub black_point: f32,
-    pub scale_lut: Arc<Vec<f32>>,
+    pub scale_lut: Arc<crate::render::stretch::ScaleLut>,
     pub color_intensity: f32,
     /// The shadow floor the row tail still has to apply, resolved against this solve's
     /// sky level and already resampled onto its table. `None` in the common case,
@@ -85,7 +85,7 @@ pub mod testing {
     pub fn to_ready_frame_with_stretch(
         frame: &Frame,
         black_point: f32,
-        scale_lut: Arc<Vec<f32>>,
+        scale_lut: Arc<crate::render::stretch::ScaleLut>,
     ) -> RenderReadyFrame {
         let config = RenderPipelineConfig {
             contrast: false,

@@ -58,5 +58,5 @@ export function useCameraHardwareSettings() {
         })
     }
 
-    return {settingsRole, cameraSettings, currentCamera, liveStatus, error, clearError, apply}
+    return {settingsRole, cameraSettings, currentCamera, liveStatus, error, clearError, withErrorHandling, apply}
 }

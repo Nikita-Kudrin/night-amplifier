@@ -41,6 +41,17 @@ fn guide_camera_info() -> ConnectedCameraInfo {
     }
 }
 
+/// A state saving guide frames: its writer running and the guide switch on, in the
+/// debug mode that switch needs.
+fn saving_guide_frames() -> Arc<AppState> {
+    let (mut state, disk_writer) = AppState::new_for_testing();
+    state.set_debug_mode(true);
+    let state = Arc::new(state);
+    std::thread::spawn(move || disk_writer.run());
+    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    state
+}
+
 /// Run the guide loop for `frames` exposures on a blocking thread, and report how
 /// many the camera actually delivered.
 async fn drive_guide_loop(state: &Arc<AppState>, frames: usize) -> usize {
@@ -326,11 +337,7 @@ async fn an_eyepiece_resolution_change_during_an_exposure_applies_to_that_frame(
 /// target still writes the subs the user asked for.
 #[tokio::test]
 async fn guide_raw_frames_are_saved_even_when_nothing_is_watching() {
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
 
     drive_guide_loop(&state, 3).await;
 
@@ -361,11 +368,7 @@ async fn guide_raw_frames_are_saved_even_when_nothing_is_watching() {
 /// restarting at 1 wrote straight over the frames already in there.
 #[tokio::test]
 async fn a_resumed_guide_session_appends_to_the_folder_it_rejoined() {
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
 
     drive_guide_loop(&state, 3).await;
     let dir = guide_session_dir(&state)
@@ -407,10 +410,7 @@ async fn a_resumed_guide_session_appends_to_the_folder_it_rejoined() {
 /// every guide frame.
 #[tokio::test]
 async fn a_guide_resume_survives_a_failed_open_and_is_reported_once() {
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
     let mut events = state.events.subscribe();
 
     // Under a plain file nothing can be created, by root either.
@@ -684,11 +684,7 @@ fn files_in(dir: &std::path::Path) -> usize {
 /// folder after the user pressed Stop, with nothing short of unplugging it to stop.
 #[tokio::test]
 async fn stopping_the_guide_camera_stops_its_raw_frame_writing() {
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
     connect_and_start_guide(&state).await;
     wait_until_running(&state).await;
 
@@ -720,10 +716,7 @@ async fn stopping_the_guide_camera_stops_its_raw_frame_writing() {
 async fn stopping_the_guide_camera_syncs_the_frames_it_saved() {
     use crate::state::StorageSyncState;
 
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
     connect_and_start_guide(&state).await;
     wait_until_running(&state).await;
     let dir = loop_until_session_dir(&state).await;
@@ -757,11 +750,7 @@ async fn stopping_the_guide_camera_syncs_the_frames_it_saved() {
 /// frames from a different session.
 #[tokio::test]
 async fn a_stopped_guide_camera_does_not_rejoin_its_old_folder() {
-    let (state, disk_writer) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    std::thread::spawn(move || disk_writer.run());
-
-    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let state = saving_guide_frames();
     connect_and_start_guide(&state).await;
     wait_until_running(&state).await;
     let first = loop_until_session_dir(&state).await;
@@ -833,7 +822,9 @@ async fn loop_until_session_dir(state: &Arc<AppState>) -> std::path::PathBuf {
 /// Off by default, and it must stay a separate decision from the imaging switches.
 #[tokio::test]
 async fn guide_raw_saving_is_off_unless_asked_for() {
-    let (state, _dw) = AppState::new_for_testing();
+    // In debug mode, so it is the switch that keeps them off, not the mode.
+    let (mut state, _dw) = AppState::new_for_testing();
+    state.set_debug_mode(true);
     let state = Arc::new(state);
 
     // Saving every imaging mode must not implicitly save guide frames.
@@ -848,5 +839,30 @@ async fn guide_raw_saving_is_off_unless_asked_for() {
     assert!(
         guide_session_dir(&state).await.is_none(),
         "a guide session was opened without the guide switch"
+    );
+}
+
+/// Guide frames are a debug-mode diagnostic: outside it a switch left on from a debug
+/// run saves nothing, and stays on for the next one.
+#[tokio::test]
+async fn guide_raw_frames_are_not_saved_outside_debug_mode() {
+    let (state, disk_writer) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    std::thread::spawn(move || disk_writer.run());
+    state.settings.update(|s| s.raw_frame_saving.guide = true);
+
+    assert_eq!(drive_guide_loop(&state, 3).await, 3, "the guide camera did not expose");
+
+    assert!(
+        guide_session_dir(&state).await.is_none(),
+        "a guide session was opened outside debug mode"
+    );
+    let written: Vec<_> = std::fs::read_dir(state.disk_writer.raw_dir())
+        .map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).collect())
+        .unwrap_or_default();
+    assert!(written.is_empty(), "guide frames reached the disk: {written:?}");
+    assert!(
+        state.settings.snapshot().raw_frame_saving.guide,
+        "the observer's guide switch was cleared"
     );
 }

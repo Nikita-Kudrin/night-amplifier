@@ -2,12 +2,15 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::render::display::RenderReadyFrame;
+use night_amplifier_core::stacking::CropRect;
 use crate::state::{AppState, Resolution};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::channel::{QueueDepth, StackedFrame};
+use super::daylight_tracker::DaylightTracker;
 use super::pipeline;
 use super::stack_crop;
 use super::stream_encoding::{encode_watched, ConversionCache, FailureReports, StreamResolutions, StreamTarget};
@@ -44,6 +47,9 @@ pub fn run_render_task(
     // Same lifetime, and for a stronger reason: the factor decides what the tone-curve
     // solve measures, so it must not move under a viewer. See `SessionBinFactor`.
     let mut session_bin = SessionBinFactor::default();
+
+    // Reads the camera's daylight balance off the Moon every `DaylightTracker::PERIOD`.
+    let mut daylight = DaylightTracker::default();
 
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
@@ -105,29 +111,7 @@ pub fn run_render_task(
         // too, so a crop can never outlive the setting. A rect the frame cannot hold is shown
         // whole rather than costing the frame.
         let requested = crop.filter(|_| settings.auto_crop);
-        let (crop, binned) = {
-            let _span = tracing::info_span!("crop_and_bin", factor = bin, cropped = requested.is_some()).entered();
-            let cut = requested.and_then(|rect| {
-                let attempt = stack_crop::crop_coverage(noise.as_ref(), &rect).and_then(|map| {
-                    Ok((map, stack_crop::cut_display_frame(&mut display_frame, Some(&rect), bin)?))
-                });
-                match attempt {
-                    Ok((map, binned)) => {
-                        noise = map;
-                        Some((rect, binned))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Auto crop failed, showing the stack whole");
-                        None
-                    }
-                }
-            });
-            match cut {
-                Some((rect, binned)) => (Some(rect), binned),
-                None => (None, stack_crop::cut_display_frame(&mut display_frame, None, bin).unwrap_or(false)),
-            }
-        };
-        analysis.note_crop(crop);
+        let (crop, binned) = cut_for_render(&mut display_frame, &mut noise, requested, bin, &mut analysis);
         analysis.note_stack(stack_generation);
         // The stack's catalog footprints, carried onto the frame as cut and binned. Only
         // a stack is registered to the frame they were solved on, and only one its size.
@@ -141,11 +125,6 @@ pub fn run_render_task(
                 })
                 .map(Arc::new),
         );
-        // The map describes the frame, so it follows every geometry change the frame makes,
-        // and only where the frame really was binned.
-        if binned {
-            noise = noise.and_then(|field| field.binned(bin).ok());
-        }
 
         // Process frame through unified render pipeline
         let rendered = {
@@ -167,6 +146,9 @@ pub fn run_render_task(
                 }
             }
         };
+        state.stack_noise.publish(stack_generation, crop, analysis.noise_window());
+        let preview_bin = if binned { bin } else { 1 };
+        track_daylight_balance(&state, &mut daylight, (&display_frame, preview_bin), &rendered, std::time::Instant::now());
 
         // Use max parallel chunks for live view, single chunk during stacking.
         // Keyed on what is being displayed, not on whether this frame joined the
@@ -178,7 +160,7 @@ pub fn run_render_task(
         let noise = noise.map(Arc::new);
 
         let mut pipeline_config = rendered.pipeline_config;
-        pipeline_config.denoise.luma.star_sigma = star_sigma(star_fwhm, if binned { bin } else { 1 });
+        pipeline_config.denoise.luma.star_sigma = star_sigma(star_fwhm, preview_bin);
 
         let ready_frame = Arc::new(night_amplifier_core::render::display::RenderReadyFrame {
             linear_frame: display_frame,
@@ -230,6 +212,52 @@ pub fn run_render_task(
     }
 
     debug!("Render task ended");
+}
+
+/// Every `DaylightTracker::PERIOD` of Planetary, reads the imaging camera's daylight balance
+/// off `frame` if it shows the Moon, and saves what differs from the balance it was rendered
+/// through: the flat settings and the camera's profile, announced as `settings_updated`, so
+/// the next frame renders through it. `frame` is as the encoders get it: balanced, its black
+/// still on, which is what `TargetMeasure` reads, and binned by `bin` from the sensor's. With
+/// the stretch off no levels came with it: solved here, one histogram pass a period.
+pub(crate) fn track_daylight_balance(
+    state: &AppState,
+    tracker: &mut DaylightTracker,
+    (frame, bin): (&Frame, usize),
+    rendered: &pipeline::PreviewRender,
+    now: std::time::Instant,
+) {
+    use night_amplifier_core::render::planetary::{PlanetaryLevels, TargetMeasure};
+    use night_amplifier_core::render::ToneProfile;
+    if rendered.pipeline_config.tone != ToneProfile::Planetary || frame.channels() != 3 || !tracker.due(now) {
+        return;
+    }
+    let _span = tracing::info_span!("daylight_balance_measure").entered();
+    let levels = rendered.levels.unwrap_or_else(|| PlanetaryLevels::solve(frame));
+    let in_force = rendered.pipeline_config.daylight_balance;
+    let measure = TargetMeasure::of(frame, &levels).binned(bin);
+    let implied = match measure.moon(&in_force) {
+        Ok(implied) => implied,
+        Err(why) => {
+            debug!(?why, diameter = measure.diameter, bin, texture = measure.texture_excess(), limb = ?measure.limb, haze = measure.haze, "Not the Moon");
+            return;
+        }
+    };
+    let Some(next) = DaylightTracker::proposal(&in_force, implied) else { return };
+    let role = crate::state::CameraRole::Main;
+    let key = state
+        .camera_in_role(role)
+        .map(|camera| crate::camera::lifecycle::camera_profile_key(&camera.provider, &camera.info.name, role));
+    state.settings.update(|settings| {
+        let profile = settings.profile_for(role).calibrated_on_the_moon(next);
+        profile.apply_to(settings);
+        if let Some(key) = key {
+            settings.camera_profiles.insert(key, profile);
+        }
+    });
+    state.save_settings();
+    let _ = state.events.send(crate::events::ServerEvent::SettingsUpdated);
+    tracing::info!(red = next.red, green = next.green, blue = next.blue, "Daylight balance read off the Moon");
 }
 
 /// The session's typical star as a Gaussian sigma in the pixels of the frame the render
@@ -298,10 +326,7 @@ impl SessionBinFactor {
             return self.factor;
         }
 
-        let factor = match resolution.target_box() {
-            Some(target) => preview_bin_factor(width, height, target),
-            None => 1,
-        };
+        let factor = preview_bin(width, height, resolution);
         // `info`, not `debug`: this fires once per session and on the two changes the
         // observer makes deliberately, and it re-grades the picture when it moves.
         tracing::info!(
@@ -316,6 +341,60 @@ impl SessionBinFactor {
         self.factor = factor;
         factor
     }
+}
+
+/// The stack as the pipeline measures it, and `analysis` told so: cut to `requested` (the
+/// auto crop) and binned by `bin` in one pass, `noise` with it. A crop moving from another
+/// first hands the analysis the stack's rows on the one it left, for the move's two-sided
+/// probe (`PreviewAnalysis::left_window`). Returns the crop applied (`None` when the stack
+/// could not be cut to it) and whether the frame was binned. Public so the integration tests
+/// replay a stack through the render task's own cut.
+pub fn cut_for_render(
+    frame: &mut Arc<Frame>,
+    noise: &mut Option<NoiseField>,
+    requested: Option<CropRect>,
+    bin: usize,
+    analysis: &mut PreviewAnalysis,
+) -> (Option<CropRect>, bool) {
+    let _span = tracing::info_span!("crop_and_bin", factor = bin, cropped = requested.is_some()).entered();
+    let left = analysis
+        .left_window(requested, bin)
+        .and_then(|(rect, stride)| stack_crop::cut_rows(frame, &rect, bin, stride).ok());
+    let cut = requested.and_then(|rect| {
+        let attempt = stack_crop::crop_coverage(noise.as_ref(), &rect)
+            .and_then(|map| Ok((map, stack_crop::cut_display_frame(frame, Some(&rect), bin)?)));
+        match attempt {
+            Ok((map, binned)) => {
+                *noise = map;
+                Some((rect, binned))
+            }
+            Err(e) => {
+                warn!(error = %e, "Auto crop failed, showing the stack whole");
+                None
+            }
+        }
+    });
+    let (crop, binned) = match cut {
+        Some((rect, binned)) => (Some(rect), binned),
+        None => (None, stack_crop::cut_display_frame(frame, None, bin).unwrap_or(false)),
+    };
+    analysis.note_crop(crop);
+    if let Some(rows) = left {
+        analysis.note_left_window(rows);
+    }
+    // The map describes the frame, so it follows every geometry change the frame makes, and
+    // only where the frame really was binned.
+    if binned {
+        *noise = noise.take().and_then(|field| field.binned(bin).ok());
+    }
+    (crop, binned)
+}
+
+/// The factor a `width x height` stack is binned by before the pipeline at Processing
+/// Resolution `resolution`: [`preview_bin_factor`] against its box, 1 at Native. Public so
+/// the integration tests render a stack in production's order (bin, then stretch).
+pub fn preview_bin(width: usize, height: usize, resolution: Resolution) -> usize {
+    resolution.target_box().map_or(1, |target| preview_bin_factor(width, height, target))
 }
 
 /// Largest integer bin that still leaves the preview the pixels [`Resolution`] asks
@@ -484,18 +563,19 @@ mod tests {
 
         let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
         let binned_lut = binned_stretch.expect("binned stretch").scale_lut;
-        assert_eq!(full_lut.len(), binned_lut.len());
-
         let worst = full_lut
+            .entries()
             .iter()
-            .zip(binned_lut.iter())
+            .zip(binned_lut.entries())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
 
         // Measured on this fixture: gain 2.7351 -> 3.4380 at the 1 % input point
         // (+25.7 %) and 5.0621 -> 5.8775 at 10 % (+16.1 %), with the curve unchanged by
         // mid-tones. Shadows are exactly where an EAA viewer is looking.
-        let sample = |lut: &[f32], t: f32| lut[((lut.len() - 1) as f32 * t) as usize];
+        let sample = |lut: &night_amplifier_core::render::stretch::ScaleLut, t: f32| {
+            lut[night_amplifier_core::render::stretch::scale_lut_position(t).0]
+        };
         eprintln!(
             "curve at 1%/10%/50%: full {:.4}/{:.4}/{:.4}  binned {:.4}/{:.4}/{:.4}  worst {worst:.4}",
             sample(&full_lut, 0.01),
@@ -656,6 +736,131 @@ mod tests {
         // The initial frame plus the three queued ones were all superseded.
         assert_eq!(skipped, 4);
         drop(tx);
+    }
+
+    /// A flat disc of `radius`, patched with darker maria, in the raw IMX533 Moon's colour.
+    fn moon_frame(radius: f32) -> night_amplifier_core::frame::Frame {
+        const RAW: [f32; 3] = [0.944, 1.0, 0.487];
+        let (w, h) = (600, 500);
+        let mut frame = night_amplifier_core::frame::Frame::zeros(w, h, 3).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x as f32 - 300.0).hypot(y as f32 - 250.0) / radius;
+                let mut level = if r < 1.0 { 0.5 } else { 0.0 };
+                let (u, v) = (x as f32 / radius * 6.0, y as f32 / radius * 6.0);
+                if r < 1.0 && (u.sin() * (v * 1.3).cos()) > 0.35 {
+                    level *= 0.72;
+                }
+                for (c, t) in RAW.iter().enumerate() {
+                    frame.set_pixel(x, y, c, (level + 0.002) * t);
+                }
+            }
+        }
+        frame
+    }
+
+    fn rendered_planetary(
+        frame: &mut night_amplifier_core::frame::Frame,
+        settings: &crate::state::CaptureSettings,
+    ) -> crate::capture::pipeline::PreviewRender {
+        crate::capture::pipeline::process_preview_frame_with_analysis(
+            frame,
+            settings,
+            &night_amplifier_core::plugins::Plugins::none(),
+            super::AnalysisContext { showing_stack: false, stack_depth: 1 },
+            &mut super::PreviewAnalysis::new(),
+        )
+        .unwrap()
+    }
+
+    /// Planetary showing the Moon: the first frame calibrates the imaging camera's balance,
+    /// announced once; nothing within the period; and through the balance it set, the same
+    /// Moon proposes nothing more.
+    #[test]
+    fn the_moon_on_screen_calibrates_the_camera_once_and_then_holds() {
+        use crate::state::{AppState, CaptureSettings};
+        use night_amplifier_core::render::planetary::{DaylightBalance, DaylightBalanceSource, MOON_COLOUR};
+        use night_amplifier_core::stacking::StackingType;
+        use std::time::{Duration, Instant};
+
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|settings| settings.stacking_type = StackingType::Planetary);
+        let mut events = state.events.subscribe();
+        let settings = CaptureSettings::clone(&state.settings.snapshot());
+        assert_eq!(settings.daylight_balance, DaylightBalance::PRIOR, "a fresh profile renders through the prior");
+        let mut tracker = super::DaylightTracker::default();
+        let start = Instant::now();
+
+        let mut frame = moon_frame(180.0);
+        let rendered = rendered_planetary(&mut frame, &settings);
+        super::track_daylight_balance(&state, &mut tracker, (&frame, 1), &rendered, start);
+
+        let saved = state.settings.snapshot();
+        assert_eq!(saved.daylight_balance_source, DaylightBalanceSource::Moon);
+        let expected = DaylightBalance { red: MOON_COLOUR[0] / 0.944, green: 1.0, blue: MOON_COLOUR[2] / 0.487 }.sanitized();
+        assert!(!saved.daylight_balance.differs_from(&expected, 0.03), "{:?} against {expected:?}", saved.daylight_balance);
+        assert!(matches!(events.try_recv(), Ok(crate::events::ServerEvent::SettingsUpdated)));
+
+        // The same frame a second later: not due.
+        super::track_daylight_balance(&state, &mut tracker, (&frame, 1), &rendered, start + Duration::from_secs(1));
+        assert!(events.try_recv().is_err());
+
+        // Rendered through the balance it set, two seconds on: within the dead band, nothing saved.
+        let mut frame = moon_frame(180.0);
+        let rendered = rendered_planetary(&mut frame, &CaptureSettings::clone(&saved));
+        assert_eq!(rendered.pipeline_config.daylight_balance, saved.daylight_balance);
+        super::track_daylight_balance(&state, &mut tracker, (&frame, 1), &rendered, start + Duration::from_secs(2));
+        assert!(events.try_recv().is_err(), "the same Moon through its own balance changes nothing");
+        assert_eq!(state.settings.snapshot().daylight_balance, saved.daylight_balance);
+    }
+
+    /// Deep Sky, a mono frame and a planet leave the balance alone.
+    #[test]
+    fn nothing_but_the_moon_in_planetary_touches_the_balance() {
+        use crate::state::{AppState, CaptureSettings};
+        use night_amplifier_core::render::planetary::DaylightBalanceSource;
+        use night_amplifier_core::stacking::StackingType;
+        use std::time::Instant;
+
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let mut tracker = super::DaylightTracker::default();
+
+        let deep_sky = CaptureSettings::default();
+        let mut frame = moon_frame(180.0);
+        let rendered = rendered_planetary(&mut frame, &deep_sky);
+        super::track_daylight_balance(&state, &mut tracker, (&frame, 1), &rendered, Instant::now());
+        assert_eq!(state.settings.snapshot().daylight_balance_source, DaylightBalanceSource::Prior, "Deep Sky");
+
+        let planetary = CaptureSettings { stacking_type: StackingType::Planetary, ..Default::default() };
+        let mut speck = moon_frame(40.0);
+        let rendered = rendered_planetary(&mut speck, &planetary);
+        super::track_daylight_balance(&state, &mut tracker, (&speck, 1), &rendered, Instant::now());
+        assert_eq!(state.settings.snapshot().daylight_balance_source, DaylightBalanceSource::Prior, "a speck");
+    }
+
+    /// With the stretch off no levels come with the frame, and the Moon is still read; binned
+    /// by the preview, its size counts in sensor pixels: 100 px shown is a 200 px Moon at bin 2.
+    #[test]
+    fn the_moon_is_read_with_the_stretch_off_and_through_the_preview_bin() {
+        use crate::state::{AppState, CaptureSettings};
+        use night_amplifier_core::render::planetary::DaylightBalanceSource;
+        use night_amplifier_core::stacking::StackingType;
+        use std::time::Instant;
+
+        let source = |state: &AppState| state.settings.snapshot().daylight_balance_source;
+        for (auto_stretch, radius, bin) in [(false, 180.0, 1), (true, 50.0, 2)] {
+            let (state, _disk_writer) = AppState::new_for_testing();
+            let settings = CaptureSettings { stacking_type: StackingType::Planetary, auto_stretch, ..Default::default() };
+            let mut frame = moon_frame(radius);
+            let rendered = rendered_planetary(&mut frame, &settings);
+            assert_eq!(rendered.levels.is_some(), auto_stretch);
+            if bin > 1 {
+                super::track_daylight_balance(&state, &mut super::DaylightTracker::default(), (&frame, 1), &rendered, Instant::now());
+                assert_eq!(source(&state), DaylightBalanceSource::Prior, "100 px unbinned is a speck");
+            }
+            super::track_daylight_balance(&state, &mut super::DaylightTracker::default(), (&frame, bin), &rendered, Instant::now());
+            assert_eq!(source(&state), DaylightBalanceSource::Moon, "stretch {auto_stretch}, bin {bin}");
+        }
     }
 }
 

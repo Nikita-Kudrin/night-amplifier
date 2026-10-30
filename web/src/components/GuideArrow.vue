@@ -12,14 +12,23 @@ import {
   infoOffset,
   isOffScreen,
   screensAway,
+  viewSpan,
 } from '../utils/guideArrowLayout'
-import type {ClientPushDirection} from '../composables/events/pushToEvents'
+import type {ClientPushDirection, PlateSolving} from '../composables/events/pushToEvents'
 import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
 import type {ScreenRect} from '../composables/useCometRoi'
+import type {FrameSize} from '../composables/useImageStream'
+import PushToSolving from './PushToSolving.vue'
 
 const props = withDefaults(defineProps<{
-  /** `pushDirection` from the event stream. */
-  direction: ClientPushDirection
+  /** `pushDirection` from the event stream; `null` before a target's first solve, drawn only while solving. */
+  direction: ClientPushDirection | null
+  /**
+   * The streamed frame's size, which the screens count is measured on. Not `bounds`: a
+   * circular eyepiece's canvas is square whatever the frame, and before the first frame `/`
+   * hands over its container, so the count followed the phone's shape.
+   */
+  frame: FrameSize
   /** Where the image sits in the arrow's positioned parent, in CSS pixels. */
   bounds?: ScreenRect
   fovDeg?: number
@@ -30,32 +39,44 @@ const props = withDefaults(defineProps<{
    * named only while connected — a disconnected guide is nowhere to look.
    */
   otherCamera?: OtherSolvedCamera | null
+  /**
+   * Push-To is plate solving: a turning compass stands in for the readout, whose numbers
+   * are the last solve's, while the chevrons keep pointing the last known way.
+   */
+  solving?: boolean
+  solveStage?: PlateSolving['stage']
 }>(), {
   bounds: () => ({left: 0, top: 0, width: 400, height: 300}),
   fovDeg: 0,
   isCircular: false,
   otherCamera: null,
+  solving: false,
+  solveStage: null,
 })
 
-const angleDeg = computed(() => props.direction.angleDeg)
-const distanceDeg = computed(() => props.direction.distanceDeg)
-const directionHint = computed(() => props.direction.directionHint)
+const angleDeg = computed(() => props.direction?.angleDeg ?? 0)
+const distanceDeg = computed(() => props.direction?.distanceDeg ?? 0)
+const directionHint = computed(() => props.direction?.directionHint ?? null)
+// The last solve failed: the readout is the fix before it, dimmed and named so.
+const stale = computed(() => props.direction?.stale ?? false)
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
 
+const frameAspect = computed(() => props.frame.width / props.frame.height)
+// The readout counts frames, the same on every page; placement follows what this view shows.
 // Another camera's angle says nothing about which way this view's frame runs.
-const span = computed(() => props.otherCamera
-    ? 1
-    : frameSpan(angleDeg.value, props.bounds.width / props.bounds.height, props.isCircular))
-const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg, span.value))
-const offScreen = computed(() => isOffScreen(screenSizes.value))
-const arrowScale = computed(() => scaleFor(distanceDeg.value, screenSizes.value))
+const screenSizes = computed(() => screensAway(
+    distanceDeg.value, props.fovDeg, props.otherCamera ? 1 : frameSpan(angleDeg.value, frameAspect.value)))
+const viewScreens = computed(() => screensAway(
+    distanceDeg.value, props.fovDeg, props.otherCamera ? 1 : viewSpan(angleDeg.value, frameAspect.value, props.isCircular)))
+const offScreen = computed(() => isOffScreen(viewScreens.value))
+const arrowScale = computed(() => scaleFor(distanceDeg.value, viewScreens.value))
 const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bounds.height, offScreen.value))
 const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 
 const isOnTarget = computed(() => {
-  return distanceDeg.value < 0.1 || directionHint.value === 'OK'
+  return props.direction !== null && (distanceDeg.value < 0.1 || directionHint.value === 'OK')
 })
 
 const containerStyle = computed((): CSSProperties => {
@@ -118,7 +139,11 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
 
 <template>
   <div class="guide-arrow-container" :style="containerStyle">
-    <div v-if="isOnTarget" class="on-target">
+    <template v-if="!direction">
+      <PushToSolving v-if="solving" :stage="solveStage"/>
+    </template>
+
+    <div v-else-if="isOnTarget" class="on-target">
       <svg viewBox="0 0 100 100" :width="responsiveBaseSize * 0.8" :height="responsiveBaseSize * 0.8">
         <circle
             cx="50"
@@ -169,7 +194,15 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
         </svg>
       </div>
 
-      <div class="hud-chip distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
+      <PushToSolving
+          v-if="solving"
+          class="distance-info"
+          :class="{centered: otherCamera}"
+          :style="distanceInfoStyle"
+          :stage="solveStage"
+      />
+      <div v-else class="hud-chip distance-info" :class="{centered: otherCamera, stale}" :style="distanceInfoStyle">
+        <span v-if="stale" class="last-fix">last fix</span>
         <span class="distance">{{ formatAngle(distanceDeg) }}</span>
         <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
         <span class="hint">{{ directionHint }}</span>
@@ -264,6 +297,18 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
 .hint {
   font-size: var(--fs-base);
   color: var(--text-secondary);
+}
+
+/* The numbers of a fix the last solve could not confirm. */
+.distance-info.stale {
+  opacity: 0.5;
+}
+
+.last-fix {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* No chevron to sit behind: the box itself marks the centre of the view. */

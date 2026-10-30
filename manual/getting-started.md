@@ -71,7 +71,10 @@ What changes once a guide camera is attached:
 - **Its raw frames have their own switch**, under **Settings → Storage → Save Raw
   Frames**, and go to a folder of their own ending `-guide`. Turning the switch off stops
   the writing on the next frame; so does stopping the camera. A stop ends that folder —
-  starting again opens a new one.
+  starting again opens a new one. Saving guide frames is a diagnostic: the switch is
+  offered only when the server runs with debug logging (`RUST_LOG=debug`). Without it no
+  guide frame is saved, even if the switch was left on, and the switch keeps its setting
+  for the next debug run.
 
 The guide camera is only rendered while someone is looking at it. With the switch off it
 still exposes and still solves, but nothing is processed or encoded for the browser.
@@ -130,8 +133,10 @@ unplugged, or one still being reconnected.
 
 - **During a capture**, Disconnect on the imaging camera asks first, then stops the capture
   the way Stop does (the stack is saved) and disconnects. The sub being exposed is
-  discarded rather than waited for. The guide camera disconnects without asking; the
-  capture carries on.
+  discarded rather than waited for. A cooled camera shows *Warming up* within a few
+  seconds, while the stack is still being saved, and its warm-up starts once the capture
+  has finished. Reloading the page or locking the phone in the meantime does not cancel
+  the Disconnect. The guide camera disconnects without asking; the capture carries on.
 - **A cooled camera warms up first**, so its sensor is not shocked or fogged by a sudden
   change. The camera shows *Warming up* with the longest it can still take, and disconnects
   on its own once warm — after about 5½ minutes at most.

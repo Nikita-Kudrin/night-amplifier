@@ -4,7 +4,8 @@
 //! samples: loads and stores stay contiguous within a plane instead of the stride-3
 //! gathers the [`super::interleaved`] variants need.
 
-use super::{luminance_x4, scale_lut_lookup};
+use super::{luminance_x4, scale_lut_lookup, scale_lut_lookup_x4};
+use crate::render::stretch::{ScaleBasis, ScaleLut};
 use crate::frame::luminance;
 use wide::f32x4;
 
@@ -15,11 +16,12 @@ pub fn apply_luminance_scale_lut_simd_planar(
     g_plane: &mut [f32],
     b_plane: &mut [f32],
     black_point: f32,
-    scale_lut: &[f32],
+    scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     let len = r_plane.len();
-    if len < 4 || scale_lut.len() < 2 {
+    if len < 4 {
         apply_luminance_scale_lut_scalar_planar(
             r_plane,
             g_plane,
@@ -41,9 +43,6 @@ pub fn apply_luminance_scale_lut_simd_planar(
     // compiler emits one vector load and one vector store per plane instead of four
     // bounds-checked scalar accesses each. Getting this wrong is why the planar
     // rewrite measured no faster than the scalar loop it was meant to beat.
-    let lut_max_scalar = (scale_lut.len() - 1) as f32;
-    let lut_max = f32x4::splat(lut_max_scalar);
-    let lut_top = scale_lut.len() - 2;
 
     let (r_body, r_tail) = r_plane.as_chunks_mut::<4>();
     let (g_body, g_tail) = g_plane.as_chunks_mut::<4>();
@@ -63,33 +62,7 @@ pub fn apply_luminance_scale_lut_simd_planar(
         let b_sub = (b - bp).max(zero);
 
         let lum = luminance_x4(r_sub, g_sub, b_sub);
-        let pos = (lum * lut_max).min(lut_max);
-
-        let pos_arr = pos.to_array();
-        let i0 = [
-            (pos_arr[0] as usize).min(lut_top),
-            (pos_arr[1] as usize).min(lut_top),
-            (pos_arr[2] as usize).min(lut_top),
-            (pos_arr[3] as usize).min(lut_top),
-        ];
-
-        let i0_vec = f32x4::new([i0[0] as f32, i0[1] as f32, i0[2] as f32, i0[3] as f32]);
-        let frac = pos - i0_vec;
-
-        let lo = f32x4::new([
-            scale_lut[i0[0]],
-            scale_lut[i0[1]],
-            scale_lut[i0[2]],
-            scale_lut[i0[3]],
-        ]);
-        let hi = f32x4::new([
-            scale_lut[i0[0] + 1],
-            scale_lut[i0[1] + 1],
-            scale_lut[i0[2] + 1],
-            scale_lut[i0[3] + 1],
-        ]);
-
-        let scale = lo + (hi - lo) * frac;
+        let scale = scale_lut_lookup_x4(scale_lut, lum);
 
         let base_add = lum * scale * one_minus_ci;
         let channel_mul = scale * ci;
@@ -124,13 +97,10 @@ pub fn apply_luminance_scale_lut_scalar_planar(
     g_plane: &mut [f32],
     b_plane: &mut [f32],
     black_point: f32,
-    scale_lut: &[f32],
+    scale_lut: &ScaleLut,
     color_intensity: f32,
 ) {
-    if scale_lut.len() < 2 {
-        return;
-    }
-
+    debug_assert_eq!(scale_lut.basis(), ScaleBasis::Luminance);
     for i in 0..r_plane.len() {
         let r = (r_plane[i] - black_point).max(0.0);
         let g = (g_plane[i] - black_point).max(0.0);

@@ -53,7 +53,7 @@ pub async fn get_capabilities(State(state): State<Arc<AppState>>) -> impl IntoRe
         comet: CometCapabilities {
             pro_stacking: has_comet,
         },
-        debug_logging: tracing::enabled!(tracing::Level::DEBUG),
+        debug_logging: state.debug_mode(),
     };
 
     (StatusCode::OK, ApiResponse::ok(response))

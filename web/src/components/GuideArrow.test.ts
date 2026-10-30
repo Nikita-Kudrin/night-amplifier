@@ -4,12 +4,17 @@ import GuideArrow from './GuideArrow.vue'
 import type {pushDirectionFrom, ClientPushDirection} from '../composables/events/pushToEvents'
 import type {PushDirection} from '../composables/api.events'
 import {DIRECTION_HINT_VALUES} from '../composables/api.types'
+import type {FrameSize} from '../composables/useImageStream'
 
 type ArrowProps = InstanceType<typeof GuideArrow>['$props']
 
-/** The arrow's props as the tables below spell them: the direction's fields and the image box, flat. */
-type FlatProps = Partial<Pick<ClientPushDirection, 'angleDeg' | 'distanceDeg' | 'isClose' | 'directionHint'>> &
-    Omit<ArrowProps, 'direction' | 'bounds'> & {
+/**
+ * The arrow's props as the tables below spell them: the direction's fields and the image box,
+ * flat. `frame` defaults to the box's size, as a canvas off the circular view takes the frame's.
+ */
+type FlatProps = Partial<Pick<ClientPushDirection, 'angleDeg' | 'distanceDeg' | 'isClose' | 'directionHint' | 'stale'>> &
+    Omit<ArrowProps, 'direction' | 'bounds' | 'frame'> & {
+        frame?: FrameSize
         imageLeft?: number
         imageTop?: number
         imageWidth?: number
@@ -32,13 +37,18 @@ const IMAGE_PROPS = {
 
 /** Mounts from flat props, as the tables below spell them: direction and image box split out. */
 function mountArrow(propsOverrides: FlatProps = {}) {
-    const {angleDeg, distanceDeg, isClose, directionHint, imageLeft, imageTop, imageWidth, imageHeight, ...rest} =
+    const {angleDeg, distanceDeg, isClose, directionHint, stale = false, imageLeft, imageTop, imageWidth, imageHeight, frame, ...rest} =
         {...DEFAULT_PROPS, ...propsOverrides}
-    const direction: ClientPushDirection = {angleDeg, distanceDeg, isClose, directionHint, fovDeg: 0, solvedCamera: null}
+    const direction: ClientPushDirection = {angleDeg, distanceDeg, isClose, directionHint, fovDeg: 0, solvedCamera: null, stale}
     const bounds = imageWidth !== undefined && imageHeight !== undefined
         ? {left: imageLeft ?? 0, top: imageTop ?? 0, width: imageWidth, height: imageHeight}
         : undefined
-    const props: ArrowProps = {direction, ...rest, ...(bounds && {bounds})}
+    const props: ArrowProps = {
+        direction,
+        frame: frame ?? {width: bounds?.width ?? 400, height: bounds?.height ?? 300},
+        ...rest,
+        ...(bounds && {bounds}),
+    }
     return mount(GuideArrow, {props})
 }
 
@@ -97,7 +107,7 @@ function expectSvgWithinImage(wrapper: VueWrapper, {imageLeft = 0, imageTop = 0,
 describe('GuideArrow', () => {
     // The camelCase object `pushDirectionFrom` builds, not the wire's snake_case one.
     it('takes the direction as the event stream holds it', () => {
-        expectTypeOf<ArrowProps['direction']>().toEqualTypeOf<ReturnType<typeof pushDirectionFrom>>()
+        expectTypeOf<ArrowProps['direction']>().toEqualTypeOf<ReturnType<typeof pushDirectionFrom> | null>()
         expectTypeOf<PushDirection>().not.toExtend<ArrowProps['direction']>()
     })
 
@@ -142,6 +152,120 @@ describe('GuideArrow', () => {
 
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
             expect(wrapper.find('.other-camera').exists()).toBe(false)
+        })
+    })
+
+    describe('while Push-To is solving', () => {
+        const STAGE = {label: 'blind', attempt: 2, total: 3}
+
+        it('turns a compass in place of the readout, whose numbers are the last solve\'s', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, solving: true})
+
+            expect(wrapper.find('.push-to-solving').attributes('role')).toBe('status')
+            expect(wrapper.find('.needle').classes()).toContain('spinning')
+            expect(wrapper.find('.distance').exists()).toBe(false)
+            expect(wrapper.find('.hint').exists()).toBe(false)
+        })
+
+        it('keeps the chevrons pointing the last known way', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, angleDeg: 135, solving: true})
+
+            expect(wrapper.find('.arrow-wrapper').attributes('style')).toContain('rotate(135deg)')
+            expect(wrapper.findAll('.arrow-wrapper path')).toHaveLength(5)
+        })
+
+        it('puts the compass where the readout sits', () => {
+            const props = {...IMAGE_PROPS, angleDeg: 60, distanceDeg: 3, fovDeg: 1}
+            const readout = mountArrow(props).find('.distance-info')
+            const compass = mountArrow({...props, solving: true}).find('.distance-info')
+
+            expect(compass.classes()).toContain('push-to-solving')
+            expect(compass.attributes('style')).toBe(readout.attributes('style'))
+        })
+
+        it('counts the steps of a multi-strategy solve, and only of one', () => {
+            expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: STAGE}).find('.step').text()).toBe('step 2/3')
+            expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: {...STAGE, attempt: 1, total: 1}})
+                .find('.step').exists()).toBe(false)
+            expect(mountArrow({...IMAGE_PROPS, solving: true}).find('.step').exists()).toBe(false)
+        })
+
+        it('centres the compass over another camera, as it centres the readout', () => {
+            const wrapper = mountArrow({
+                ...IMAGE_PROPS, fovDeg: 1.45, solving: true, otherCamera: {name: 'Neptune-C II', connected: true},
+            })
+
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.push-to-solving').classes()).toContain('centered')
+            expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
+        })
+
+        it('leaves On Target as it is', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, distanceDeg: 0.05, isClose: true, directionHint: 'OK', solving: true})
+
+            expect(wrapper.find('.on-target').exists()).toBe(true)
+            expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+        })
+
+        // `aimAt` clears the direction, so a new target's first solve, up to minutes on the
+        // blind rung, had nothing on screen at all.
+        it('before a target\'s first solve, shows only the compass, at the centre of the view', () => {
+            const wrapper = mount(GuideArrow, {
+                props: {
+                    direction: null,
+                    frame: {width: 800, height: 600},
+                    bounds: {left: 0, top: 0, width: 800, height: 600},
+                    solving: true,
+                    solveStage: STAGE,
+                },
+            })
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+            expect(wrapper.find('.step').text()).toBe('step 2/3')
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.on-target').exists()).toBe(false)
+            expect(wrapper.find('.distance-info').exists()).toBe(false)
+            expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
+        })
+
+        // Its parents mount it so only while solving; a hold that ended must not leave one turning.
+        it('draws nothing with neither a direction nor a solve', () => {
+            const wrapper = mount(GuideArrow, {props: {direction: null, frame: {width: 800, height: 600}}})
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.distance-info').exists()).toBe(false)
+        })
+    })
+
+    // The server keeps the direction through a failed solve, so the readout that comes
+    // back is the fix before it; it once looked exactly like a fresh one.
+    describe('after a failed solve', () => {
+        it('dims the readout and names it the last fix', () => {
+            const fresh = mountArrow({...IMAGE_PROPS, fovDeg: 1})
+            const stale = mountArrow({...IMAGE_PROPS, fovDeg: 1, stale: true})
+
+            expect(fresh.find('.distance-info').classes()).not.toContain('stale')
+            expect(fresh.find('.last-fix').exists()).toBe(false)
+            expect(stale.find('.distance-info').classes()).toContain('stale')
+            expect(stale.find('.last-fix').text()).toBe('last fix')
+            expect(stale.find('.distance').text()).toBe(fresh.find('.distance').text())
+            expect(stale.find('.screen-size').text()).toBe(fresh.find('.screen-size').text())
+        })
+
+        it('lets the compass stand in for a stale readout while the next solve runs', () => {
+            const wrapper = mountArrow({...IMAGE_PROPS, stale: true, solving: true})
+
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+            expect(wrapper.find('.last-fix').exists()).toBe(false)
+        })
+
+        it('marks another camera\'s readout too', () => {
+            const wrapper = mountArrow({
+                ...IMAGE_PROPS, stale: true, otherCamera: {name: 'Neptune-C II', connected: true},
+            })
+
+            expect(wrapper.find('.distance-info').classes()).toEqual(expect.arrayContaining(['centered', 'stale']))
         })
     })
 
@@ -438,6 +562,50 @@ describe('GuideArrow', () => {
         it('counts screens in heights for a vertical push on the same frame', () => {
             const wrapper = mountArrow({distanceDeg: 22.22, fovDeg: 1.45, imageWidth: 2539, imageHeight: 1440})
             expect(wrapper.find('.screen-size').text()).toBe('15× screen')
+        })
+
+        describe('the same on every page (2026-10-24)', () => {
+            // The guide's 2712x1538 frame, first push of the night at 60.1°, 10° off: `/` read
+            // 3.4 screens, the round eyepiece 6.9 — it counted its circle, one height every way.
+            const GUIDE_FRAME = {width: 2712, height: 1538}
+            const PUSH = {angleDeg: 60.14, distanceDeg: 10, directionHint: 'NW', fovDeg: 1.45, frame: GUIDE_FRAME} satisfies FlatProps
+            const label = (props: FlatProps) => mountArrow({...PUSH, ...props}).find('.screen-size').text()
+
+            it('counts frames on the circular eyepiece as `/` does', () => {
+                const liveView = label({imageWidth: 844, imageHeight: 479})
+                const eyepiece = label({imageWidth: 800, imageHeight: 800, isCircular: true})
+
+                expect(liveView).toBe('3.4× screen')
+                expect(eyepiece).toBe(liveView)
+            })
+
+            it('measures the frame, not the box it is drawn in', () => {
+                // `/` before its first frame: the phone's portrait container
+                expect(label({imageWidth: 390, imageHeight: 844})).toBe('3.4× screen')
+            })
+
+            it('still pins the arrow at the circle when the target is in the frame but off it', () => {
+                // Sideways 0.6° on a 1.45° frame: 23 % of a frame across, past 0.4 of the circle
+                const sideways = {...PUSH, angleDeg: 90, distanceDeg: 0.6, directionHint: 'W', imageWidth: 800, imageHeight: 800} satisfies FlatProps
+                const circular = mountArrow({...sideways, isCircular: true})
+                const rectangular = mountArrow(sideways)
+
+                expect(circular.find('.screen-size').text()).toBe('23% screen')
+                expect(rectangular.find('.screen-size').text()).toBe('23% screen')
+                expect(getPosition(circular).left).toBeGreaterThan(400)
+                expect(getPosition(rectangular)).toEqual({left: 400, top: 400})
+            })
+
+            it('places against a portrait frame\'s narrower circle', () => {
+                // The circle is the frame's width across, half its height: 0.3 heights is 0.6 of it
+                const portrait = {
+                    angleDeg: 0, distanceDeg: 0.3, fovDeg: 1, frame: {width: 1000, height: 2000},
+                    imageWidth: 800, imageHeight: 800,
+                } satisfies FlatProps
+
+                expect(getPosition(mountArrow({...portrait, isCircular: true})).top).toBeLessThan(400)
+                expect(getPosition(mountArrow(portrait))).toEqual({left: 400, top: 400})
+            })
         })
 
         it('counts in heights when the angle belongs to another camera', () => {

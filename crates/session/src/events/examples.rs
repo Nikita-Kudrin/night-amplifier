@@ -32,7 +32,7 @@ fn camera() -> CameraListEntry {
             max_height: 3008,
             pixel_size_x_um: 3.76,
             pixel_size_y_um: 3.76,
-            sensor_type: "Color".into(),
+            sensor_type: night_amplifier_core::camera::SensorType::Color,
             has_cooler: true,
             has_dew_heater: true,
             min_temp_c: Some(-30.0),
@@ -109,6 +109,7 @@ impl ServerEvent {
                 is_close: false,
                 fov_deg: Some(1.45),
                 solved_camera: Some("ASI533MC Pro".into()),
+                stale: false,
             }),
             E::PushDirectionCleared,
             E::PlateSolvingStatus(SolveStatus {

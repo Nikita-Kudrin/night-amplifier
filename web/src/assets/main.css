@@ -219,7 +219,9 @@ button {
     height: 100%;
 }
 
-.btn-icon.active {
+/* The :hover twin outranks `.btn:hover`, which a touch screen leaves stuck on the tapped button. */
+.btn-icon.active,
+.btn-icon.active:hover:not(:disabled) {
     background: var(--primary);
     color: var(--on-primary);
 }

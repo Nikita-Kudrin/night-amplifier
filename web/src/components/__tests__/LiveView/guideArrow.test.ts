@@ -1,11 +1,18 @@
+import {nextTick, ref} from 'vue'
 import {setupMocks, mountLiveView} from './setup'
+import type {Mocks} from './setup'
 import {camera, clientDirection} from '../../../test/fixtures'
 import type {PushToTarget} from '../../../composables/api.events'
+import {NOT_SOLVING} from '../../../composables/events/pushToEvents'
+import type {PlateSolving} from '../../../composables/events/pushToEvents'
+import {FAILED_SOLVE_HOLD_MS} from '../../../constants'
 
 describe('LiveView - Guide Arrow Integration', () => {
+    let mocks: Mocks
+
     beforeEach(() => {
         vi.clearAllMocks()
-        setupMocks()
+        mocks = setupMocks()
     })
 
     describe('visibility', () => {
@@ -18,7 +25,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             expect(wrapper.findComponent({name: 'GuideArrow'}).exists()).toBe(false)
         })
 
-        it('does not show guide arrow when target is set but no direction', () => {
+        it('does not show guide arrow when target is set but no direction and nothing is solving', () => {
             const wrapper = mountLiveView({
                 pushDirection: null,
                 currentTarget: {
@@ -66,7 +73,125 @@ describe('LiveView - Guide Arrow Integration', () => {
         })
     })
 
+    describe('while Push-To is solving', () => {
+        const TARGET: PushToTarget = {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}
+        const STAGE = {label: 'blind', attempt: 2, total: 3}
+        const SOLVING = {...NOT_SOLVING, inProgress: true, targetName: 'M31', stage: STAGE}
+
+        it('shows the compass alone while a new target\'s first solve runs', () => {
+            const wrapper = mountLiveView({currentTarget: TARGET, eventStream: {plateSolving: SOLVING}})
+
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('direction')).toBeNull()
+            expect(wrapper.find('.push-to-solving').exists()).toBe(true)
+        })
+
+        it('hands the arrow the solve and its step', () => {
+            const wrapper = mountLiveView({
+                currentTarget: TARGET,
+                pushDirection: clientDirection({angleDeg: 45, distanceDeg: 10, directionHint: 'NE'}),
+                eventStream: {plateSolving: SOLVING},
+            })
+
+            const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
+            expect(guideArrow.props('solving')).toBe(true)
+            expect(guideArrow.props('solveStage')).toEqual(STAGE)
+            expect(wrapper.find('.distance').exists()).toBe(false)
+        })
+
+        describe('when it fails', () => {
+            const POINTING = clientDirection({angleDeg: 45, distanceDeg: 10, directionHint: 'NE'})
+            const FAILED: PlateSolving = {...NOT_SOLVING, targetName: 'M31', lastResult: 'failed'}
+
+            afterEach(() => vi.useRealTimers())
+
+            // The server keeps the direction through a failure: these are the last fix's numbers.
+            // The server restates the direction it keeps through a failure as stale; the
+            // mark rides on it, so dismissing "Failed to find" (which clears the verdict on
+            // this page) no longer gives the old numbers back looking fresh.
+            it('gives the readout back marked as the last fix, through a dismissed verdict', async () => {
+                vi.useFakeTimers()
+                const plateSolving = ref<PlateSolving>(SOLVING)
+                const pushDirection = ref(POINTING)
+                const wrapper = mountLiveView({currentTarget: TARGET, eventStream: {plateSolving, pushDirection}})
+
+                plateSolving.value = FAILED
+                pushDirection.value = {...POINTING, stale: true}
+                await nextTick()
+                vi.advanceTimersByTime(FAILED_SOLVE_HOLD_MS)
+                await nextTick()
+
+                expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+                expect(wrapper.find('.distance-info').classes()).toContain('stale')
+                expect(wrapper.find('.last-fix').exists()).toBe(true)
+
+                plateSolving.value = {...NOT_SOLVING}
+                await nextTick()
+                expect(wrapper.find('.last-fix').exists()).toBe(true)
+
+                pushDirection.value = POINTING
+                await nextTick()
+                expect(wrapper.find('.last-fix').exists()).toBe(false)
+            })
+
+            // An unusable frame is retried 2 s after it failed; the readout flashed in between.
+            it('turns one compass through quick failed retries', async () => {
+                vi.useFakeTimers()
+                const plateSolving = ref<PlateSolving>(SOLVING)
+                const wrapper = mountLiveView({currentTarget: TARGET, pushDirection: POINTING, eventStream: {plateSolving}})
+                const seen = new Set<boolean>()
+
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    plateSolving.value = FAILED
+                    await nextTick()
+                    for (let ms = 0; ms < 2500; ms += 100) {
+                        vi.advanceTimersByTime(100)
+                        await nextTick()
+                        seen.add(wrapper.find('.push-to-solving').exists())
+                    }
+                    plateSolving.value = SOLVING
+                    await nextTick()
+                }
+
+                expect([...seen]).toEqual([true])
+            })
+        })
+    })
+
     describe('props passing', () => {
+        // The screens count is measured on the frame, which the eyepiece pages share; the
+        // canvas box is the container's until the first frame lands.
+        it('hands the arrow the streamed frame\'s size', async () => {
+            const wrapper = mountLiveView({
+                pushDirection: clientDirection({angleDeg: 90, distanceDeg: 10, directionHint: 'W', isClose: false}),
+                currentTarget: {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+            })
+            const frame = () => wrapper.findComponent({name: 'GuideArrow'}).props('frame')
+
+            expect(frame()).toEqual({width: 0, height: 0})
+            mocks.mockImageStream.dimensions.value = {width: 2712, height: 1538}
+            await nextTick()
+            expect(frame()).toEqual({width: 2712, height: 1538})
+        })
+
+        // A Start's `no_frame` or a reconnect zeroes the stream: the count fell back to
+        // heights, 6.9 screens for this sideways push's 3.9, until the next frame.
+        it('counts frames of the camera\'s sensor while the stream has none', async () => {
+            const wrapper = mountLiveView({
+                pushDirection: clientDirection({angleDeg: 90, distanceDeg: 10, directionHint: 'W', isClose: false, fovDeg: 1.45}),
+                currentTarget: {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+                mainCamera: camera({info: {max_width: 2712, max_height: 1538}}),
+            })
+            const screens = () => wrapper.find('.screen-size').text()
+
+            expect(screens()).toBe('3.9× screen')
+            mocks.mockImageStream.dimensions.value = {width: 1356, height: 769}
+            await nextTick()
+            expect(screens()).toBe('3.9× screen')
+            mocks.mockImageStream.dimensions.value = {width: 0, height: 0}
+            await nextTick()
+            expect(screens()).toBe('3.9× screen')
+        })
+
         it('passes correct angle to GuideArrow', () => {
             const wrapper = mountLiveView({
                 pushDirection: clientDirection({

@@ -623,7 +623,7 @@ describe('useEventStream', () => {
             expect(currentTarget.value).toEqual({name: 'Andromeda', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27})
             expect(pushDirection.value).toEqual({
                 angleDeg: 120, distanceDeg: 4.5, directionHint: 'SE', isClose: false,
-                fovDeg: 1.45, solvedCamera: 'Main',
+                fovDeg: 1.45, solvedCamera: 'Main', stale: false,
             })
             expect(plateSolving.value).toEqual({
                 inProgress: true, targetName: 'M31', lastResult: null,
@@ -631,6 +631,29 @@ describe('useEventStream', () => {
             })
             expect(pushToBlocked.value).toBe('Telescope is moving')
             expect(solvingMessage.value).toBe('Searching (step 3/4): M31')
+        })
+
+        // A failed solve leaves the last fix up, marked by the server: dismissing the
+        // "Failed to find" chip clears this page's verdict and must leave the mark alone.
+        it('keeps the server\'s stale mark on the arrow through a dismissed verdict', async () => {
+            const {pushDirection, plateSolving, clearPlateSolving} = useEventStream()
+            const pointing = {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false, fov_deg: 1.45, solved_camera: 'Main'} as const
+
+            await openWebSocket()
+            await sendSnapshot({
+                target: {name: 'Andromeda', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+                direction: {...pointing, stale: true},
+                solve: {target_name: 'M31', last_result: 'failed'},
+            })
+            expect(pushDirection.value?.stale).toBe(true)
+
+            clearPlateSolving()
+            expect(plateSolving.value.lastResult).toBeNull()
+            expect(pushDirection.value?.stale).toBe(true)
+
+            await sendEvent({type: 'position_solved', ra_degrees: 10.68, dec_degrees: 41.27, ra_string: '', dec_string: '', stars_detected: null, confidence: 1, rotation_deg: 0})
+            await sendEvent({type: 'push_direction_updated', ...pointing, stale: false})
+            expect(pushDirection.value?.stale).toBe(false)
         })
 
         // What a lost event left behind -- "Searching...", an arrow, a blocker -- goes.
@@ -715,7 +738,7 @@ describe('useEventStream', () => {
 
             expect(pushDirection.value).toEqual({
                 angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', isClose: false,
-                fovDeg: 1.45, solvedCamera: 'Neptune-C II',
+                fovDeg: 1.45, solvedCamera: 'Neptune-C II', stale: false,
             })
         })
 

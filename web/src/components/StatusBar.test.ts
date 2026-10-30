@@ -9,7 +9,7 @@ import {sendTo} from '../test/eventStream'
 import {createCaptureEvents} from '../composables/events/captureEvents'
 import type {PlateSolving} from '../composables/events/pushToEvents'
 import type {SolveVerdict} from '../composables/api.types'
-import {camera} from '../test/fixtures'
+import {camera, capabilities} from '../test/fixtures'
 
 describe('StatusBar', () => {
     function mountStatusBar(provide: ProvideOverrides = {}) {
@@ -419,28 +419,27 @@ describe('StatusBar', () => {
             expect(chip.find('.btn-dismiss').exists()).toBe(false)
         })
 
-        it('says how many files reached the disk once every one has', async () => {
-            const clearStorageSync = vi.fn()
-            const wrapper = mountWith({state: 'synced', files: 166, failed: 0, error: null}, clearStorageSync)
-
-            const chip = wrapper.find('.storage-sync.main.synced')
-            expect(chip.find('.status-chip-text').text()).toBe('Saved 166 files to disk')
-            expect(chip.classes()).toContain('tone-success')
-            await chip.trigger('click')
-            expect(clearStorageSync).toHaveBeenCalledWith('main')
-        })
-
-        // Each camera syncs when it stops: the guide's chip is its own, and dismissed alone.
-        it('shows the guide camera\'s save beside the imaging camera\'s', async () => {
-            const clearStorageSync = vi.fn()
+        it('shows nothing once every file reached the disk', () => {
             const wrapper = mountWith(
-                {state: 'synced', files: 166, failed: 0, error: null},
-                clearStorageSync,
+                {state: 'synced', files: 166, failed: 0, error: null}, vi.fn(),
                 {state: 'synced', files: 1, failed: 0, error: null},
             )
 
+            expect(wrapper.find('.storage-sync').exists()).toBe(false)
+            expect(wrapper.text()).not.toContain('Saved')
+        })
+
+        // Each camera syncs when it stops: the guide's chip is its own, and dismissed alone.
+        it('shows the guide camera\'s failure beside the imaging camera\'s', async () => {
+            const clearStorageSync = vi.fn()
+            const wrapper = mountWith(
+                {state: 'failed', files: 165, failed: 1, error: null},
+                clearStorageSync,
+                {state: 'failed', files: 0, failed: 1, error: null},
+            )
+
             const texts = wrapper.findAll('.storage-sync .status-chip-text').map((chip) => chip.text())
-            expect(texts).toEqual(['Saved 166 files to disk', 'Saved 1 guide frame to disk'])
+            expect(texts).toEqual(['1 file not saved to disk', '1 guide frame not saved to disk'])
             await wrapper.find('.storage-sync.guide').trigger('click')
             expect(clearStorageSync).toHaveBeenCalledWith('guide')
         })
@@ -504,18 +503,29 @@ describe('StatusBar', () => {
     })
 
     describe('Dropped Frames Counter', () => {
+        // A diagnostic, like LiveView's FPS and resolution: shown only in debug mode.
+        function mountInDebugMode(eventStream: ProvideOverrides['eventStream']) {
+            return mountStatusBar({eventStream, capabilities: capabilities({debug_logging: true})})
+        }
+
         it('does not show dropped counter when no frames dropped', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(0)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(0)})
 
             expect(wrapper.find('.dropped').exists()).toBe(false)
         })
 
-        it('shows dropped counter when frames have been dropped', () => {
+        it('hides dropped frames outside debug mode', () => {
             const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(5)},
+                eventStream: {droppedCount: ref(5), deliveredCount: ref(100)},
+                capabilities: capabilities({debug_logging: false}),
             })
+
+            expect(wrapper.find('.dropped').exists()).toBe(false)
+            expect(wrapper.text()).not.toContain('Dropped')
+        })
+
+        it('shows dropped counter when frames have been dropped', () => {
+            const wrapper = mountInDebugMode({droppedCount: ref(5)})
 
             const dropped = wrapper.find('.dropped')
             expect(dropped.exists()).toBe(true)
@@ -523,17 +533,13 @@ describe('StatusBar', () => {
         })
 
         it('shows the share of delivered frames, not just the count', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(35), deliveredCount: ref(100)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(35), deliveredCount: ref(100)})
 
             expect(wrapper.find('.dropped').text()).toContain('35%')
         })
 
         it('shows the bare count while the server has reported no denominator', () => {
-            const wrapper = mountStatusBar({
-                eventStream: {droppedCount: ref(5), deliveredCount: ref(0)},
-            })
+            const wrapper = mountInDebugMode({droppedCount: ref(5), deliveredCount: ref(0)})
 
             const text = wrapper.find('.dropped').text()
             expect(text).toContain('Dropped: 5')
@@ -550,7 +556,7 @@ describe('StatusBar', () => {
             dropped_count: 6, delivered_count: 126, last_rejection_reason: 'trailed stars',
         })
 
-        const wrapper = mountStatusBar({eventStream: {...capture.state}})
+        const wrapper = mountStatusBar({eventStream: {...capture.state}, capabilities: capabilities({debug_logging: true})})
 
         expect(wrapper.find('.frames').text()).toContain('Rejected 20 | Total 120')
         expect(wrapper.find('.dropped').text()).toContain('Dropped: 6')

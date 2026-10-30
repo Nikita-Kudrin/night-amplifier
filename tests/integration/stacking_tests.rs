@@ -12,12 +12,19 @@ use crate::integration::common::{
     FIXTURES_DIR, MANAGED_FIXTURE_SETS, MAX_REBASES_PER_SESSION, MAX_RESIDUAL_REJECTION_SHARE,
     MAX_WANDERER_RESET_SHARE, MIN_LIVE_STACKING_RETENTION,
 };
-use crate::integration::instruments::Replay;
+use crate::integration::instruments::{replayed, Replay, ReplayRecord};
 
 /// A managed set replayed from the start, or `None` when this machine does not have it.
 fn managed_replay(name: &str) -> Option<Replay> {
     let dir = Path::new(FIXTURES_DIR).join(name);
     dir.is_dir().then(|| Replay::open(&dir))
+}
+
+/// A managed set played to the end, shared across the run, or `None` when this machine
+/// does not have it.
+fn managed_session(name: &str) -> Option<ReplayRecord> {
+    let dir = Path::new(FIXTURES_DIR).join(name);
+    dir.is_dir().then(|| replayed(&dir))
 }
 
 /// Drives the live stack over the managed fixture sets and holds the line on two numbers
@@ -36,10 +43,10 @@ fn live_stacking_keeps_frames_and_aligns_them_well() {
 
     let mut sets_checked = 0;
     for name in MANAGED_FIXTURE_SETS {
-        let Some(mut replay) = managed_replay(name) else {
+        let Some(session) = managed_session(name) else {
             continue;
         };
-        let outcomes = replay.run();
+        let outcomes = &session.outcomes;
 
         let mut accepted = Vec::new();
         let mut dropped_on_alignment = Vec::new();
@@ -64,11 +71,11 @@ fn live_stacking_keeps_frames_and_aligns_them_well() {
         // came back `added`. A re-base is an admission that throws away every
         // frame before it, so counting admissions would score a gate that
         // re-based on every frame as perfect.
-        let integrated = replay.depth();
-        let rate = integrated as f64 / replay.subs() as f64;
+        let integrated = session.depth;
+        let rate = integrated as f64 / session.subs as f64;
         println!(
             "  {name}: {integrated}/{} frames integrated ({:.0}%), {} dropped on alignment, {rebases} re-base(s)",
-            replay.subs(),
+            session.subs,
             rate * 100.0,
             dropped_on_alignment.len()
         );
@@ -134,10 +141,10 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
     let mut sets_checked = 0;
 
     for name in MANAGED_FIXTURE_SETS {
-        let Some(mut replay) = managed_replay(name) else {
+        let Some(session) = managed_session(name) else {
             continue;
         };
-        let outcomes = replay.run();
+        let outcomes = &session.outcomes;
 
         let mut residuals = Vec::new();
         let mut residual_rejections = 0;
@@ -152,15 +159,17 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
         if residuals.is_empty() {
             continue;
         }
-        let fwhm_of_stack = night_amplifier::detection::detect_stars_adaptive(&replay.snapshot())
-            .ok()
+        let fwhm_of_stack = session
+            .stack
+            .as_ref()
+            .and_then(|stack| night_amplifier::detection::detect_stars_adaptive(stack).ok())
             .and_then(|stars| night_amplifier::detection::compute_median_fwhm(&stars));
 
         let median_residual = median_of(&residuals);
         let Some(star_width) = fwhm_of_stack else {
             continue;
         };
-        let offered = replay.subs() - 1;
+        let offered = session.subs - 1;
         let share = residual_rejections as f64 / offered as f64;
 
         println!(
@@ -207,13 +216,13 @@ fn wanderer_holds_the_stack_through_the_frames_a_session_dislikes() {
     let mut sets_checked = 0;
 
     for name in MANAGED_FIXTURE_SETS {
-        let Some(mut replay) = managed_replay(name) else {
+        let Some(session) = managed_session(name) else {
             continue;
         };
 
         let mut would_reset = 0;
         let mut quality_rejections = 0;
-        for outcome in replay.run() {
+        for outcome in &session.outcomes {
             let Some(reason) = outcome.rejected_because() else {
                 continue;
             };
@@ -224,7 +233,7 @@ fn wanderer_holds_the_stack_through_the_frames_a_session_dislikes() {
             quality_rejections += 1;
         }
 
-        let offered = replay.subs() - 1;
+        let offered = session.subs - 1;
         let reset_share = would_reset as f64 / offered as f64;
         println!(
             "  {name}: {would_reset}/{offered} frames would reset the stack ({:.0}%), \
@@ -275,6 +284,11 @@ fn wanderer_reads_a_new_target_as_movement() {
         (
             "250mm-dob-imx533-dumbbell-fits",
             "cats-eye-nebula-imx533",
+        ),
+        // A star-filled field swung in: M13's 0.4 s subs, against the Iris's 5 s ones.
+        (
+            "iris-nebula-imx533",
+            "hercules-globular-cluster-imx533-fixture",
         ),
     ];
 
@@ -331,11 +345,10 @@ fn wanderer_reads_a_new_target_as_movement() {
 fn thin_subs_of_a_bright_nebula_still_stack() {
     const SET: &str = "cats-eye-nebula-imx533";
     crate::integration::common::ensure_fixtures_sync_named(&[SET]);
-    let mut replay = managed_replay(SET)
+    let session = managed_session(SET)
         .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(SET)));
 
-    let outcomes = replay.run();
-    for (sub, admission) in outcomes.iter().enumerate().filter_map(|(i, o)| Some((i + 1, o.admission?))) {
+    for (sub, admission) in session.outcomes.iter().enumerate().filter_map(|(i, o)| Some((i + 1, o.admission?))) {
         let Some(transform) = admission.transform else {
             continue;
         };
@@ -348,8 +361,8 @@ fn thin_subs_of_a_bright_nebula_still_stack() {
         );
     }
 
-    let rate = replay.depth() as f64 / replay.subs() as f64;
-    println!("  {SET}: {}/{} subs integrated ({:.0}%)", replay.depth(), replay.subs(), rate * 100.0);
+    let rate = session.depth as f64 / session.subs as f64;
+    println!("  {SET}: {}/{} subs integrated ({:.0}%)", session.depth, session.subs, rate * 100.0);
     assert!(
         rate >= MIN_LIVE_STACKING_RETENTION,
         "{SET}: only {:.0}% of subs reached the stack, expected at least {:.0}%",

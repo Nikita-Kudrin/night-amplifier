@@ -87,6 +87,10 @@ export interface Settings {
     dew_heater_enabled: boolean
     /** Anti-dew heater power level (0-100) */
     dew_heater_power: number
+    /** The main camera's daylight white balance, which Planetary renders through */
+    daylight_balance: DaylightBalance
+    /** Whether that balance was read off the Moon or is still the prior */
+    daylight_balance_source: DaylightBalanceSource
     /** Enable "Wanderer" mode for automatic stack reset on movement */
     wanderer_mode: boolean
     /**
@@ -223,7 +227,7 @@ export interface CameraInfo {
     max_height: number
     pixel_size_x_um: number
     pixel_size_y_um: number
-    sensor_type: string
+    sensor_type: SensorType
     has_cooler: boolean
     has_dew_heater: boolean
     min_temp_c?: number | null
@@ -429,6 +433,16 @@ export interface CameraCaptureProfile {
     cooler_fast_mode: boolean
     dew_heater_enabled: boolean
     dew_heater_power: number
+    /**
+     * The camera's colour response to sunlight, which Planetary renders through
+     * (`render::planetary::daylight`): the prior until read off the Moon.
+     */
+    daylight_balance: DaylightBalance
+    /**
+     * Whether `daylight_balance` was measured or is the prior. A file from before the
+     * measure held identity: read as the prior, it renders a sensible colour rather than raw.
+     */
+    daylight_balance_source: DaylightBalanceSource
 }
 
 /** DTO for CameraPhase serialization (snake_case to match JS event handling). */
@@ -481,6 +495,17 @@ export interface Coordinate {
     ra_string: string
     dec_string: string
 }
+
+/** Gains on a camera's raw red, green and blue, the smallest 1. */
+export interface DaylightBalance {
+    red: number
+    green: number
+    blue: number
+}
+
+/** Where a camera's [`DaylightBalance`] came from. */
+export const DAYLIGHT_BALANCE_SOURCE_VALUES = ['prior', 'moon'] as const
+export type DaylightBalanceSource = (typeof DAYLIGHT_BALANCE_SOURCE_VALUES)[number]
 
 export interface DeepSkyCapabilities {
     advanced_rejection: boolean
@@ -791,6 +816,10 @@ export interface SensorMode {
     description?: string
 }
 
+/** Camera sensor type; on the wire as `"Mono"`/`"Color"`, the spelling it always had. */
+export const SENSOR_TYPE_VALUES = ['Mono', 'Color'] as const
+export type SensorType = (typeof SENSOR_TYPE_VALUES)[number]
+
 /**
  * Which attempt of a multi-strategy solve is running — see
  * [`ServerEvent::PlateSolvingProgress`](super::ServerEvent::PlateSolvingProgress).
@@ -1061,6 +1090,16 @@ export interface CameraCaptureProfileInput {
     cooler_fast_mode?: boolean
     dew_heater_enabled?: boolean
     dew_heater_power?: number
+    /**
+     * The camera's colour response to sunlight, which Planetary renders through
+     * (`render::planetary::daylight`): the prior until read off the Moon.
+     */
+    daylight_balance?: DaylightBalance
+    /**
+     * Whether `daylight_balance` was measured or is the prior. A file from before the
+     * measure held identity: read as the prior, it renders a sensible colour rather than raw.
+     */
+    daylight_balance_source?: DaylightBalanceSource
 }
 
 /**

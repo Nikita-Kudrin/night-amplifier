@@ -219,6 +219,10 @@ name = "planetary_benchmark"
 harness = false
 
 [[bench]]
+name = "planetary_moon_benchmark"
+harness = false
+
+[[bench]]
 name = "frame_ingest_benchmark"
 harness = false
 

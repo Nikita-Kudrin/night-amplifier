@@ -7,7 +7,7 @@ use night_amplifier_core::cfa::SensorCorrectionSettings;
 use night_amplifier_core::debayer::DebayerAlgorithm;
 use night_amplifier_core::camera::{CameraInfo, CameraResult, RawFrame};
 use night_amplifier_core::frame::{Frame, NoiseField};
-use crate::state::{AppState, CameraRole, CaptureSettings, StackingType};
+use crate::state::{AppState, CameraRole, CaptureSettings, ShownStack, StackingType};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
@@ -15,6 +15,7 @@ use super::field_solve;
 use super::frame_gate::{RejectionReason, Restacked};
 use super::context::{LiveStacker, StackingCarryover};
 use super::stack_crop::{self, StackCrop};
+use super::stop_drain::{StopDrain, STOP_DRAIN};
 use super::wanderer::Wanderer;
 use super::{pipeline, solving, storage};
 
@@ -71,11 +72,15 @@ pub fn run_stacking_task(
     let mut stack_generation = 0u64;
 
     let mut cfa_stage = CfaStage::default();
+    let mut drain = StopDrain::new(STOP_DRAIN);
 
     while let Ok(msg) = stacking_rx.recv() {
         // One per message taken, before any work on it: the reported depth is what the
         // capture thread is waiting behind, not what it was when this frame arrived.
         stacking_depth.taken();
+        if !drain.admits(state.cancelled_for()) {
+            continue;
+        }
 
         let CapturedFrame {
             frame: raw_frame,
@@ -86,16 +91,8 @@ pub fn run_stacking_task(
 
         // Decode, correct on the mosaic, then debayer — all in the stacking task
         // so the camera thread stays free to start the next exposure.
-        let frame = {
-            let _span = tracing::info_span!("frame_conversion").entered();
-            match cfa_stage.for_settings(&settings).convert(&raw_frame, &camera_info.info) {
-                Ok(f) => Arc::new(f),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Frame conversion failed");
-                    state.frame_rejected(settings.stacking, format!("Conversion failed: {}", e));
-                    continue;
-                }
-            }
+        let Some(frame) = cfa_stage.converted(&state, &raw_frame, &settings, &camera_info.info) else {
+            continue;
         };
 
         // Detect when stacking is toggled on or stacking type changes — reset context
@@ -250,8 +247,9 @@ pub fn run_stacking_task(
         );
     }
 
+    drain.finish();
     // Save stacked result before exiting
-    save_stacked_result(&state, stacker.as_deref(), &mut stack_crop);
+    save_stacked_result(&state, stacker.as_deref(), &mut stack_crop, stack_generation);
 
     // Park the accumulator in case this capture is about to be resumed after a
     // reconnect. A fresh start or a clean stop clears it; see
@@ -387,6 +385,19 @@ impl CfaStage {
     fn convert(&self, raw: &RawFrame, info: &CameraInfo) -> CameraResult<Frame> {
         pipeline::convert_captured_frame(raw, info, &self.pipeline, self.debayer)
     }
+
+    /// `raw` converted for `settings`; one that will not convert is reported as rejected.
+    fn converted(&mut self, state: &AppState, raw: &RawFrame, settings: &CaptureSettings, info: &CameraInfo) -> Option<Arc<Frame>> {
+        let _span = tracing::info_span!("frame_conversion").entered();
+        self.for_settings(settings)
+            .convert(raw, info)
+            .inspect_err(|e| {
+                tracing::warn!(error = %e, "Frame conversion failed");
+                state.frame_rejected(settings.stacking, format!("Conversion failed: {}", e));
+            })
+            .ok()
+            .map(Arc::new)
+    }
 }
 
 /// Hands this iteration's display frame to the plate solves that want it. `showing_stack`
@@ -502,24 +513,33 @@ struct FinalStack {
     coverage: Option<night_amplifier_core::frame::NoiseField>,
     /// Where `frame` was cut from the stack, when `auto_crop` cropped it.
     crop: Option<night_amplifier_core::stacking::CropRect>,
+    /// The noise window the live view showed this crop through (`StackNoiseWindow`).
+    noise_window: f32,
 }
 
 /// The session's stack, if it holds one, cropped as the live view last showed it when
 /// `auto_crop` is on.
 ///
-/// Depth and coverage travel with the frame, from the stack that holds all three,
-/// because the saved PNG is rendered with both as the live view renders them: the tone
-/// curve spends the depth (`render::autostretch::depth_grain_gain`) and the filters read
-/// the coverage. Re-deriving the depth from the session's `stacked_count` would let the
-/// export and the live view disagree about the same stack — by the reference frame, and
-/// by anything a mid-session reset did to the counters. The crop comes from the session's
-/// own tracker for the same reason, and is cut before the FITS's background subtraction
-/// and the PNG's render alike.
-fn final_stack(stacker: Option<&dyn LiveStacker>, stack_crop: &mut StackCrop, auto_crop: bool) -> Option<FinalStack> {
+/// Depth and coverage travel with the frame, from the stack that holds all three: the saved
+/// PNG renders with both as the live view does (the tone curve spends the depth, the filters
+/// read the coverage), and re-deriving the depth from `stacked_count` let the two disagree.
+/// The crop is the one the live view last cut this stack to (`shown`), with the noise window
+/// measured on it: decided again, a last move left the PNG on another crop's window. The
+/// tracker decides for a stack shown whole or not shown, through a window of 1. Either is cut
+/// before the FITS's background subtraction and the PNG's render alike.
+fn final_stack(
+    stacker: Option<&dyn LiveStacker>,
+    stack_crop: &mut StackCrop,
+    auto_crop: bool,
+    shown: Option<ShownStack>,
+) -> Option<FinalStack> {
     let stacker = stacker?;
     let (mut frame, mut coverage) = stacker.snapshot().ok()?;
     let depth = stacker.depth();
-    let crop = stack_crop.decide(auto_crop, depth, coverage.as_ref());
+    let crop = match shown.and_then(|s| s.crop) {
+        Some(rect) if auto_crop => Some(rect),
+        _ => stack_crop.decide(auto_crop, depth, coverage.as_ref()),
+    };
     let crop = crop.filter(|rect| match stack_crop::crop_stack(&mut frame, coverage.as_ref(), rect) {
         Ok(cropped) => {
             coverage = cropped;
@@ -530,17 +550,20 @@ fn final_stack(stacker: Option<&dyn LiveStacker>, stack_crop: &mut StackCrop, au
             false
         }
     });
-    Some(FinalStack { frame, depth, coverage, crop })
+    let noise_window = shown.filter(|s| s.crop == crop).map_or(1.0, |s| s.window);
+    Some(FinalStack { frame, depth, coverage, crop, noise_window })
 }
 
-/// Save the final stacked result at the end of a capture session.
+/// Save the final stacked result at the end of a capture session, through the noise window
+/// the live view showed stack `generation` through.
 fn save_stacked_result(
     state: &Arc<AppState>,
     stacker: Option<&dyn LiveStacker>,
     stack_crop: &mut StackCrop,
+    generation: u64,
 ) {
     let auto_crop = state.settings.snapshot().auto_crop;
-    if let Some(stack) = final_stack(stacker, stack_crop, auto_crop) {
+    if let Some(stack) = final_stack(stacker, stack_crop, auto_crop, state.stack_noise.shown(generation)) {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
@@ -552,6 +575,7 @@ fn save_stacked_result(
                 stack.depth as u32,
                 stack.coverage,
                 stack.crop,
+                stack.noise_window,
                 &info,
             );
         }
@@ -622,7 +646,7 @@ mod tests {
     #[test]
     fn the_final_deep_sky_stack_carries_its_coverage_map() {
         let ctx = drifted_stack(32, 3);
-        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), false).expect("a stack");
+        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), false, None).expect("a stack");
         assert_eq!(stack.depth, 4);
         let coverage = stack.coverage.expect("a thin strip is something to say");
         let strip = coverage.sample_coverage(2, 16);
@@ -632,8 +656,8 @@ mod tests {
         let settings = StackSettings::of(&CaptureSettings::default(), &night_amplifier_core::plugins::Plugins::none());
         let mut even = StackingContext::new(32, 32, 1, &settings).expect("context");
         even.stacker.add_reference(&night_amplifier_core::frame::Frame::filled(32, 32, 1, 0.3).unwrap()).unwrap();
-        assert!(super::final_stack(Some(&even), &mut StackCrop::new(), false).unwrap().coverage.is_none());
-        assert!(super::final_stack(None, &mut StackCrop::new(), true).is_none(), "no stack, nothing to save");
+        assert!(super::final_stack(Some(&even), &mut StackCrop::new(), false, None).unwrap().coverage.is_none());
+        assert!(super::final_stack(None, &mut StackCrop::new(), true, None).is_none(), "no stack, nothing to save");
     }
 
     /// A `size`² mono stack of a reference and `subs` subs whose leftmost 8 px fell outside
@@ -687,7 +711,7 @@ mod tests {
     fn the_saved_stack_is_never_cropped_with_the_setting_off() {
         let ctx = drifted_stack(128, DEEP);
         let (whole, map) = ctx.snapshot().unwrap();
-        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), false).unwrap();
+        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), false, None).unwrap();
         assert_eq!(stack.crop, None);
         assert_eq!((stack.frame.width(), stack.frame.height()), (128, 128));
         assert!(stack.frame.data() == whole.data(), "the saved samples changed");
@@ -698,12 +722,35 @@ mod tests {
     fn the_saved_stack_is_cropped_with_the_setting_on() {
         let ctx = drifted_stack(128, DEEP);
         let (whole, _) = ctx.snapshot().unwrap();
-        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), true).unwrap();
+        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), true, None).unwrap();
         let rect = night_amplifier_core::stacking::CropRect { x: 8, y: 0, width: 120, height: 128 };
         assert_eq!(stack.crop, Some(rect));
         assert_eq!((stack.frame.width(), stack.frame.height()), (120, 128));
         assert_eq!(stack.frame.get_pixel(0, 5, 0), whole.get_pixel(8, 5, 0));
         assert!(stack.coverage.is_none(), "what is left is complete, so it carries no map");
+    }
+
+    /// The saved stack is the crop the live view last showed, through the noise window it was
+    /// shown through, though the tracker would now decide another; a stack shown whole, or
+    /// saved whole, is served through a window of 1.
+    #[test]
+    fn the_saved_stack_is_cut_and_served_as_the_live_view_showed_it() {
+        use crate::state::ShownStack;
+        use night_amplifier_core::stacking::CropRect;
+        let ctx = drifted_stack(128, DEEP);
+        let (whole, _) = ctx.snapshot().unwrap();
+        let shown_rect = CropRect { x: 16, y: 8, width: 96, height: 112 };
+        let shown = Some(ShownStack { crop: Some(shown_rect), window: 0.83 });
+
+        let stack = super::final_stack(Some(&ctx), &mut StackCrop::new(), true, shown).unwrap();
+        assert_eq!((stack.crop, stack.noise_window), (Some(shown_rect), 0.83));
+        assert_eq!(stack.frame.get_pixel(0, 0, 0), whole.get_pixel(16, 8, 0));
+
+        let shown_whole = Some(ShownStack { crop: None, window: 1.0 });
+        let decided = super::final_stack(Some(&ctx), &mut StackCrop::new(), true, shown_whole).unwrap();
+        assert_eq!((decided.crop.map(|r| r.x), decided.noise_window), (Some(8), 1.0), "the tracker decides, through 1");
+        let off = super::final_stack(Some(&ctx), &mut StackCrop::new(), false, shown).unwrap();
+        assert_eq!((off.crop, off.noise_window), (None, 1.0), "saved whole, the crop's window does not apply");
     }
 
     #[test]

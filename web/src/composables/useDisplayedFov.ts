@@ -3,6 +3,7 @@ import type {DeepReadonly, MaybeRefOrGetter} from 'vue'
 import {fieldOfViewDeg} from '../utils/optics'
 import type {Camera, Settings} from './api.types'
 import type {ClientPushDirection} from './events/pushToEvents'
+import type {FrameSize} from './useImageStream'
 
 type Named = Pick<Camera, 'name'> | null | undefined
 type Optics = DeepReadonly<Pick<Settings, 'telescope' | 'camera_telescope_profiles'>> | null | undefined
@@ -36,6 +37,26 @@ export function useDisplayedFov(
         const direction = toValue(pushDirection)
         const solvedElsewhere = name && direction?.solvedCamera && direction.solvedCamera !== name
         return solvedElsewhere ? 0 : (direction?.fovDeg ?? 0)
+    })
+}
+
+/**
+ * The size of the picture the chevron counts screens of: the streamed frame, else the
+ * displayed camera's sensor. Every stream reset (a Start's `no_frame`, a reconnect, a camera
+ * switch) zeroes the frame, and the count fell back to heights until the next one — a
+ * sideways push on the 2712x1538 guide read 6.9 screens for 3.9, for up to a whole sub.
+ */
+export function useDisplayedFrame(
+    dimensions: MaybeRefOrGetter<FrameSize>,
+    camera: MaybeRefOrGetter<Pick<Camera, 'info'> | null | undefined>,
+) {
+    return computed((): FrameSize => {
+        const frame = toValue(dimensions)
+        if (frame.width > 0 && frame.height > 0) return frame
+        const info = toValue(camera)?.info
+        return info && info.max_width > 0 && info.max_height > 0
+            ? {width: info.max_width, height: info.max_height}
+            : frame
     })
 }
 

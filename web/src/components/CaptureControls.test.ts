@@ -597,6 +597,44 @@ describe('CaptureControls', () => {
             expect(select.exists()).toBe(true)
         })
 
+        it('hides the aggressiveness select for Planetary, which sets its own levels', async () => {
+            const wrapper = mountCaptureControls({
+                settings: {auto_stretch: true, stacking_type: 'planetary'},
+            })
+            await flushPromises()
+            expect(wrapper.find('.aggressiveness-select').exists()).toBe(false)
+            expect(wrapper.find('.stretch-controls .toggle').exists()).toBe(true)
+        })
+
+        it('shows the select again when the type changes from Planetary', async () => {
+            const wrapper = mountCaptureControls({
+                settings: {auto_stretch: true, stacking_type: 'planetary'},
+            })
+            await flushPromises()
+            await wrapper.find('.type-select').setValue('deep_sky')
+            await flushPromises()
+            expect(wrapper.find('.aggressiveness-select').exists()).toBe(true)
+            expect(updateSettings).not.toHaveBeenCalledWith(expect.objectContaining({stretch_aggressiveness: expect.anything()}))
+        })
+
+        it.each(['deep_sky', 'comet'] as const)('keeps the select for %s', async (stackingType) => {
+            const wrapper = mountCaptureControls({
+                settings: {auto_stretch: true, stacking_type: stackingType},
+            })
+            await flushPromises()
+            expect(wrapper.find('.aggressiveness-select').exists()).toBe(true)
+        })
+
+        it('explains Planetary\'s own levels in the Color mode help', async () => {
+            const wrapper = mountCaptureControls({
+                settings: {auto_stretch: true, stacking_type: 'planetary'},
+            })
+            await flushPromises()
+            const icon = wrapper.findAllComponents({name: 'BaseInfoIcon'})
+                .find((c) => c.props('message') === HELP_TEXTS.auto_stretch_planetary)
+            expect(icon).toBeDefined()
+        })
+
         it('calls updateSettings when aggressiveness is changed', async () => {
             const wrapper = mountCaptureControls({
                 settings: {auto_stretch: true, stretch_aggressiveness: 'medium'},

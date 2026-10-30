@@ -8,7 +8,34 @@ Traditional star-based alignment. The software detects stars, matches triangles 
 Short sub-exposures of a bright object work too. Noise on a bright nebula breaks it into dozens of false "stars", brighter than the real ones, so the matcher keeps only the brightest detection in each patch of sky. If that still finds no alignment, the software looks for the one shift that most star pairs agree on, trying a few small turns as well, since the field of an alt-az mount slowly rotates. That is enough for a handful of real stars among hundreds of detections: 0.7 s subs of the Cat's Eye Nebula hold about 15. A shift found this way has to stand out from all the shifts it was picked from, so a different patch of sky is not mistaken for this one. Longer exposures or more gain still give more stars to align on.
 
 ## Planetary Stacking
-(Also known as Lucky Imaging). This mode uses correlation-based alignment for high-framerate planetary or lunar targets where stars are absent. It uses percentile stacking (e.g., top 10% of frames) based on sharpness metrics.
+For the Moon, the Sun and the planets: high frame rates and no stars. Each frame is aligned on the target's surface by correlation, over a window half the frame's short side, centred on the target with **Auto tracking** on. The search follows the target as it drifts, so a Moon that wanders hundreds of pixels across the sensor during a capture stays aligned, and a frame it cannot place is left out of the stack rather than stacked in the wrong place: the status bar says whether the target moved farther than alignment can follow (it has drifted out of the window's reach; re-centre it and start again) or nothing in the frame matched (cloud, or a frame off the target). A planet placed off to one side, to drift across an untracked field, aligns as well as a centred one. The stack averages every frame the stacker keeps up with; all of them are in the SER video either way. With Pro, **Multi-point alignment** also takes out the small local distortions seeing adds.
+
+### How a planetary picture is rendered
+
+The deep-sky stretch is built to lift a faint sky out of the noise, which on a bright disc burns it
+to white. Planetary sets its own levels from the target instead: the sky goes black, the brightest
+part of the disc lands just under white, and a gentle curve lifts the darker parts — Jupiter's
+belts and moons, the Moon's maria, the Sun's limb. It works the same whatever the exposure, so an
+under-exposed Jupiter at a high frame rate looks like a well-exposed one, only noisier, and nothing
+on the disc is clipped. A Moon or Sun filling the frame, with no sky at all, keeps the sensor's
+own black. Colours keep their hue: an H-alpha Sun stays red rather than clipping. A bright sky —
+daytime, deep twilight, or haze lit by the Moon — fades out of the black point as it nears an eighth
+of the disc's brightness, and past that shows grey rather than black.
+
+Background removal, the shadow saturation boost, the contrast curve, **Color Intensity**,
+**Black level** and **Darker sky** are not used for Planetary: Settings shows them greyed, and keeps
+your choices for Deep Sky. **Black floor** only lifts there, since the sky is already black. The capture panel's **Color mode** switch turns the levels off, showing the frame as the
+sensor recorded it, and has no profile to pick for Planetary. Each frame sets its own levels, so
+the panels of a mosaic can differ in brightness on screen. The saved SER and FITS files are never
+touched by any of this.
+
+**Daylight White Balance** (Settings, for a colour camera) takes care of colour, by itself. Every target is lit
+by the Sun, so one balance per camera shows each in its own colour, and the Moon is how it is found: whenever
+Planetary shows the Moon, its colour is measured every two seconds and the balance that gives it its real, faintly
+warm grey is remembered for that camera. Mars stays orange and an H-alpha Sun red through the same balance; a
+planet, an eclipsed Moon or a coloured filter never sets it. A dim exposure, a twilight sky, auto-stretch off and
+the preview resolution do not stop it; a sky glowing unevenly around the Moon, as in haze, does. Until the Moon
+has been seen, a balance typical of colour cameras is used, and Settings says which of the two is in force.
 
 ## Comet Stacking (Pro)
 Uses an ROI (Region of Interest) around the comet's nucleus to align frames on the moving comet, while aggressive rejection algorithms drop trailing stars.
@@ -98,7 +125,10 @@ its corner sat in the full frame as `XORGSUBF`/`YORGSUBF`. Plate solving still s
 The crop is applied before the image is stretched. Left in, the thin border made the whole sky
 measure noisier than it is, and the stretch came out flatter. As the field keeps drifting the crop
 shrinks, in occasional steps rather than on every frame. If you have zoomed in, the live view keeps
-the same patch of sky in view across a step. With the setting off nothing is ever cut.
+the same patch of sky in view across a step. A step leaves the picture's brightness alone: cutting
+sky away used to make a bright nebula read as noisier and dim it a little at each step, through to
+the saved PNG, which is cut to the crop the live view last showed. Changing a setting or the
+Processing Resolution mid-session keeps that too. With the setting off nothing is ever cut.
 
 ## Background removal
 
@@ -107,6 +137,14 @@ moon, the horizon and uncorrected vignetting lay over the sky, including a glow 
 one edge or a corner. The galaxy, nebula or cluster you are looking at is kept out of the
 background model: anything that brightens *inside* the frame is treated as a target, anything
 that brightens *towards an edge* as glow. The whole gradient is removed in every stretch mode.
+Planetary takes none: a lunar disc filling the frame would be read as a gradient and removed.
+
+Narrow bands along an edge — stray light inside the tube, the edge of an uncorrected vignette —
+are removed from the stacked picture too: they run the whole length of the edge, which a target
+touching that edge does not. Live view, showing single frames, leaves them in. Two things along
+an edge are left alone: an object the plate solve found there (Pro), even when it runs the edge's
+whole length, and the thin border a young stack has where the frames have drifted, until
+**Auto crop** cuts it at 20 subs.
 
 **Algorithm** picks how the sky samples are joined: Grid, or RBF (Pro), a smooth spline with no
 seams between samples. Pro starts on RBF; if the licence lapses, the picture falls back to Grid
@@ -175,14 +213,19 @@ stack every time the telescope moves, so there is no single result to write.
 A file the computer has "saved" can still be waiting in memory for up to half a minute before it
 reaches the card or drive, and cutting the power then leaves it empty. So when you press **Stop**,
 the status bar first shows **Saving to disk — keep the power on**, while the stack, its PNG, the
-raw frames or the SER video are pushed onto the device. Then it shows **Saved N files to disk**,
-and it is safe to power off. If something did not make it, it says how many files and why instead.
-The guide camera's saved frames get their own notice when the guide camera stops — **Saved N
-guide frames to disk** — so wait for both if both were saving. Settings are written the same way
+raw frames or the SER video are pushed onto the device. Once the notice goes away, while the status
+bar still says **Connected**, it is safe to power off: if the connection dropped in between, the
+server may have restarted mid-save, and nothing then confirms the files reached the device. If something did not make it, it says how many files and why instead. The guide camera's
+saved frames (debug mode only) get their own notice when the guide camera stops — **Saving guide frames to disk** —
+so wait for both if both were saving. Settings are written the same way
 each time you change them.
 
-On a slow card **Stop** can take a while: the camera is free again at once (a disconnect starts
-warming it up), but the capture reads *Stopping* until the files are on the card. If the drive stops
+**Stop** stops: frames still waiting to be stacked join the stack for up to 5 seconds, then the
+stack is saved without the rest (their raw frames, or the whole SER video, are saved regardless). The
+SER video's frame count is written as soon as its last frame is, and every few frames while it
+records, so a power cut costs at most its last second or two. On a slow card **Stop** can still take
+a while: the camera is free again once the stack is saved (a disconnect starts warming it up then),
+but the capture reads *Stopping* until the files are on the card. If the drive stops
 responding altogether — unplugged, or a card that hangs — the app gives up after a minute without
 progress and says **Captures not confirmed on disk**, rather than staying in *Stopping* all night;
 if the stack itself could not be handed over, it says so too.

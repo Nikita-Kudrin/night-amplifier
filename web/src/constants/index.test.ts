@@ -8,6 +8,7 @@ import {
     defaultSettings,
     EYEPIECE_STREAM_RESOLUTION_OPTIONS,
     HELP_TEXTS,
+    SENSOR_TYPES,
 } from './index'
 import type {
     BACKGROUND_ALGORITHM_OPTIONS,
@@ -30,6 +31,7 @@ import type {
     RawFrameSaving,
     RejectionMethod,
     Resolution,
+    SensorType,
     StackingType,
     StretchAggressiveness,
     WeightingPreset,
@@ -87,8 +89,10 @@ describe('captureStateDisplay', () => {
 // Type-level: `npm run typecheck` fails a value the server would refuse, or one it sends
 // that a table leaves out.
 describe('wire enums', () => {
-    it('names every CameraPhase, CaptureState and StackingType the server sends, and no other', () => {
+    it('names every CameraPhase, CaptureState, StackingType and SensorType the server sends, and no other', () => {
         expectTypeOf<(typeof CAMERA_PHASES)[keyof typeof CAMERA_PHASES]>().toEqualTypeOf<CameraPhase>()
+        expectTypeOf<(typeof SENSOR_TYPES)[keyof typeof SENSOR_TYPES]>().toEqualTypeOf<SensorType>()
+        expect(SENSOR_TYPES.COLOR).toBe('Color')
         expectTypeOf<(typeof CAPTURE_STATES)[keyof typeof CAPTURE_STATES]>().toEqualTypeOf<CaptureState>()
         expectTypeOf<(typeof STACKING_TYPES)[keyof typeof STACKING_TYPES]>().toEqualTypeOf<StackingType>()
         expect(CAMERA_PHASES.WARMING_UP).toBe('warming_up')

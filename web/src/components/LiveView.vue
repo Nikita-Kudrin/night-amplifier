@@ -24,7 +24,8 @@ import {
   useMainCamera,
   useSettings,
 } from '../composables/appContext'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useDisplayedFov, useDisplayedFrame, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useSolveIndicator} from '../composables/useSolveIndicator'
 import {setViewedCamera} from '../composables/api'
 import type {ScreenRect} from '../composables/useCometRoi'
 
@@ -80,7 +81,10 @@ const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
-const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+const arrowFrame = useDisplayedFrame(dimensions, displayedCamera)
+const {solving, stage: solveStage} = useSolveIndicator(() => eventStream?.plateSolving.value ?? null)
+// While a target's first solve runs there is no direction yet, only the solving compass.
+const showGuideArrow = computed(() => currentTarget.value !== null && (pushDirection.value !== null || solving.value))
 
 const containerRef = useTemplateRef<HTMLDivElement>('container')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
@@ -393,11 +397,14 @@ onUnmounted(() => {
 
     <!-- Guide arrow -->
     <GuideArrow
-        v-if="showGuideArrow && pushDirection"
+        v-if="showGuideArrow"
         :direction="pushDirection"
+        :frame="arrowFrame"
         :bounds="canvasBounds"
         :fov-deg="displayedFovDeg"
         :other-camera="arrowCamera"
+        :solving="solving"
+        :solve-stage="solveStage"
     />
 
     <!-- Comet ROI Overlay -->

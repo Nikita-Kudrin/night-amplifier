@@ -19,7 +19,7 @@ import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
 import HardwareBenchmarkOverlay from './components/HardwareBenchmarkOverlay.vue'
-import { BaseSpinner } from './components/ui'
+import { BaseSpinner, CompassIcon } from './components/ui'
 
 // Routing
 const isEyepieceRoute = ref(isEyepiecePage(window.location.pathname))
@@ -95,16 +95,7 @@ onMounted(() => {
           :disabled="checkingSetup"
           @click="toggleTab(SIDEBAR_TABS.PUSH_TO)"
       >
-        <svg
-            v-if="!checkingSetup"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <circle cx="12" cy="12" r="10"/>
-          <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
-        </svg>
+        <CompassIcon v-if="!checkingSetup"/>
         <BaseSpinner v-else size="xs" />
       </button>
       <button

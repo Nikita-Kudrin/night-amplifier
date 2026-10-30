@@ -268,6 +268,7 @@ fn the_saved_stack_is_cropped_like_the_live_view() {
         &night_amplifier::plugins::Plugins::installed(),
         session.depth as u32,
         coverage,
+        1.0,
     )
     .unwrap();
     assert_eq!((w as usize, h as usize), (shown.width, shown.height));
@@ -383,4 +384,45 @@ fn a_crop_change_does_not_step_the_tone() {
         "a crop change stepped the sky by {} levels; without the crop no step exceeded {}",
         max(&on_change), max(&off_all)
     );
+}
+
+/// The noise window a held analysis carries through every crop move, each measured two-sided
+/// through the render task's own cut. Measured when the probe was made two-sided: where the
+/// crop only trims sky the window stays at 1, and the dumbbell's moves cut its structure's
+/// share by 13 %. Measured against the trend instead, the dumbbell read 0.81, its last two
+/// moves (-3.4 %, -1.5 %) the trend's own error; a change that moves these is a decision.
+#[test]
+#[ignore]
+#[serial]
+fn crop_moves_hold_the_noise_window_measured_on_real_sessions() {
+    use crate::integration::instruments::{cut_held, for_each_snapshot, load_sub};
+    use night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis;
+    use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
+    let plugins = night_amplifier::plugins::Plugins::installed();
+    let settings = CaptureSettings::default();
+    let mut failures = Vec::new();
+    for (name, expected) in [(HEAVY, 0.995), (M33, 0.997), (DRIFTING, 1.002), ("deep-stack-dumbbell-106", 0.868)] {
+        let files = managed_session(name);
+        let depths: Vec<usize> = (1..=files.len()).collect();
+        let (mut analysis, mut crop, mut last, mut moves) = (PreviewAnalysis::new(), StackCrop::new(), None, 0);
+        for_each_snapshot(&files, &depths, &load_sub, |s| {
+            let noise = s.noise.is_usable().then(|| s.noise.clone());
+            let rect = crop.decide(settings.auto_crop, s.depth, noise.as_ref());
+            let (mut frame, _) = cut_held(s.frame.clone(), noise, rect.as_ref(), &settings, &mut analysis);
+            analysis.note_stack(s.generation);
+            let ctx = AnalysisContext { showing_stack: s.depth > 1, stack_depth: s.depth as u32 };
+            process_preview_frame_with_analysis(&mut frame, &settings, &plugins, ctx, &mut analysis).unwrap();
+            if last.is_some() && rect.is_some() && last != rect {
+                moves += 1;
+                println!("{name} depth {:3}: move {moves}, window {:.3}", s.depth, analysis.noise_window());
+            }
+            last = rect;
+        });
+        let window = analysis.noise_window();
+        println!("{name}: {moves} moves, window {window:.3}");
+        if moves == 0 || (window - expected).abs() >= 0.02 {
+            failures.push(format!("{name}: {moves} moves, window {window:.3}, expected {expected:.3}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

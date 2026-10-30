@@ -16,7 +16,8 @@ import {
   useSettings,
 } from '../composables/appContext'
 import {fetchEyepieceSnapshot} from '../composables/api'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useDisplayedFov, useDisplayedFrame, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {useSolveIndicator} from '../composables/useSolveIndicator'
 import {saveBlob} from '../utils/saveBlob'
 import {offsetBounds} from '../utils/viewGeometry'
 import {eyepieceStreamEndpoint, PAGES} from '../constants'
@@ -41,12 +42,15 @@ const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
-const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+const {solving, stage: solveStage} = useSolveIndicator(() => eventStream?.plateSolving.value ?? null)
+// While a target's first solve runs there is no direction yet, only the solving compass.
+const showGuideArrow = computed(() => currentTarget.value !== null && (pushDirection.value !== null || solving.value))
 
 const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'guide')
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
+const arrowFrame = useDisplayedFrame(dimensions, displayedCamera)
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
@@ -294,12 +298,15 @@ onUnmounted(() => {
               :class="['live-canvas', {circular: isCircularView}]"
           ></canvas>
           <GuideArrow
-              v-if="showGuideArrow && pushDirection"
+              v-if="showGuideArrow"
               :direction="pushDirection"
+              :frame="arrowFrame"
               :bounds="eyeBounds[eye] ?? NO_BOUNDS"
               :fov-deg="displayedFovDeg"
               :other-camera="arrowCamera"
               :is-circular="isCircularView"
+              :solving="solving"
+              :solve-stage="solveStage"
           />
         </div>
       </div>

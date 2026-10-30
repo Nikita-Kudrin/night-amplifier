@@ -381,6 +381,8 @@ async fn a_zeroed_stored_profile_is_repaired_on_connect() {
             cooler_fast_mode: false,
             dew_heater_enabled: false,
             dew_heater_power: 0,
+            daylight_balance: Default::default(),
+            daylight_balance_source: Default::default(),
         },
     );
 

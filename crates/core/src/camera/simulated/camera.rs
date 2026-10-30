@@ -20,7 +20,7 @@ use rayon::prelude::*;
 
 use super::loaders::load_image;
 use super::probe::probe_image_dimensions;
-use super::registry::find_image_files;
+use super::registry::{find_image_files, is_ser_file};
 
 const MAX_PRELOAD_IMAGES: usize = 10;
 
@@ -30,6 +30,58 @@ const SIM_AMBIENT_TEMP_C: f64 = 20.0;
 const SIM_MAX_DELTA_C: f64 = 40.0;
 /// Time constant for the first-order lag approach to the target temperature.
 const SIM_COOLER_TAU_S: f64 = 3.0;
+
+/// One frame the camera serves: a whole image file, or one frame of a SER video.
+#[derive(Clone)]
+enum FrameSource {
+    File(PathBuf),
+    Video { video: Video, index: u32 },
+}
+
+/// A SER video open once for every frame it holds: reopened per frame, an unfinalized one
+/// warned that its header disagreed with the file on every frame served.
+#[derive(Clone)]
+struct Video {
+    path: Arc<PathBuf>,
+    reader: Arc<Mutex<crate::ser::SerReader>>,
+}
+
+impl Video {
+    /// The frame as the sensor wrote it (a Bayer mosaic stays one plane).
+    fn mosaic(&self, index: u32) -> CameraResult<Frame> {
+        self.reader
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .read_mosaic(index)
+            .map_err(|e| CameraError::ImageReadFailed(format!("{}: frame {index}: {e}", self.path.display())))
+    }
+}
+
+impl FrameSource {
+    /// Every frame of `files`, in order: an image is one, a SER video each frame it holds.
+    fn expand(files: Vec<PathBuf>) -> CameraResult<Vec<Self>> {
+        let mut sources = Vec::with_capacity(files.len());
+        for path in files {
+            if !is_ser_file(&path) {
+                sources.push(Self::File(path));
+                continue;
+            }
+            let reader = crate::ser::SerReader::open(&path)
+                .map_err(|e| CameraError::ImageReadFailed(format!("{}: {e}", path.display())))?;
+            let frames = reader.frame_count();
+            let video = Video { path: Arc::new(path), reader: Arc::new(Mutex::new(reader)) };
+            sources.extend((0..frames).map(|index| Self::Video { video: video.clone(), index }));
+        }
+        Ok(sources)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Self::File(path) => path,
+            Self::Video { video, .. } => &video.path,
+        }
+    }
+}
 
 /// Internal cooler state for the simulated camera.
 struct SimulatedCoolerState {
@@ -87,7 +139,7 @@ impl SimulatedCoolerState {
 pub struct SimulatedCamera {
     info: CameraInfo,
     directory: PathBuf,
-    files: Vec<PathBuf>,
+    files: Vec<FrameSource>,
     current_index: usize,
     /// Ring-buffer holding at most LOOKAHEAD decoded (and debayered) frames.
     /// `cache[i]` corresponds to file index `(cache_start + i) % files.len()`.
@@ -118,7 +170,9 @@ impl SimulatedCamera {
             )));
         }
 
-        let files = find_image_files(&directory);
+        let image_files = find_image_files(&directory);
+        let has_video = image_files.iter().any(|path| is_ser_file(path));
+        let files = FrameSource::expand(image_files)?;
         if files.is_empty() {
             return Err(CameraError::OpenFailed(format!(
                 "No image files found in: {}",
@@ -127,7 +181,7 @@ impl SimulatedCamera {
         }
 
         // Probe the first file to get dimensions and info
-        let probe = probe_image_dimensions(&files[0])?;
+        let probe = probe_image_dimensions(files[0].path())?;
 
         // Extract directory name for camera name
         let dir_name = directory
@@ -135,7 +189,11 @@ impl SimulatedCamera {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        let info = create_camera_info(dir_name, files.len(), &probe);
+        let mut info = create_camera_info(dir_name, files.len(), &probe);
+        if has_video {
+            // A name keys the camera's telescope profile, so file directories keep theirs.
+            info.name = format!("Simulator: {} ({} frames)", dir_name, files.len());
+        }
 
         info!(
             directory = %directory.display(),
@@ -163,17 +221,18 @@ impl SimulatedCamera {
         })
     }
 
-    /// Image files the camera replays, in order, before it wraps to the first again.
+    /// Frames the camera replays (an image file is one, a SER video each it holds), in
+    /// order, before it wraps to the first again.
     pub fn frame_count(&self) -> usize {
         self.files.len()
     }
 
     /// Decode a single file and apply debayering if needed.
     fn decode_frame(&self, file_index: usize) -> CameraResult<Frame> {
-        let path = &self.files[file_index];
-        let frame = load_image(path)?;
-
-        Ok(frame)
+        match &self.files[file_index] {
+            FrameSource::File(path) => load_image(path),
+            FrameSource::Video { video, index } => video.mosaic(*index),
+        }
     }
 
     /// Ensure the sliding window cache covers `current_index` and up to
@@ -590,6 +649,37 @@ mod tests {
                 .unwrap()
                 .write_all(PNG_1X1)
                 .unwrap();
+        }
+    }
+
+    /// A planetary capture replays as it was recorded: one frame per SER frame, the mosaic
+    /// handed out as the sensor wrote it, named by its frames (a file directory keeps its
+    /// name, which keys its telescope profile).
+    #[test]
+    fn a_ser_video_replays_frame_by_frame() {
+        let dir = tempdir().unwrap();
+        let header = crate::ser::SerHeader::new(8, 4, crate::ser::SerColorId::BayerGrbg, 16);
+        let mut writer = crate::ser::SerWriter::create(dir.path().join("capture.ser"), header).unwrap();
+        let sample = |frame: u16, i: u16| frame * 20_000 + i * 600;
+        let raw = |frame: u16| -> Vec<u8> { (0..32u16).flat_map(|i| sample(frame, i).to_le_bytes()).collect() };
+        for frame in 0..3 {
+            writer.write_raw_bytes(&raw(frame), None).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
+        assert_eq!(camera.frame_count(), 3);
+        assert_eq!(camera.info().bayer_pattern, Some(crate::CfaPattern::Grbg));
+        assert!(camera.info().name.ends_with("(3 frames)"), "{}", camera.info().name);
+        let config = CaptureConfig { exposure_us: 1, format: ImageFormat::Raw16, ..Default::default() };
+        // Within the 1 ADU every replay loses to `sample_to_u16`'s truncation.
+        for frame in [0, 1, 2, 0] {
+            let captured = camera.capture(&config).unwrap();
+            let served = captured.data.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b));
+            for (i, value) in served.enumerate() {
+                let written = sample(frame, i as u16);
+                assert!(written - value <= 1, "frame {frame} sample {i}: {value} for {written}");
+            }
         }
     }
 

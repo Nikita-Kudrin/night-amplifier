@@ -55,7 +55,7 @@ pub(super) struct FakeCatalog {
     held: Mutex<Option<&'static str>>,
     open_calls: AtomicUsize,
     /// Cameras this bus opens have a cooler.
-    cooled: AtomicBool,
+    pub(super) cooled: AtomicBool,
     /// Shared by every camera this bus opens: a test scripts the next stall, failure,
     /// lost device or `status()` panic, and counts releases, whichever handle the server
     /// holds. `on_dew_heater` runs from inside `install_camera`.
@@ -186,18 +186,37 @@ impl DeviceCatalog for FakeCatalog {
 }
 
 pub(super) fn rig(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
-    build_rig(catalog, false)
+    build_rig(catalog, false, None, false)
 }
 
 /// A rig whose disk writer is running, for tests that look at the files a capture saves.
 fn rig_with_disk_writer(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
-    build_rig(catalog, true)
+    build_rig(catalog, true, None, false)
 }
 
-fn build_rig(catalog: &Arc<FakeCatalog>, run_disk_writer: bool) -> Arc<AppState> {
+/// [`rig_with_disk_writer`] in debug mode, the only one that saves guide frames.
+fn debug_rig_with_disk_writer(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
+    build_rig(catalog, true, None, true)
+}
+
+/// [`rig_with_disk_writer`] running `plugins` instead of the installed set.
+pub(super) fn saving_rig_with(catalog: &Arc<FakeCatalog>, plugins: night_amplifier_core::plugins::Plugins) -> Arc<AppState> {
+    build_rig(catalog, true, Some(plugins), false)
+}
+
+fn build_rig(
+    catalog: &Arc<FakeCatalog>,
+    run_disk_writer: bool,
+    plugins: Option<night_amplifier_core::plugins::Plugins>,
+    debug_mode: bool,
+) -> Arc<AppState> {
     let (mut state, disk_writer) = AppState::new_for_testing();
+    state.set_debug_mode(debug_mode);
     if run_disk_writer {
         std::thread::spawn(move || disk_writer.run());
+    }
+    if let Some(plugins) = plugins {
+        state.plugins = plugins;
     }
     state.device_catalog = Arc::clone(catalog) as Arc<dyn DeviceCatalog>;
     let state = Arc::new(state);
@@ -1312,13 +1331,14 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
 
 /// The 2026-09-20 field settings end to end: guide subs and the stack saved, raw main
 /// subs not. Each Live view run, and a switch to Stacking stopped before its first sub,
-/// left an empty folder under `raw/` — 25 that night.
+/// left an empty folder under `raw/` — 25 that night. In debug mode, where the guide
+/// switch still holds the writer on with the imaging camera saving nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_capture_that_saves_no_raw_frame_leaves_raw_empty() {
     use crate::state::RawFrameSaving;
 
     let catalog = FakeCatalog::with(&[NEPTUNE]);
-    let state = rig_with_disk_writer(&catalog);
+    let state = debug_rig_with_disk_writer(&catalog);
     state.settings.update(|s| {
         s.stacking = false;
         s.save_stacked_image = true;
@@ -1476,7 +1496,7 @@ async fn the_guide_camera_syncs_its_frames_on_a_disconnect_and_on_a_device_loss(
     use crate::state::StorageSyncState;
 
     let catalog = FakeCatalog::with(&[NEPTUNE]);
-    let state = rig_with_disk_writer(&catalog);
+    let state = debug_rig_with_disk_writer(&catalog);
     state.settings.update(|s| s.raw_frame_saving.guide = true);
     let mut events = state.subscribe_events();
     connect(&state, &NEPTUNE, CameraRole::Guide).await;

@@ -178,6 +178,8 @@ const applyGain = () => applyHardware({gain: gain.value})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
 const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
+/** Planetary reads its levels off the disc itself: the deep-sky profiles mean nothing there. */
+const planetary = computed(() => selectedStackingType.value === STACKING_TYPES.PLANETARY)
 /**
  * Whether entering Focus/Finder mode would damage a stack already being integrated.
  *
@@ -333,7 +335,7 @@ const HELP = HELP_TEXTS
       <div class="control-row">
         <label class="type-label-inline" :class="{ 'text-muted': showCometLock }">
           Color mode
-          <BaseInfoIcon :message="HELP.auto_stretch"/>
+          <BaseInfoIcon :message="planetary ? HELP.auto_stretch_planetary : HELP.auto_stretch"/>
         </label>
         <div class="stretch-controls">
           <BaseToggle
@@ -343,7 +345,7 @@ const HELP = HELP_TEXTS
               @update:model-value="applyAutoStretch"
           />
           <select
-              v-if="autoStretch"
+              v-if="autoStretch && !planetary"
               v-model="stretchAggressiveness"
               class="select aggressiveness-select"
               :disabled="showCometLock"

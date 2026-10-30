@@ -24,6 +24,9 @@ struct Announced {
     direction: Option<PushDirection>,
     solve: SolveStatus,
     blocker: Option<String>,
+    /// The last solve failed: every direction is the fix before it until one succeeds. A
+    /// cancel says nothing about the sky, so it leaves this as it was.
+    fix_stale: bool,
 }
 
 impl Announced {
@@ -53,8 +56,14 @@ impl Announced {
                     total: *total,
                 });
             }
-            E::PositionSolved { .. } => self.solve.finish(Some(SolveVerdict::Success)),
-            E::PositionSolveFailed { .. } => self.solve.finish(Some(SolveVerdict::Failed)),
+            E::PositionSolved { .. } => {
+                self.solve.finish(Some(SolveVerdict::Success));
+                self.fix_stale = false;
+            }
+            E::PositionSolveFailed { .. } => {
+                self.solve.finish(Some(SolveVerdict::Failed));
+                self.fix_stale = true;
+            }
             E::PlateSolvingCancelled => self.solve.finish(Some(SolveVerdict::Cancelled)),
             E::PlateSolvingRestarted { .. } => {
                 self.solve.finish(None);
@@ -84,9 +93,22 @@ impl PushToAnnouncer {
         let _ = self.events.send(event);
     }
 
-    /// Record and send a solve event (`plate_solving_*`, `position_solve*`).
+    /// Record and send a solve event (`plate_solving_*`, `position_solve*`). A failure
+    /// restates the arrow it leaves up as stale: the server keeps it (a frame-quality failure
+    /// keeps Pro's position too), and it came back looking like a fresh fix.
     pub fn announce(&self, event: ServerEvent) {
-        self.send(&mut self.announced(), event);
+        let mut announced = self.announced();
+        self.send(&mut announced, event);
+        let Some(direction) = announced.direction.as_ref() else {
+            return;
+        };
+        if announced.fix_stale && !direction.stale {
+            let restated = PushDirection {
+                stale: true,
+                ..direction.clone()
+            };
+            self.send(&mut announced, ServerEvent::PushDirectionUpdated(restated));
+        }
     }
 
     /// The old arrow is dropped with the old target: it was computed for that target, even
@@ -111,9 +133,11 @@ impl PushToAnnouncer {
 
     /// Send `direction` unless it matches the last one ([`PushDirection::same_as`]): it is
     /// recomputed every frame but changes only with the position or target, and was once one
-    /// message per frame per client. `true` when sent.
-    pub fn announce_direction(&self, direction: PushDirection) -> bool {
+    /// message per frame per client. Stamped stale while the last solve has failed. `true`
+    /// when sent.
+    pub fn announce_direction(&self, mut direction: PushDirection) -> bool {
         let mut announced = self.announced();
+        direction.stale = announced.fix_stale;
         if announced.direction.as_ref().is_some_and(|last| last.same_as(&direction)) {
             return false;
         }
@@ -244,7 +268,7 @@ mod tests {
         assert_eq!(announcer.target_event().to_json(), ServerEvent::TargetChanged(m31()).to_json());
         assert_eq!(
             announcer.direction_event().to_json(),
-            r#"{"type":"push_direction_updated","angle_deg":90.0,"distance_deg":2.0,"direction_hint":"NE","is_close":false,"fov_deg":1.2,"solved_camera":"Guide Cam"}"#
+            r#"{"type":"push_direction_updated","angle_deg":90.0,"distance_deg":2.0,"direction_hint":"NE","is_close":false,"fov_deg":1.2,"solved_camera":"Guide Cam","stale":false}"#
         );
         assert_eq!(
             announcer.blocker_event().to_json(),
@@ -307,6 +331,92 @@ mod tests {
         );
         assert_eq!(announcer.direction_event().to_json(), r#"{"type":"push_direction_cleared"}"#);
         assert!(announcer.announce_direction(direction(90.0, 2.0, false)));
+    }
+
+    fn failed() -> ServerEvent {
+        ServerEvent::position_solve_failed("no match")
+    }
+
+    fn solved() -> ServerEvent {
+        ServerEvent::position_solved(10.68, 41.27, "", "", None, 1.0, 0.0)
+    }
+
+    // The direction outlives a failure, and the page's readout came back looking fresh;
+    // the page's verdict is dismissible, so the mark travels with the direction itself.
+    #[test]
+    fn a_failed_solve_restates_the_arrow_it_leaves_up_as_stale_once() {
+        let (announcer, mut rx) = announcer();
+        announcer.announce_direction(direction(90.0, 2.0, false));
+        sent(&mut rx);
+
+        announcer.announce(failed());
+        let after_failure = sent(&mut rx);
+        announcer.announce(failed());
+
+        assert_eq!(after_failure.len(), 2);
+        assert!(after_failure[0].starts_with(r#"{"type":"position_solve_failed""#));
+        assert!(after_failure[1].ends_with(r#""solved_camera":"Guide Cam","stale":true}"#));
+        assert_eq!(sent(&mut rx).len(), 1, "already marked: only the second failure goes out");
+        assert!(announcer.direction().is_some_and(|d| d.stale));
+        assert!(announcer.direction_event().to_json().ends_with(r#""stale":true}"#), "a sync restates the mark");
+    }
+
+    #[test]
+    fn a_failure_with_no_arrow_up_sends_only_the_failure() {
+        let (announcer, mut rx) = announcer();
+        announcer.announce(failed());
+
+        assert_eq!(sent(&mut rx).len(), 1);
+        assert_eq!(announcer.direction_event().to_json(), r#"{"type":"push_direction_cleared"}"#);
+    }
+
+    // After a frame-quality failure Pro keeps its position, and every frame's direction is
+    // the old fix's: stamped, so it neither unmarks the arrow nor repeats it.
+    #[test]
+    fn directions_after_a_failure_are_stale_until_a_solve_succeeds() {
+        let (announcer, _rx) = announcer();
+        announcer.announce(failed());
+
+        assert!(announcer.announce_direction(direction(90.0, 2.0, false)));
+        assert!(announcer.direction().is_some_and(|d| d.stale));
+        assert!(!announcer.announce_direction(direction(90.0, 2.0, false)));
+
+        announcer.announce(solved());
+        assert!(
+            announcer.announce_direction(direction(90.0, 2.0, false)),
+            "the same numbers, now confirmed, are news"
+        );
+        assert!(announcer.direction().is_some_and(|d| !d.stale));
+    }
+
+    #[test]
+    fn a_cancel_neither_marks_nor_clears_the_arrow() {
+        let (announcer, mut rx) = announcer();
+        announcer.announce_direction(direction(90.0, 2.0, false));
+        announcer.announce(ServerEvent::plate_solving_cancelled());
+        assert!(announcer.direction().is_some_and(|d| !d.stale));
+
+        announcer.announce(failed());
+        sent(&mut rx);
+        announcer.announce(ServerEvent::plate_solving_cancelled());
+        assert_eq!(sent(&mut rx).len(), 1);
+        assert!(announcer.direction().is_some_and(|d| d.stale));
+    }
+
+    // A new target keeps the unconfirmed position its direction is computed from; a
+    // cleared one starts over.
+    #[test]
+    fn a_new_target_keeps_the_mark_and_a_cleared_one_drops_it() {
+        let (announcer, _rx) = announcer();
+        announcer.announce(failed());
+
+        announcer.target_changed(m31());
+        announcer.announce_direction(direction(45.0, 5.0, false));
+        assert!(announcer.direction().is_some_and(|d| d.stale));
+
+        announcer.target_cleared();
+        announcer.announce_direction(direction(45.0, 5.0, false));
+        assert!(announcer.direction().is_some_and(|d| !d.stale));
     }
 
     #[test]

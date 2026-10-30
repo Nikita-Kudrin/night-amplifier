@@ -32,6 +32,7 @@ mod settings;
 mod settings_store;
 mod storage_sync;
 mod types;
+mod stack_noise;
 mod stream_crop;
 mod sync;
 mod viewed_camera;
@@ -66,6 +67,7 @@ pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState, SolverCamera};
+pub use stack_noise::{ShownStack, StackNoiseWindow};
 pub use stream_crop::StreamCropView;
 pub use viewed_camera::{ViewSelection, ViewedCamera};
 
@@ -98,6 +100,9 @@ pub struct AppState {
     pub recovery_status: CameraRecoveryStatus,
     /// The `auto_crop` cut the main stream's frames carry. See [`StreamCropView`].
     pub stream_crop: StreamCropView,
+    /// The window the render task carries the stack's noise figure through, for the saved
+    /// stack. See [`StackNoiseWindow`].
+    pub stack_noise: StackNoiseWindow,
     /// Event broadcast channel
     pub events: broadcast::Sender<ServerEvent>,
     /// Disk writer handle for saving frames
@@ -150,6 +155,8 @@ pub struct AppState {
     pub resume: CaptureResume,
     /// Where the ASTAP and catalog installs stand, recorded from their events.
     pub installs: Arc<Installs>,
+    /// See [`Self::debug_mode`].
+    debug_mode: bool,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -230,6 +237,7 @@ impl AppState {
             viewed_camera: ViewedCamera::new(events_tx.clone()),
             recovery_status: CameraRecoveryStatus::new(events_tx.clone()),
             stream_crop: StreamCropView::new(events_tx.clone()),
+            stack_noise: StackNoiseWindow::default(),
             push_to_announcer: Arc::new(PushToAnnouncer::new(events_tx.clone())),
             field_solve: Default::default(),
             installs: Arc::new(Installs::new(events_tx.clone())),
@@ -247,9 +255,25 @@ impl AppState {
             plugins: night_amplifier_core::plugins::Plugins::installed(),
             discovery_calls: StdMutex::new(HashMap::new()),
             resume: CaptureResume::default(),
+            debug_mode: false,
         };
 
         (state, disk_writer)
+    }
+
+    /// Whether the server runs with debug logging: the UI's diagnostics and guide-frame
+    /// saving are offered only then.
+    ///
+    /// Decided once, by the server, rather than by each crate asking `tracing`: the answer
+    /// is per call site, so `RUST_LOG=night_amplifier_session=debug` would save guide
+    /// frames behind a UI that hid the switch.
+    pub fn debug_mode(&self) -> bool {
+        self.debug_mode
+    }
+
+    /// Set [`Self::debug_mode`]. Takes `&mut`, so it is fixed once the state is shared.
+    pub fn set_debug_mode(&mut self, enabled: bool) {
+        self.debug_mode = enabled;
     }
 
     /// The slot owning `role`'s handle, monitor and reconnect guard.
@@ -501,6 +525,11 @@ impl AppState {
     /// Reset cancellation flag
     pub fn reset_cancel(&self) {
         self.capture.reset_cancel();
+    }
+
+    /// How long ago Stop (or a Disconnect or shutdown, which stop first) was asked for.
+    pub fn cancelled_for(&self) -> Option<std::time::Duration> {
+        self.capture.cancelled_for()
     }
 
     /// Reset the counters for a new capture, and stamp its start.

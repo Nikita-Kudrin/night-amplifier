@@ -59,9 +59,15 @@ export const RAW_FRAME_SAVING_MODES = [
     {key: 'wanderer', label: 'Wanderer'},
     {key: 'stacking', label: 'Stacking'},
     // Runs alongside the other three rather than instead of them, and only makes sense
-    // with a guide camera attached — hence `requiresGuideCamera`.
-    {key: 'guide', label: 'Guide camera', requiresGuideCamera: true},
-] satisfies readonly {key: keyof RawFrameSaving; label: string; requiresGuideCamera?: boolean}[]
+    // with a guide camera attached. A diagnostic: the server saves guide frames only in
+    // debug mode, ignoring a switch left on from one, so it is offered only then.
+    {key: 'guide', label: 'Guide camera', requiresGuideCamera: true, requiresDebugMode: true},
+] satisfies readonly {
+    key: keyof RawFrameSaving
+    label: string
+    requiresGuideCamera?: boolean
+    requiresDebugMode?: boolean
+}[]
 
 /**
  * `CaptureState` (`api.events.ts`), by name. `RECOVERING` is paused while the server

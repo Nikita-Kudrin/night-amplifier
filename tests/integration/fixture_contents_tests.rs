@@ -1,11 +1,12 @@
 //! A fixture set counts as present only if it holds what its published archive does
-//! (`common::check_fixture_contents`).
+//! (`common::check_fixture_contents`), and a download refused with a page prints it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::integration::common::{
-    check_fixture_contents, contents_of, publish_staged, Contents, Fixture, DEFAULT_FIXTURES,
+    check_fixture_contents, contents_of, page_title, publish_staged, unexpected_page_report,
+    Contents, Fixture, DEFAULT_FIXTURES, MAX_LOGGED_PAGE,
 };
 
 /// Two 6-byte frames, one in a subdirectory (as `early-bad-subs-imx533` nests its sessions).
@@ -89,6 +90,23 @@ fn a_losing_publisher_never_disturbs_a_reader() {
     });
     assert_eq!(refusals, 0, "a published set was refused {refusals} times while a loser published it again");
     assert!(loser.join("set").is_dir(), "the loser's staging is its own to clean up");
+}
+
+#[test]
+fn a_page_sent_instead_of_an_archive_is_printed_whole_and_named_by_its_title() {
+    let page = "<html><head>\n<title>\n  Google Drive - Some refusal\n</title></head><body>why</body></html>";
+    assert_eq!(page_title(page), Some("Google Drive - Some refusal"));
+    assert_eq!(page_title("<html><title> </title></html>"), None);
+
+    let report = unexpected_page_report(SET.url, reqwest::StatusCode::OK, "text/html", page);
+    assert!(report.contains("HTTP 200 OK (text/html, "), "{report}");
+    assert!(report.ends_with(page), "{report}");
+
+    // Two bytes a character, so the cap falls inside one.
+    let long = "é".repeat(MAX_LOGGED_PAGE);
+    let report = unexpected_page_report(SET.url, reqwest::StatusCode::FORBIDDEN, "text/html", &long);
+    assert!(report.ends_with("\n[truncated]"));
+    assert!(report.len() < MAX_LOGGED_PAGE + 256, "{} bytes printed", report.len());
 }
 
 #[test]

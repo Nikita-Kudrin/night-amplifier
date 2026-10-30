@@ -3,11 +3,13 @@
  * Settings → Storage: raw frames are saved per capture mode, the stack only in Stacking.
  *
  * Mirrors `raw_frame_saving` and `save_stacked_image` and emits `apply(key, value)`; a
- * raw-frame switch sends the whole group, so the server never sees a partial selection.
+ * raw-frame switch sends the whole group, so the server never sees a partial selection
+ * (and a hidden guide switch keeps its value).
  */
 import {computed} from 'vue'
 import {BaseToggle, BaseInfoIcon} from './ui'
 import {useSectionMirror} from '../composables/useSectionMirror'
+import {useCapabilities} from '../composables/appContext'
 import {HELP_TEXTS, RAW_FRAME_SAVING_MODES} from '../constants'
 import type {SettingApply} from '../utils/settings'
 import type {RawFrameSaving, Settings} from '../composables/api.types'
@@ -27,8 +29,11 @@ const HELP = HELP_TEXTS
 
 const local = useSectionMirror(() => props.settings, ['raw_frame_saving', 'save_stacked_image'])
 
+const {debugLogging} = useCapabilities()
+
 const modes = computed(() =>
-    RAW_FRAME_SAVING_MODES.filter((mode) => !mode.requiresGuideCamera || props.hasGuideCamera)
+    RAW_FRAME_SAVING_MODES.filter((mode) =>
+        (!mode.requiresGuideCamera || props.hasGuideCamera) && (!mode.requiresDebugMode || debugLogging.value))
 )
 
 /** The stack is saved only by Stacking itself; Wanderer restarts it and saves none. */

@@ -316,11 +316,10 @@ impl RowSource for StagedRows<'_> {
 #[derive(Clone)]
 pub(super) struct RowTail<'a> {
     config: &'a crate::render::RenderPipelineConfig,
-    has_stretch: bool,
     has_saturate: bool,
     has_contrast: bool,
-    black_point: f32,
-    scale_lut: std::sync::Arc<Vec<f32>>,
+    /// The black point and scale table, when the tail stretches.
+    stretch: Option<(f32, std::sync::Arc<crate::render::stretch::ScaleLut>)>,
     /// Set only when the floor could not ride the scale LUT — see
     /// `StretchResult::deferred_shadow_floor`. Resampled once per *frame* by
     /// `process_preview_frame` and shared across every payload, rather than
@@ -331,12 +330,11 @@ pub(super) struct RowTail<'a> {
 impl<'a> RowTail<'a> {
     fn new(ready_frame: &'a RenderReadyFrame) -> Self {
         let config = &ready_frame.pipeline_config;
-        let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
-
-        let (black_point, scale_lut) = match (has_stretch, ready_frame.stretch_result.as_ref()) {
-            (true, Some(sr)) => (sr.black_point, sr.scale_lut.clone()),
-            _ => (0.0, std::sync::Arc::new(vec![])),
-        };
+        let stretch = ready_frame
+            .stretch_result
+            .as_ref()
+            .filter(|_| config.auto_stretch)
+            .map(|sr| (sr.black_point, sr.scale_lut.clone()));
 
         let floor = ready_frame
             .stretch_result
@@ -345,11 +343,9 @@ impl<'a> RowTail<'a> {
 
         Self {
             config,
-            has_stretch,
             has_saturate: config.saturation_boost,
             has_contrast: config.contrast,
-            black_point,
-            scale_lut,
+            stretch,
             floor,
         }
     }
@@ -374,11 +370,11 @@ impl<'a> RowTail<'a> {
 
     /// The stretch alone: the image the AI denoiser reads.
     fn apply_tone(&self, f32_row: &mut [f32]) {
-        if self.has_stretch {
-            crate::render::simd::apply_luminance_scale_lut_simd(
+        if let Some((black_point, scale_lut)) = &self.stretch {
+            crate::render::simd::apply_scale_lut_simd(
                 f32_row,
-                self.black_point,
-                &self.scale_lut,
+                *black_point,
+                scale_lut,
                 self.config.stretch_config.color_intensity,
             );
         }
@@ -387,7 +383,7 @@ impl<'a> RowTail<'a> {
     /// This tail without its stretch, for rows the staged path has already toned.
     fn after_tone(&self) -> Self {
         Self {
-            has_stretch: false,
+            stretch: None,
             ..self.clone()
         }
     }
@@ -553,7 +549,7 @@ fn stage_and_denoise<S: RowSource>(
     // Without a stretch there is no display-referred image to hand the network, so the
     // frame renders as the linear filters left it.
     let toned;
-    let tail = if denoise.ai.is_enabled() && tail.has_stretch {
+    let tail = if denoise.ai.is_enabled() && tail.stretch.is_some() {
         {
             let _span = tracing::info_span!("tone", samples = staged_len).entered();
             staged

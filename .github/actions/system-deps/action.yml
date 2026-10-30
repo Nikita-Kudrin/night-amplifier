@@ -1,12 +1,15 @@
 name: System dependencies
 description: Install the native build dependencies (nasm, cfitsio, libusb) for the runner's OS.
 # Linux: the Azure apt mirror stalls often enough to time a job out, so apt goes to the main
-# archive with retries (24.04's deb822 file only; 22.04 keeps its mirror). Windows: cfitsio is
-# linked statically from vcpkg for the runner's own architecture — every target builds natively.
+# archive with retries. 24.04 images name it in apt-mirrors.txt (`mirror+file:`), not the deb822
+# file: rewriting only that file left Azure serving a 28.8 MB libclang at 16 kB/s past the timeout.
+# 22.04 keeps its mirror. No libclang (no bindgen in either lockfile) and no Recommends (docs).
+# Windows: cfitsio is linked statically from vcpkg for the runner's own architecture — every
+# target builds natively.
 inputs:
   apt-packages:
     description: Debian packages to install on Linux.
-    default: nasm libusb-1.0-0-dev libclang-dev libcfitsio-dev
+    default: nasm libusb-1.0-0-dev libcfitsio-dev
   extra-apt-packages:
     description: Debian packages installed alongside apt-packages, in the same apt run.
     default: ''
@@ -19,11 +22,13 @@ runs:
       env:
         PACKAGES: ${{ inputs.apt-packages }} ${{ inputs.extra-apt-packages }}
       run: |
-        sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
+        for list in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+          [ -f "$list" ] && sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' "$list"
+        done
         apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
         sudo apt-get update "${apt_options[@]}"
         # shellcheck disable=SC2086 # PACKAGES is a space-separated list
-        sudo apt-get install -y "${apt_options[@]}" $PACKAGES
+        sudo apt-get install -y --no-install-recommends "${apt_options[@]}" $PACKAGES
     - name: Install system deps (macOS)
       if: runner.os == 'macOS'
       shell: bash

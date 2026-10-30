@@ -13,20 +13,24 @@ pub(crate) mod capture_thread;
 pub mod field_solve;
 pub mod channel;
 mod context;
+mod daylight_tracker;
 mod drop_log;
 mod frame_gate;
 pub mod guide_task;
 pub mod pipeline;
+mod planetary_preview;
 pub(crate) mod push_to_tasks;
 mod render_task;
 /// For the server's stream tests, which drive frames through the real render task.
 #[cfg(any(test, feature = "test-support"))]
-pub use render_task::run_render_task;
+pub use render_task::{cut_for_render, preview_bin, run_render_task};
 pub mod solving;
 pub mod stack_crop;
 mod stacking_task;
 mod stage_config;
 pub(crate) mod stall;
+mod stop_drain;
+pub use stop_drain::STOP_DRAIN;
 pub mod storage;
 mod stream_encoding;
 mod wanderer;
@@ -38,12 +42,12 @@ pub mod watchdog;
 #[cfg(test)]
 pub mod watchdog_tests;
 
-pub use analysis::{AnalysisContext, PreviewAnalysis};
+pub use analysis::{AnalysisContext, PreviewAnalysis, ProbeRows, WindowProbe};
 pub use context::{
     LiveStackError, LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover, PROBATION_SUBS,
     StackingContext,
 };
 pub use drop_log::DropLog;
-pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
+pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason, Restacked};
 pub use stage_config::BLACK_FLOOR_RANGE;
 pub use task::run_capture_loop;

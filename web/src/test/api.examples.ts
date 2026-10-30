@@ -45,7 +45,7 @@ export const SERVER_EVENT_EXAMPLES: {readonly [K in ServerEventType]: EventOf<K>
     plate_solving_cancelled: {"type":"plate_solving_cancelled"},
     plate_solving_restarted: {"type":"plate_solving_restarted","reason":"binning changed"},
     push_to_blocked: {"type":"push_to_blocked","reason":null},
-    push_direction_updated: {"type":"push_direction_updated","angle_deg":37.0,"distance_deg":2.6,"direction_hint":"NE","is_close":false,"fov_deg":null,"solved_camera":null},
+    push_direction_updated: {"type":"push_direction_updated","angle_deg":37.0,"distance_deg":2.6,"direction_hint":"NE","is_close":false,"fov_deg":null,"solved_camera":null,"stale":false},
     push_direction_cleared: {"type":"push_direction_cleared"},
     plate_solving_status: {"type":"plate_solving_status","in_progress":true,"target_name":null,"stage":null,"last_result":null},
     target_changed: {"type":"target_changed","name":null,"designation":null,"ra_degrees":10.68,"dec_degrees":41.27},

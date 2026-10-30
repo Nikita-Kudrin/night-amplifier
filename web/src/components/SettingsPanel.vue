@@ -13,6 +13,7 @@ import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
 import AdvancedSettings from './AdvancedSettings.vue'
 import CoolerControl from './CoolerControl.vue'
+import DaylightBalanceStatus from './DaylightBalanceStatus.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 import EyepieceSettings from './EyepieceSettings.vue'
 import ImageQualitySettings from './ImageQualitySettings.vue'
@@ -105,6 +106,7 @@ function applyGroup(...[key, value]: SettingApply) {
 
     <CoolerControl/>
     <DewHeaterControl/>
+    <DaylightBalanceStatus/>
 
     <ImageQualitySettings
         :sensor-correction="localSettings.sensor_correction"
@@ -120,6 +122,7 @@ function applyGroup(...[key, value]: SettingApply) {
     <ProcessingSettings
         :settings="localSettings"
         :focus-mode="focusMode"
+        :planetary="stackingType === STACKING_TYPES.PLANETARY"
         :rbf-background-available="rbfBackground"
         :saturation-boost-available="saturationBoost"
         @apply="applyGroup"

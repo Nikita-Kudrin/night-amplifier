@@ -257,7 +257,7 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
         0.2, 0.05, 0.9, 0.0,
     ];
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
-    let scale_lut = std::sync::Arc::new(vec![2.0f32; 8192]); // flat 2x scale
+    let scale_lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|_| 2.0)); // flat 2x scale
     let ready = to_ready_frame_with_stretch(&frame, 0.1, scale_lut);
 
     let rgb8 = expand_to_rgb8_fused(&ready, &mut Default::default());
@@ -280,15 +280,8 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
 /// real asinh/MTF curves.
 #[test]
 fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample() {
-    const N: usize = 8192;
     // scale_lut(l) * l == sqrt(l), i.e. scale_lut(l) = 1/sqrt(l).
-    let scale_lut: Vec<f32> = (0..N)
-        .map(|i| {
-            let l = (i as f32 / (N - 1) as f32).max(1e-6); // avoid 1/0 at index 0
-            1.0 / l.sqrt()
-        })
-        .collect();
-    let scale_lut = std::sync::Arc::new(scale_lut);
+    let scale_lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|l| 1.0 / l.sqrt()));
 
     // 2x2 box: two dim (0.0) pixels, two bright (0.8) pixels. R=G=B per pixel.
     let data = vec![
@@ -672,8 +665,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
 #[test]
 fn the_staged_path_still_applies_the_stretch_before_quantizing() {
     let frame = Frame::filled(32, 24, 3, 0.1).unwrap();
-    let lut: std::sync::Arc<Vec<f32>> =
-        std::sync::Arc::new((0..1024).map(|i| 1.0 + i as f32 / 1024.0 * 4.0).collect());
+    let lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|l| 1.0 + l * 4.0));
 
     let mut ready = to_ready_frame_with_stretch(&frame, 0.02, lut);
     let (unfiltered, _, _) = frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
@@ -702,8 +694,7 @@ fn the_staged_path_still_applies_the_stretch_before_quantizing() {
 /// fused tail does: through both kernels, with contrast on, and with a sky shadow.
 #[test]
 fn a_tail_split_for_the_network_renders_what_the_fused_tail_does() {
-    let lut: std::sync::Arc<Vec<f32>> =
-        std::sync::Arc::new((0..1024).map(|i| 1.0 + i as f32 / 1024.0 * 4.0).collect());
+    let lut = std::sync::Arc::new(crate::render::stretch::scale_lut_from(|l| 1.0 + l * 4.0));
     let network = crate::render::DenoiseConfig {
         ai: crate::render::AiDenoiseConfig {
             enabled: true,
@@ -825,13 +816,13 @@ fn a_near_unity_downsample_keeps_star_peaks() {
     );
 }
 
-/// A ready frame with the sky shadow set and an identity tail (no stretch, contrast or
+/// A ready frame with the sky shadow set and an identity tail (a scale of 1, no contrast or
 /// saturation), so the expected bytes can be built from the frame's own samples.
 fn ready_with_sky_shadow(frame: &Frame, shadow: crate::render::SkyShadow) -> RenderReadyFrame {
     let mut ready = to_ready_frame(frame);
     ready.stretch_result = Some(StretchResult {
         black_point: 0.0,
-        scale_lut: std::sync::Arc::new(vec![]),
+        scale_lut: std::sync::Arc::new(crate::render::stretch::scale_lut_from(|_| 1.0)),
         color_intensity: 1.0,
         deferred_shadow_floor: None,
         sky_shadow: Some(shadow),

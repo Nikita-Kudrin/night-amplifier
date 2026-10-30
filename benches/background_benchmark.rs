@@ -41,11 +41,12 @@ fn bench_background_estimation_grid(c: &mut Criterion) {
         BackgroundConfig::default().with_algorithm(BackgroundExtractionAlgorithm::GridBilinear);
     let extractor_grid = BackgroundExtractor::new(config_grid);
 
-    // One estimate over a 2712x1538x3 frame is ~1-2 ms — an order of magnitude below the
-    // point where the reported figure is stable run to run. `estimate` takes `&Frame` and
-    // returns a fresh model, so repeating it measures the same work each time.
+    // One estimate over a 2712x1538x3 frame is ~3.5 ms (gradient) to ~5.5 ms (target) on a
+    // 20-core x86, edge profiles included — below the point where the reported figure is
+    // stable run to run. `estimate` takes `&Frame` and returns a fresh model, so repeating
+    // it measures the same work each time. 40 clears ~140 ms.
     // **The reported `time:` is for `REPS` estimates, not one.**
-    const REPS: usize = 150;
+    const REPS: usize = 40;
 
     group.throughput(Throughput::Elements((REPS * 2712 * 1538) as u64));
     group.bench_function(format!("estimate_grid_x{}", REPS), |b| {

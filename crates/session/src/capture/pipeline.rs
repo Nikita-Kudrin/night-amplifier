@@ -6,7 +6,7 @@
 
 use tracing::{debug, instrument, warn};
 
-use super::analysis::{AnalysisContext, PreviewAnalysis};
+use super::analysis::{AnalysisContext, PreviewAnalysis, ProbeRows, WindowProbe};
 use super::context::{create_live_stacker, LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::plugins::Plugins;
 use super::frame_gate::{FrameAdmission, RejectionReason};
@@ -220,6 +220,43 @@ pub fn stack_frame_with(
 pub struct PreviewRender {
     pub pipeline_config: night_amplifier_core::render::RenderPipelineConfig,
     pub stretch_result: Option<night_amplifier_core::render::display::StretchResult>,
+    /// The solve `stretch_result` was built from, for diagnostics: its black point is the
+    /// one already subtracted, so reads 0.
+    pub solve: Option<night_amplifier_core::render::AutoStretchResult>,
+    /// A Planetary frame's levels, for diagnostics, in place of `solve`.
+    pub levels: Option<night_amplifier_core::render::planetary::PlanetaryLevels>,
+}
+
+/// A moved crop's two sides, `(left, entered)` (`PreviewAnalysis::take_window_probe`): the
+/// stack's rows on the crop it left and the frame's on the one it entered, each through
+/// stages 0-1.5 below with the last window's estimates, then the MAD of every pixel read.
+/// Their ratio is what the window changed, which the frame's own refit is then served
+/// through. Rows, not the whole frame: one pass over about `PROBE_PIXELS` a side.
+fn probe_window_noise(
+    frame: &Frame,
+    config: &night_amplifier_core::render::RenderPipelineConfig,
+    probe: WindowProbe,
+) -> Option<(f32, f32)> {
+    use night_amplifier_core::statistics::{compute_image_stats_with_config, StatsConfig};
+    let _span = tracing::info_span!("window_probe").entered();
+    let measure = |mut rows: Frame, model: Option<&night_amplifier_core::background::BackgroundModel>| {
+        if config.background_subtraction && rows.channels() == 3 {
+            night_amplifier_core::render::neutralize_background(&mut rows, &probe.white_balance?).ok()?;
+        }
+        if config.background_subtraction {
+            model?.subtract_from(&mut rows);
+        }
+        if config.scnr && rows.channels() == 3 {
+            night_amplifier_core::render::scnr::apply_scnr(&mut rows, config.scnr_amount).ok()?;
+        }
+        let every = StatsConfig { max_samples: rows.width() * rows.height(), ..StatsConfig::default() };
+        Some(compute_image_stats_with_config(&rows, every).ok()?.mean_sigma())
+    };
+    let ProbeRows { first, stride } = probe.entered;
+    let rows = night_amplifier_core::stacking::CropRect { x: 0, y: first, width: frame.width(), height: frame.height().checked_sub(first)? };
+    let entered = super::stack_crop::cut_rows(frame, &rows, 1, stride).ok()?;
+    let left = measure(probe.left, probe.left_background.as_ref())?;
+    Some((left, measure(entered, probe.entered_background.as_ref())?))
 }
 
 /// Process a frame for preview display using the unified render pipeline.
@@ -269,12 +306,16 @@ pub fn process_preview_frame_with_analysis(
     .entered();
 
     let mut pipeline_config = get_render_pipeline_config(settings, plugins, false);
+    if pipeline_config.tone == night_amplifier_core::render::ToneProfile::Planetary {
+        return Ok(super::planetary_preview::render(frame, pipeline_config));
+    }
     // How deep the stack is decides how much of its noise reduction the stretch
     // spends on a calmer sky (`render::autostretch::depth_grain_gain`). Set here
     // rather than in `get_render_pipeline_config`, which only sees settings.
     pipeline_config.stretch_config.stack_depth = ctx.stack_depth.max(1);
 
     pipeline_config.background_config.protection = analysis.protection();
+    pipeline_config.background_config.edge_profiles = ctx.showing_stack;
     let reused = analysis.begin_frame(
         ctx,
         (frame.width(), frame.height(), frame.channels()),
@@ -285,6 +326,10 @@ pub fn process_preview_frame_with_analysis(
         pipeline_config.auto_stretch,
     );
     tracing::Span::current().record("analysis_reused", reused);
+    if let Some(probe) = analysis.take_window_probe() {
+        let sigmas = pipeline_config.auto_stretch.then(|| probe_window_noise(frame, &pipeline_config, probe)).flatten();
+        analysis.probe_window(sigmas);
+    }
 
     // Stage 0: Background Neutralization (Pre-subtraction)
     //
@@ -349,6 +394,7 @@ pub fn process_preview_frame_with_analysis(
     // what makes them reusable: a cached set describes a frame that went through the
     // *same* cached white balance and background model, so the whole analysis is
     // internally consistent or none of it is.
+    let mut solve = None;
     let stretch_result = if pipeline_config.auto_stretch {
         let _span2 = tracing::info_span!("prepare_auto_stretch").entered();
         // Not `?`: a frame too small for robust statistics (below `StatsConfig`'s
@@ -369,6 +415,7 @@ pub fn process_preview_frame_with_analysis(
             });
         match prepared {
             Ok(res) => {
+                solve = Some(res);
                 // When saturation boost is off and contrast is enabled, fuse the
                 // contrast S-curve into the scale LUT — the same optimization that
                 // auto_stretch_frame used in the old RenderPipeline::process path.
@@ -446,6 +493,8 @@ pub fn process_preview_frame_with_analysis(
     Ok(PreviewRender {
         pipeline_config,
         stretch_result,
+        solve,
+        levels: None,
     })
 }
 

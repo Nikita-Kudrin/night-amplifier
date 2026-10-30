@@ -216,6 +216,21 @@ impl DiskWriterHandle {
         session.map(|s| s.dir)
     }
 
+    /// Finalize `group`'s open SER container once its last frame is queued, leaving the
+    /// session open for the stack still to come. The storage task calls it as it ends:
+    /// `end_session` waits for every pipeline thread, and on 2026-10-24 the stacker held it
+    /// for minutes until the power went, leaving a 26.5 GB SER whose header counted 0 frames.
+    /// Blocking, and bounded by the writer's progress, as `end_session` is.
+    pub fn finish_container(&self, group: SyncGroup) {
+        if self.session_dir().is_none() {
+            return;
+        }
+        let message = DiskWriterMessage::FinishContainer(group);
+        if let Err(e) = self.send_patiently(message, &mut Patience::new(self)) {
+            warn!(error = %e, "The disk writer was not told the container's frames ended");
+        }
+    }
+
     /// Block until every file `group` wrote so far is on the storage device, not just in
     /// the OS's cache, and say what made it. Call it from a blocking context, after the
     /// group's last write was queued: the answer covers exactly what was queued before.

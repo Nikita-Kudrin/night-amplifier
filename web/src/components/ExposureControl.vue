@@ -113,7 +113,8 @@ function commit() {
   background: var(--surface-hover);
 }
 
-.btn-preset.active {
+.btn-preset.active,
+.btn-preset.active:hover:not(:disabled) {
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);
