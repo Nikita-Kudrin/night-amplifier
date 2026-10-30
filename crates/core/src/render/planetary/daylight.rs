@@ -2,21 +2,13 @@
 //!
 //! Background neutralisation balances a sky, and a planet's is black: its tiny pedestal's
 //! colour became the gains, and Jupiter rendered green. Raw, an IMX533 shows the Moon
-//! yellow-green (blue at 0.48 of green). Grey-world on the target fixed the Moon but turned Mars
-//! khaki; one per-camera balance taken on a neutral target (the Moon, a white-light Sun) keeps
-//! every target's own colour, an H-alpha disc's red included.
+//! yellow-green (blue at 0.49 of green). Grey-world on the target fixed the Moon but turned Mars
+//! khaki; one per-camera balance keeps every target's own colour, an H-alpha disc's red
+//! included. It starts as [`DaylightBalance::PRIOR`] and is read off the Moon whenever
+//! Planetary shows one (`super::target`): no button, no star to point at.
 
-use super::PlanetaryLevels;
-use crate::frame::Frame;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::ops::RangeInclusive;
-
-/// Least target pixels a calibration averages: under it the mean is a few pixels' noise.
-const MIN_CALIBRATION_PIXELS: usize = 1_000;
-
-/// A sample at or above this tells nothing of its colour: a channel clipped at the sensor.
-const CLIPPED: f32 = 0.999;
 
 /// Gains on a camera's raw red, green and blue, the smallest 1.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -34,8 +26,14 @@ impl Default for DaylightBalance {
 }
 
 impl DaylightBalance {
-    /// No balance: the camera's raw colour. What a camera that was never calibrated has.
+    /// No balance: the camera's raw colour. What a mono camera has, and what every
+    /// non-planetary render goes through.
     pub const IDENTITY: Self = Self { red: 1.0, green: 1.0, blue: 1.0 };
+
+    /// What a colour camera renders through until the Moon has been seen: ZWO's factory
+    /// default is x1.04 / x1.90, an IMX533 measured x1.06-1.14 / x2.03-2.05. Within 25 % of
+    /// any Sony colour sensor behind a UV/IR cut, where identity is 100 % off in blue.
+    pub const PRIOR: Self = Self { red: 1.10, green: 1.0, blue: 1.95 };
 
     /// Every gain's range once the smallest is 1.
     pub const GAIN_RANGE: RangeInclusive<f32> = 1.0..=4.0;
@@ -55,9 +53,17 @@ impl DaylightBalance {
         *self == Self::IDENTITY
     }
 
+    /// Whether any gain differs from `other`'s by more than `share` of it.
+    pub fn differs_from(&self, other: &Self, share: f32) -> bool {
+        [(self.red, other.red), (self.green, other.green), (self.blue, other.blue)]
+            .into_iter()
+            .any(|(a, b)| (a - b).abs() > share * b)
+    }
+
     /// The gains on a three-channel `frame`, each channel clipped at 1.0: a pixel clipped at
     /// the sensor in every channel stays white, where unclipped it took the gains' tint.
-    pub fn apply(&self, frame: &mut Frame) {
+    pub fn apply(&self, frame: &mut crate::frame::Frame) {
+        use rayon::prelude::*;
         if self.is_identity() || frame.channels() != 3 {
             return;
         }
@@ -73,49 +79,28 @@ impl DaylightBalance {
             });
     }
 
-    /// This balance corrected so `frame`'s target averages grey: `frame` is what this balance
-    /// rendered, before its black point came off. That black is taken off here, and the clip
-    /// test reads the samples as the sensor gave them: taken off first, a clipped channel read
-    /// 1 - black and passed it (blue x1.82 for x2.07 under a 0.02 sky).
-    pub fn calibrated(&self, frame: &Frame) -> Result<Self, CalibrationRefusal> {
-        if frame.channels() != 3 {
-            return Err(CalibrationRefusal::NoTarget);
-        }
-        let PlanetaryLevels { black, target_from, .. } = PlanetaryLevels::solve(frame);
-        let (r, g, b) = frame.planes();
-        let above_black = |v: f32| f64::from((v - black).max(0.0));
-        let (count, sums) = (0..r.len())
-            .into_par_iter()
-            .filter(|&i| {
-                let v = r[i].max(g[i]).max(b[i]);
-                v >= target_from && v < CLIPPED
-            })
-            .map(|i| (1usize, [above_black(r[i]), above_black(g[i]), above_black(b[i])]))
-            .reduce(|| (0, [0.0; 3]), |(n, a), (m, b)| (n + m, [a[0] + b[0], a[1] + b[1], a[2] + b[2]]));
-        if count < MIN_CALIBRATION_PIXELS || sums.iter().any(|&s| s <= 0.0) {
-            return Err(CalibrationRefusal::NoTarget);
-        }
-        let towards_green = |sum: f64, gain: f32| gain * (sums[1] / sum) as f32;
-        let corrected = Self {
-            red: towards_green(sums[0], self.red),
-            green: self.green,
-            blue: towards_green(sums[2], self.blue),
-        };
+    /// This balance with its red and blue gains times `red` and `blue` (green held), or
+    /// `None` where the result would need gains past [`Self::GAIN_RANGE`]: clamped, a
+    /// balance pinned at the range's end once tinted every later target.
+    pub fn corrected(&self, red: f32, blue: f32) -> Option<Self> {
+        let corrected = Self { red: self.red * red, green: self.green, blue: self.blue * blue };
         let gains = [corrected.red, corrected.green, corrected.blue];
-        let spread = gains.iter().copied().fold(0.0, f32::max) / gains.iter().copied().fold(f32::INFINITY, f32::min);
-        if spread > *Self::GAIN_RANGE.end() {
-            return Err(CalibrationRefusal::NotNeutral);
+        if gains.iter().any(|g| !g.is_finite() || *g <= 0.0) {
+            return None;
         }
-        Ok(corrected.sanitized())
+        let spread = gains.iter().copied().fold(0.0, f32::max) / gains.iter().copied().fold(f32::INFINITY, f32::min);
+        (spread <= *Self::GAIN_RANGE.end()).then(|| corrected.sanitized())
     }
 }
 
-/// Why a frame cannot calibrate a [`DaylightBalance`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CalibrationRefusal {
-    /// Mono, or under [`MIN_CALIBRATION_PIXELS`] of unclipped target: a speck, or a clipped disc.
-    NoTarget,
-    /// Greying the target needs a gain past [`DaylightBalance::GAIN_RANGE`]: an H-alpha Sun or a
-    /// planet's own colour, not sunlight. Clamped, it saved gains pinned at the range's end.
-    NotNeutral,
+/// Where a camera's [`DaylightBalance`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum DaylightBalanceSource {
+    /// Nothing measured yet: the balance is [`DaylightBalance::PRIOR`].
+    #[default]
+    Prior,
+    /// Read off the Moon through this camera.
+    Moon,
 }

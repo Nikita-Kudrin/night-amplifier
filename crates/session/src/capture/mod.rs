@@ -13,6 +13,7 @@ pub(crate) mod capture_thread;
 pub mod field_solve;
 pub mod channel;
 mod context;
+mod daylight_tracker;
 mod drop_log;
 mod frame_gate;
 pub mod guide_task;

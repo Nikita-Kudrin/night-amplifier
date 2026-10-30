@@ -168,20 +168,6 @@ pub async fn dismiss_recovery_failure(
     )
 }
 
-/// POST /api/cameras/daylight-balance/{role}/calibrate
-///
-/// Calibrate `role`'s daylight balance on the Planetary frame it last rendered (the Moon or
-/// a white-light Sun) and save it to that camera's profile. Answers the balance saved.
-pub async fn calibrate_daylight_balance(
-    State(state): State<Arc<AppState>>,
-    Path(role): Path<CameraRole>,
-) -> impl IntoResponse {
-    match CameraService::calibrate_daylight_balance(&state, role).await {
-        Ok(balance) => (StatusCode::OK, ApiResponse::ok(balance)),
-        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
-    }
-}
-
 /// PUT /api/view/camera
 ///
 /// The operator's Guide toggle on `/`: which camera `/eyepiece` and `/eyepiece_quality`

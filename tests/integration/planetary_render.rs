@@ -54,9 +54,16 @@ pub fn mosaic_panel(dir: &Path, time: &str) -> PathBuf {
     dir.join(format!("Snapshot at {time} of Stack_00001.tif"))
 }
 
-/// Planetary at the shipped settings, background subtraction among them, which it must ignore.
+/// Planetary at the shipped settings, background subtraction among them, which it must ignore,
+/// through no daylight balance: these measure the curve on the colour the file holds, and the
+/// balance is judged by its own tests (`every_moon_mosaic_panel_is_read_as_the_moon` and after).
 pub fn planetary_settings(stacking: bool) -> CaptureSettings {
-    CaptureSettings { stacking, stacking_type: StackingType::Planetary, ..Default::default() }
+    CaptureSettings {
+        stacking,
+        stacking_type: StackingType::Planetary,
+        daylight_balance: night_amplifier::render::planetary::DaylightBalance::IDENTITY,
+        ..Default::default()
+    }
 }
 
 /// `frame` through the production preview and encoder at its own size: the RGB8 bytes, and the

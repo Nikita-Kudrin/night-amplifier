@@ -241,61 +241,33 @@ fn a_highlight_clipped_at_the_sensor_stays_white_through_the_balance() {
     assert!((frame.get_pixel(0, 0, 2) - 0.5175).abs() < 1e-6);
 }
 
-/// The raw IMX533 Moon of 2026-10-24: blue at 0.48 of green, red at 0.94.
+/// The raw IMX533 Moon of 2026-10-24 (red 0.944, blue 0.487 of green) corrected to the Moon's
+/// colour: the gains that colour it like one, green held at 1.
 #[test]
-fn calibrating_on_a_tinted_grey_disc_brings_it_back_to_grey() {
-    const RAW: [f32; 3] = [0.943, 1.0, 0.484];
-    let raw = disc((400, 300), (200.0, 150.0), 90.0, 0.7, 0.0, 0.002, RAW);
-    let balance = DaylightBalance::IDENTITY.calibrated(&raw).expect("enough target");
-    let mut balanced = raw.clone();
-    balance.apply(&mut balanced);
-    let means: Vec<f64> = (0..3)
-        .map(|c| balanced.channel_data(c).iter().filter(|&&v| v > 0.1).map(|&v| f64::from(v)).sum::<f64>())
-        .collect();
-    for c in [0, 2] {
-        assert!((means[c] / means[1] - 1.0).abs() < 0.01, "{balance:?}: {means:?}");
-    }
-    // Calibrating again on what that balance rendered changes nothing.
-    let again = balance.calibrated(&balanced).unwrap();
-    for (a, b) in [(again.red, balance.red), (again.green, balance.green), (again.blue, balance.blue)] {
-        assert!((a - b).abs() < 0.01, "{again:?} vs {balance:?}");
-    }
-}
-
-/// A clipped Moon under a sky, as the stream holds it: balanced, its black not yet taken off.
-/// Calibration takes the sky off itself (left on, blue read x2.02) and leaves out what the
-/// sensor clipped (taken off first, a clipped channel read 1 - black: blue x1.82, not x2.07).
-#[test]
-fn calibration_takes_the_sky_off_and_leaves_out_what_the_sensor_clipped() {
-    const RAW: [f32; 3] = [0.943, 1.0, 0.484];
-    const SKY: f32 = 0.02;
-    let mut rendered = disc((400, 300), (200.0, 150.0), 90.0, 1.3, 0.0, 0.0005, RAW);
-    for c in 0..3 {
-        rendered.channel_data_mut(c).iter_mut().for_each(|v| *v = (*v + SKY).min(1.0));
-    }
-    assert!((PlanetaryLevels::solve(&rendered).black - SKY).abs() < 1e-3);
-
-    let balance = DaylightBalance::IDENTITY.calibrated(&rendered).expect("an unclipped annulus remains");
-    assert!((balance.red - 1.0 / 0.943).abs() < 0.01 && (balance.blue - 1.0 / 0.484).abs() < 0.02, "{balance:?}");
+fn a_correction_scales_red_and_blue_and_is_normalised() {
+    let balance = DaylightBalance::IDENTITY.corrected(1.10 / 0.944, 0.92 / 0.487).expect("in range");
+    assert!((balance.red - 1.165).abs() < 0.01 && balance.green == 1.0 && (balance.blue - 1.889).abs() < 0.01, "{balance:?}");
+    let again = balance.corrected(1.0, 1.0).unwrap();
+    assert_eq!(again, balance, "a correction of 1 changes nothing");
+    let lowered = DaylightBalance::PRIOR.corrected(0.5, 0.5).unwrap();
+    assert_eq!(lowered.red, 1.0, "normalised to its smallest gain: {lowered:?}");
 }
 
 /// Greying an H-alpha disc needs gains past the range: refused, where clamping saved a balance
 /// pinned at x4 that tinted every later target.
 #[test]
-fn a_coloured_target_is_refused_rather_than_clamped() {
-    let h_alpha = disc((400, 300), (200.0, 150.0), 90.0, 0.7, 0.0, 0.002, [1.0, 0.2, 0.15]);
-    assert_eq!(DaylightBalance::IDENTITY.calibrated(&h_alpha), Err(CalibrationRefusal::NotNeutral));
-    let near_the_end = disc((400, 300), (200.0, 150.0), 90.0, 0.7, 0.0, 0.002, [1.0, 0.95, 0.27]);
-    assert!(DaylightBalance::IDENTITY.calibrated(&near_the_end).is_ok(), "x3.7 is inside the range");
+fn a_correction_past_the_range_is_refused_rather_than_clamped() {
+    assert_eq!(DaylightBalance::IDENTITY.corrected(1.0, 5.0), None);
+    assert_eq!(DaylightBalance::IDENTITY.corrected(0.2, 1.0), None, "x5 spread through red");
+    assert!(DaylightBalance::IDENTITY.corrected(1.0, 3.7).is_some(), "x3.7 is inside the range");
+    assert_eq!(DaylightBalance::IDENTITY.corrected(f32::NAN, 1.0), None);
+    assert_eq!(DaylightBalance::IDENTITY.corrected(0.0, 1.0), None);
 }
 
 #[test]
-fn calibration_needs_colour_and_enough_unclipped_target() {
-    let none = Err(CalibrationRefusal::NoTarget);
-    let mono = Frame::filled(64, 64, 1, 0.5).unwrap();
-    assert_eq!(DaylightBalance::IDENTITY.calibrated(&mono), none);
-    let speck = disc((400, 300), (200.0, 150.0), 10.0, 0.7, 0.002, 0.001, [0.9, 1.0, 0.5]);
-    assert_eq!(DaylightBalance::IDENTITY.calibrated(&speck), none, "{} px of target", 314);
-    let clipped = disc((400, 300), (200.0, 150.0), 90.0, 3.0, 0.0, 0.0, GREY);
-    assert_eq!(DaylightBalance::IDENTITY.calibrated(&clipped), none, "nothing unclipped to average");
+fn a_balance_differs_by_a_share_of_the_other() {
+    let a = DaylightBalance { red: 1.0, green: 1.0, blue: 2.0 };
+    assert!(!a.differs_from(&DaylightBalance { red: 1.0, green: 1.0, blue: 2.008 }, 0.005));
+    assert!(a.differs_from(&DaylightBalance { red: 1.0, green: 1.0, blue: 2.02 }, 0.005));
+    assert!(a.differs_from(&DaylightBalance { red: 1.01, green: 1.0, blue: 2.0 }, 0.005));
 }

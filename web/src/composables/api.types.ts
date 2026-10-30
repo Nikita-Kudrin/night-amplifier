@@ -89,6 +89,8 @@ export interface Settings {
     dew_heater_power: number
     /** The main camera's daylight white balance, which Planetary renders through */
     daylight_balance: DaylightBalance
+    /** Whether that balance was read off the Moon or is still the prior */
+    daylight_balance_source: DaylightBalanceSource
     /** Enable "Wanderer" mode for automatic stack reset on movement */
     wanderer_mode: boolean
     /**
@@ -433,9 +435,14 @@ export interface CameraCaptureProfile {
     dew_heater_power: number
     /**
      * The camera's colour response to sunlight, which Planetary renders through
-     * (`render::planetary::daylight`). Identity until calibrated on the Moon or the Sun.
+     * (`render::planetary::daylight`): the prior until read off the Moon.
      */
     daylight_balance: DaylightBalance
+    /**
+     * Whether `daylight_balance` was measured or is the prior. A file from before the
+     * measure held identity: read as the prior, it renders a sensible colour rather than raw.
+     */
+    daylight_balance_source: DaylightBalanceSource
 }
 
 /** DTO for CameraPhase serialization (snake_case to match JS event handling). */
@@ -495,6 +502,10 @@ export interface DaylightBalance {
     green: number
     blue: number
 }
+
+/** Where a camera's [`DaylightBalance`] came from. */
+export const DAYLIGHT_BALANCE_SOURCE_VALUES = ['prior', 'moon'] as const
+export type DaylightBalanceSource = (typeof DAYLIGHT_BALANCE_SOURCE_VALUES)[number]
 
 export interface DeepSkyCapabilities {
     advanced_rejection: boolean
@@ -963,8 +974,6 @@ export interface UpdateSettingsRequest {
     dew_heater_enabled?: boolean | null
     /** Anti-dew heater power level (0-100) */
     dew_heater_power?: number | null
-    /** The camera's daylight white balance; identity resets it */
-    daylight_balance?: DaylightBalance | null
     /** Whether the user has accepted the End User License Agreement */
     eula_accepted?: boolean | null
     /** INDI server host */
@@ -1083,9 +1092,14 @@ export interface CameraCaptureProfileInput {
     dew_heater_power?: number
     /**
      * The camera's colour response to sunlight, which Planetary renders through
-     * (`render::planetary::daylight`). Identity until calibrated on the Moon or the Sun.
+     * (`render::planetary::daylight`): the prior until read off the Moon.
      */
     daylight_balance?: DaylightBalance
+    /**
+     * Whether `daylight_balance` was measured or is the prior. A file from before the
+     * measure held identity: read as the prior, it renders a sensible colour rather than raw.
+     */
+    daylight_balance_source?: DaylightBalanceSource
 }
 
 /**

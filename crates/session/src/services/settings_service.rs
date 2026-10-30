@@ -229,7 +229,7 @@ pub(crate) fn apply(
     let mut profile = settings.profile_for(target.role);
     copy_present!(request => profile;
         exposure_us, gain, offset, bin, cooler_enabled, cooler_fast_mode,
-        dew_heater_enabled, dew_heater_power, daylight_balance,
+        dew_heater_enabled, dew_heater_power,
     );
     set_present!(request => profile; target_temp_c, sensor_mode_override);
 

@@ -3,7 +3,7 @@
 
 use super::CaptureSettings;
 use night_amplifier_core::camera::DualSamplingMode;
-use night_amplifier_core::render::planetary::DaylightBalance;
+use night_amplifier_core::render::planetary::{DaylightBalance, DaylightBalanceSource};
 
 /// Hardware-specific capture settings scoped to a single camera
 /// (keyed by `"{provider}/{model_name}"` in `CaptureSettings::camera_profiles`).
@@ -28,9 +28,13 @@ pub struct CameraCaptureProfile {
     #[serde(default = "default_dew_heater_power")]
     pub dew_heater_power: i32,
     /// The camera's colour response to sunlight, which Planetary renders through
-    /// (`render::planetary::daylight`). Identity until calibrated on the Moon or the Sun.
+    /// (`render::planetary::daylight`): the prior until read off the Moon.
     #[serde(default)]
     pub daylight_balance: DaylightBalance,
+    /// Whether `daylight_balance` was measured or is the prior. A file from before the
+    /// measure held identity: read as the prior, it renders a sensible colour rather than raw.
+    #[serde(default)]
+    pub daylight_balance_source: DaylightBalanceSource,
 }
 
 /// Written out rather than derived: a derived `Default` is all zeros, and `bin: 0` with
@@ -51,7 +55,8 @@ impl Default for CameraCaptureProfile {
             cooler_fast_mode: false,
             dew_heater_enabled: default_dew_heater_enabled(),
             dew_heater_power: default_dew_heater_power(),
-            daylight_balance: DaylightBalance::IDENTITY,
+            daylight_balance: DaylightBalance::PRIOR,
+            daylight_balance_source: DaylightBalanceSource::Prior,
         }
     }
 }
@@ -66,11 +71,29 @@ fn default_dew_heater_power() -> i32 {
 
 impl CameraCaptureProfile {
     /// This profile with the cooler setpoint and heater power inside what the hardware
-    /// takes. Idempotent.
+    /// takes, and an unmeasured balance at the prior whatever value it carried. Idempotent.
     pub fn sanitized(mut self) -> Self {
         self.target_temp_c = self.target_temp_c.map(|t| t.clamp(-60.0, 30.0));
         self.dew_heater_power = self.dew_heater_power.clamp(0, 100);
-        self.daylight_balance = self.daylight_balance.sanitized();
+        self.daylight_balance = match self.daylight_balance_source {
+            DaylightBalanceSource::Prior => DaylightBalance::PRIOR,
+            DaylightBalanceSource::Moon => self.daylight_balance.sanitized(),
+        };
+        self
+    }
+
+    /// This profile with its balance back at the prior: a new camera must not render through
+    /// the last one's sensor, and a mono camera has no colour to balance.
+    pub fn uncalibrated(mut self) -> Self {
+        self.daylight_balance = DaylightBalance::PRIOR;
+        self.daylight_balance_source = DaylightBalanceSource::Prior;
+        self
+    }
+
+    /// This profile rendering through `balance`, read off the Moon.
+    pub fn calibrated_on_the_moon(mut self, balance: DaylightBalance) -> Self {
+        self.daylight_balance = balance.sanitized();
+        self.daylight_balance_source = DaylightBalanceSource::Moon;
         self
     }
 
@@ -87,5 +110,6 @@ impl CameraCaptureProfile {
         settings.dew_heater_enabled = self.dew_heater_enabled;
         settings.dew_heater_power = self.dew_heater_power;
         settings.daylight_balance = self.daylight_balance;
+        settings.daylight_balance_source = self.daylight_balance_source;
     }
 }

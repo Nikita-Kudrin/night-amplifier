@@ -65,7 +65,6 @@ pub fn create_router() -> Router<Arc<AppState>> {
             post(cameras::disconnect_camera),
         )
         .route("/cameras/recovery/{role}", delete(cameras::dismiss_recovery_failure))
-        .route("/cameras/daylight-balance/{role}/calibrate", post(cameras::calibrate_daylight_balance))
         .route("/view/camera", put(cameras::select_viewed_camera))
         // INDI
         .route("/indi/test", post(indi::test_connection))

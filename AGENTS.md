@@ -655,18 +655,25 @@ of 255), neutralising a black sky turned Jupiter green, and the S-curve clipped 
 levels off the frame's brightest-channel histogram: black the sky (0 with none, a band between), white the target's
 p99.9, both read off neighbouring pairs so no isolated hot pixel sets them, then `asinh(2x)/asinh(2)` to 0.94. The
 table is `ScaleBasis::MaxChannel`: by luminance, an H-alpha disc clipped red on 99.7 % of it. A per-camera
-`DaylightBalance` (calibrated on the Moon, `POST /api/cameras/daylight-balance/{role}/calibrate`) sets colour,
-never grey-world per frame (Mars went khaki). Guarded by `planetary_render_tests` on `Moon_Mosaic`, `Planets` and
-the drifting Moon.
+`DaylightBalance` sets colour, never grey-world per frame (Mars went khaki). Guarded by `planetary_render_tests` on
+`Moon_Mosaic`, `Planets` and the drifting Moon.
 
-**Calibration reads the frame, not the settings**: a rendered frame carries the balance it went through
-(`RenderPipelineConfig::daylight_balance`) and keeps its black on (`StretchResult::black_point`; the kernel takes
-it off), so `DaylightBalance::calibrated` corrects that balance and tests clipping on the sensor's values. Against
-the saved balance, a second press after Stop applied the correction twice (blue x2.07 -> x4); tested after the
-black came off, clipped highlights got in (x1.82). A correction past x4 is refused (`TargetNotNeutral`), and a
-camera without a profile starts uncalibrated. The sky fades out of the black point as it nears the target's
-threshold (`SKY_LEVEL_BAND`: it fell 0.068 -> 0 in one frame); a sky past it, daylight Venus's, is not taken
-off — open, the histogram cannot tell it from maria without a daylight fixture.
+**The balance is read off the Moon, automatically** (`render::planetary::target`, `capture::daylight_tracker`): a
+colour camera starts at `DaylightBalance::PRIOR` (R x1.10, B x1.95: within 25 % of any Sony sensor behind a UV/IR
+cut, where identity left the Moon yellow-green), and every 2 s of Planetary the render task measures the frame on
+screen. It is the Moon if its limb is as bright as its centre (Jupiter darkens to 0.40-0.44), it has texture past
+its own grain (a featureless disc or a twilight sky has none), its sky is flat (16 px blocks spread under 2 % of
+the target: a glow towards the disc is not) and its colour under the balance in force is within x2 in red and x1.33
+in blue of the Moon's (Mars, an eclipse, the ice giants are not). Colour, texture and limb are read above the sky's
+per-channel block median (`planetary::sky`): one black point once counted a 0.6 % pedestal times the blue gain as
+haze, refusing a Moon at a fifth of full scale. Sizes count sensor pixels through the preview's bin, and with the
+stretch off the tracker solves the levels itself. The balance that renders it as `MOON_COLOUR` (1.10, 1, 0.92: between B-V's 0.85 blue and seven
+IMX533 Sun-like stars' 0.99) replaces the camera's when it moves past 0.5 %, saved to the profile as
+`daylight_balance_source: Moon` and announced as `settings_updated`; a profile with source `Prior` renders the prior
+whatever gains it carries, so pre-measure files with identity migrate. Planets render through the stored balance,
+never re-greyed. A mono camera's goes back to the prior on connect. The sky fades out of the black point as it nears
+the target's threshold (`SKY_LEVEL_BAND`: it fell 0.068 -> 0 in one frame); a sky past it, daylight Venus's, is not
+taken off — open, the histogram cannot tell it from maria without a daylight fixture.
 
 ### Phase 13: Final Output Mapping & Contrast
 

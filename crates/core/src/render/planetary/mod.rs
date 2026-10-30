@@ -9,10 +9,15 @@
 //! Moon, and move mid-grey by 0.1-0.3 levels frame to frame (1.1 worst), so nothing is smoothed.
 
 mod daylight;
+mod sky;
+mod target;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod target_review_tests;
 
-pub use daylight::{CalibrationRefusal, DaylightBalance};
+pub use daylight::{DaylightBalance, DaylightBalanceSource};
+pub use target::{NotTheMoon, TargetMeasure, MOON_COLOUR};
 
 use crate::frame::Frame;
 use crate::render::stretch::{asinh, quantize_relative, scale_lut_from, ScaleBasis, ScaleLut};

@@ -26,7 +26,6 @@ use tracing::{debug, error, info, warn};
 use super::install;
 use night_amplifier_core::camera::identity::{self, CameraIdError};
 use night_amplifier_core::camera::{Camera, CameraInfo};
-use night_amplifier_core::render::planetary::DaylightBalance;
 use crate::error::{ApiError, ApiResult};
 use crate::state::{
     AppState, CameraCaptureProfile, CameraPhase, CameraRole, CaptureSettings, CaptureState,
@@ -261,7 +260,7 @@ pub fn apply_camera_profile_on_connect(
         Some(stored) => stored.clone(),
         // Seeded from the role's live values, but uncalibrated: their balance is the last
         // camera's sensor, and a new camera rendered through it took that camera's tint.
-        None => CameraCaptureProfile { daylight_balance: DaylightBalance::IDENTITY, ..settings.profile_for(role) },
+        None => settings.profile_for(role).uncalibrated(),
     };
     clamp_profile_to_camera(&mut profile, info);
     apply_profile_to_role(settings, role, &profile);
@@ -292,7 +291,7 @@ pub(crate) fn clamp_profile_to_camera(profile: &mut CameraCaptureProfile, info: 
         profile.dew_heater_power = defaults.dew_heater_power;
     }
     if info.sensor_type == night_amplifier_core::camera::SensorType::Mono {
-        profile.daylight_balance = defaults.daylight_balance;
+        *profile = profile.clone().uncalibrated();
     }
     profile.dew_heater_power = profile.dew_heater_power.clamp(0, 100);
 

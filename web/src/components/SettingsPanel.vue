@@ -13,7 +13,7 @@ import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
 import AdvancedSettings from './AdvancedSettings.vue'
 import CoolerControl from './CoolerControl.vue'
-import DaylightBalanceControl from './DaylightBalanceControl.vue'
+import DaylightBalanceStatus from './DaylightBalanceStatus.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 import EyepieceSettings from './EyepieceSettings.vue'
 import ImageQualitySettings from './ImageQualitySettings.vue'
@@ -106,7 +106,7 @@ function applyGroup(...[key, value]: SettingApply) {
 
     <CoolerControl/>
     <DewHeaterControl/>
-    <DaylightBalanceControl/>
+    <DaylightBalanceStatus/>
 
     <ImageQualitySettings
         :sensor-correction="localSettings.sensor_correction"
