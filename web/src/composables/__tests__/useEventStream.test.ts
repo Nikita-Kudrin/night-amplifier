@@ -630,7 +630,7 @@ describe('useEventStream', () => {
                 stage: {label: 'blind', attempt: 3, total: 4},
             })
             expect(pushToBlocked.value).toBe('Telescope is moving')
-            expect(solvingMessage.value).toBe('Searching (step 3/4): M31')
+            expect(solvingMessage.value).toBe('Searching: M31')
         })
 
         // A failed solve leaves the last fix up, marked by the server: dismissing the
@@ -765,11 +765,10 @@ describe('useEventStream', () => {
             expect(plateSolving.value.targetName).toBe('M31')
         })
 
-        it('counts the steps of a multi-attempt solve without naming them', async () => {
-            // A cold solve works down several strategies, the last of which can run for
-            // a minute. The status line has to move, or a slow solve reads as a hang --
-            // but the counter alone does that. The strategy's own label is a diagnostic
-            // long enough to push the object name off the bar, so it stays in the log.
+        it('keeps the step and the strategy out of the status line', async () => {
+            // A cold solve works down several strategies; the solving chip's bar shows
+            // which step it is on. The strategy's own label is a diagnostic long enough
+            // to push the object name off the bar, so it stays in the log.
             const {plateSolving, solvingMessage} = useEventStream()
 
             await openWebSocket()
@@ -783,27 +782,13 @@ describe('useEventStream', () => {
 
             expect(plateSolving.value.inProgress).toBe(true)
             expect(plateSolving.value.targetName).toBe('M31')
-            expect(solvingMessage.value).toBe('Searching (step 2/4): M31')
+            expect(solvingMessage.value).toBe('Searching: M31')
+            expect(plateSolving.value.stage).toMatchObject({attempt: 2, total: 4})
             // The label is still carried, for anything that wants the detail.
             expect(plateSolving.value.stage?.label).toContain('last known pointing')
         })
 
-        it('does not clutter the status line when there is only one attempt', async () => {
-            const {solvingMessage} = useEventStream()
-
-            await openWebSocket()
-            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
-            await sendEvent({
-                type: 'plate_solving_progress',
-                stage: 'full sky (blind FOV)',
-                attempt: 1,
-                total: 1,
-            })
-
-            expect(solvingMessage.value).toBe('Searching: M31')
-        })
-
-        it('drops the step counter once the solve finishes', async () => {
+        it('drops the step once the solve finishes', async () => {
             const {plateSolving, solvingMessage} = useEventStream()
 
             await openWebSocket()

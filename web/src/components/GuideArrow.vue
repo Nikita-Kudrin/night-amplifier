@@ -14,11 +14,14 @@ import {
   screensAway,
   viewSpan,
 } from '../utils/guideArrowLayout'
+import {solveProgress} from '../composables/events/pushToEvents'
 import type {ClientPushDirection, PlateSolving} from '../composables/events/pushToEvents'
 import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
 import type {ScreenRect} from '../composables/useCometRoi'
 import type {FrameSize} from '../composables/useImageStream'
+import PushToReadout from './PushToReadout.vue'
 import PushToSolving from './PushToSolving.vue'
+import SolveProgressBar from './SolveProgressBar.vue'
 
 const props = withDefaults(defineProps<{
   /** `pushDirection` from the event stream; `null` before a target's first solve, drawn only while solving. */
@@ -135,6 +138,15 @@ const chevrons = computed(() => {
 })
 
 const screensLabel = computed(() => formatScreens(screenSizes.value))
+
+// One readout, drawn as the chip or, while solving, unseen under the compass to size it.
+const readout = computed(() => ({
+  distance: formatAngle(distanceDeg.value),
+  screens: screensLabel.value,
+  hint: directionHint.value,
+  stale: stale.value,
+  otherCameraName: props.otherCamera?.connected ? props.otherCamera.name : null,
+}))
 </script>
 
 <template>
@@ -163,7 +175,13 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
             stroke-linejoin="round"
         />
       </svg>
-      <span class="on-target-label">On Target</span>
+      <!-- The step goes under the label: the status bar no longer names it. -->
+      <div class="on-target-caption">
+        <span class="on-target-label">On Target</span>
+        <div v-if="solving && solveProgress(solveStage)" class="on-target-solve" role="status" aria-label="Plate solving">
+          <SolveProgressBar :stage="solveStage"/>
+        </div>
+      </div>
     </div>
 
     <template v-else>
@@ -200,13 +218,11 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
           :class="{centered: otherCamera}"
           :style="distanceInfoStyle"
           :stage="solveStage"
-      />
-      <div v-else class="hud-chip distance-info" :class="{centered: otherCamera, stale}" :style="distanceInfoStyle">
-        <span v-if="stale" class="last-fix">last fix</span>
-        <span class="distance">{{ formatAngle(distanceDeg) }}</span>
-        <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
-        <span class="hint">{{ directionHint }}</span>
-        <span v-if="otherCamera?.connected" class="other-camera">Arrow on {{ otherCamera.name }}</span>
+      >
+        <PushToReadout v-bind="readout"/>
+      </PushToSolving>
+      <div v-else class="hud-chip distance-info readout-chip" :class="{centered: otherCamera, stale}" :style="distanceInfoStyle">
+        <PushToReadout v-bind="readout"/>
       </div>
     </template>
   </div>
@@ -228,6 +244,17 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
   align-items: center;
   gap: 0.5rem;
   animation: pulse-success 2s ease-in-out infinite;
+}
+
+/* As wide as the label, which the bar spans. */
+.on-target-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.on-target-solve {
+  height: 4px;
 }
 
 .on-target-label {
@@ -268,35 +295,15 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
   }
 }
 
+/* Placement only: the solving chip lays itself out (a grid), and this rule comes later. */
 .distance-info {
   position: absolute;
   transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.15rem;
+}
+
+.readout-chip {
   padding: 0.45rem 0.9rem;
   opacity: 0.8;
-  white-space: nowrap;
-}
-
-.distance {
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-}
-
-.screen-size {
-  font-size: var(--fs-lg);
-  font-weight: 500;
-  color: var(--primary);
-  font-family: var(--font-mono);
-}
-
-.hint {
-  font-size: var(--fs-base);
-  color: var(--text-secondary);
 }
 
 /* The numbers of a fix the last solve could not confirm. */
@@ -304,22 +311,10 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
   opacity: 0.5;
 }
 
-.last-fix {
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 /* No chevron to sit behind: the box itself marks the centre of the view. */
 .distance-info.centered {
   position: static;
   transform: none;
-}
-
-.other-camera {
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {

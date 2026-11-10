@@ -163,8 +163,18 @@ describe('GuideArrow', () => {
 
             expect(wrapper.find('.push-to-solving').attributes('role')).toBe('status')
             expect(wrapper.find('.needle').classes()).toContain('spinning')
-            expect(wrapper.find('.distance').exists()).toBe(false)
-            expect(wrapper.find('.hint').exists()).toBe(false)
+            expect(wrapper.find('.readout-chip').exists()).toBe(false)
+        })
+
+        // The bar's whole plan spans the readout: the chip lays the readout out unseen to take its size.
+        it('lays the readout it stands in for unseen under the compass', () => {
+            const props = {...IMAGE_PROPS, distanceDeg: 3, fovDeg: 1, stale: true, otherCamera: {name: 'Neptune-C II', connected: true}}
+            const readout = mountArrow(props).find('.readout-chip .readout')
+            const standIn = mountArrow({...props, solving: true, solveStage: STAGE}).find('.push-to-solving .stand-in')
+
+            expect(standIn.attributes('aria-hidden')).toBe('true')
+            expect(standIn.find('.readout').html()).toBe(readout.html())
+            expect(standIn.find('.solve-progress').exists()).toBe(false)
         })
 
         it('keeps the chevrons pointing the last known way', () => {
@@ -183,11 +193,13 @@ describe('GuideArrow', () => {
             expect(compass.attributes('style')).toBe(readout.attributes('style'))
         })
 
-        it('counts the steps of a multi-strategy solve, and only of one', () => {
-            expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: STAGE}).find('.step').text()).toBe('step 2/3')
+        it('marks the steps of a multi-strategy solve with a bar, and only of one', () => {
+            const bar = mountArrow({...IMAGE_PROPS, solving: true, solveStage: STAGE}).find('.push-to-solving .solve-progress')
+            expect(bar.findAll('.segment').map(segment => segment.classes('current'))).toEqual([false, true, false])
+            expect(bar.find('.segments').text()).toBe('')
             expect(mountArrow({...IMAGE_PROPS, solving: true, solveStage: {...STAGE, attempt: 1, total: 1}})
-                .find('.step').exists()).toBe(false)
-            expect(mountArrow({...IMAGE_PROPS, solving: true}).find('.step').exists()).toBe(false)
+                .find('.solve-progress').exists()).toBe(false)
+            expect(mountArrow({...IMAGE_PROPS, solving: true}).find('.solve-progress').exists()).toBe(false)
         })
 
         it('centres the compass over another camera, as it centres the readout', () => {
@@ -200,11 +212,30 @@ describe('GuideArrow', () => {
             expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
         })
 
-        it('leaves On Target as it is', () => {
-            const wrapper = mountArrow({...IMAGE_PROPS, distanceDeg: 0.05, isClose: true, directionHint: 'OK', solving: true})
+        // The status bar no longer names the step, and On Target draws no compass chip:
+        // a long solve centring the target showed its step nowhere.
+        it('keeps On Target, marking a multi-step solve\'s step under its label', () => {
+            for (const target of [{distanceDeg: 0.05}, {distanceDeg: 3, directionHint: 'OK' as const}]) {
+                const wrapper = mountArrow({...IMAGE_PROPS, ...target, isClose: true, solving: true, solveStage: STAGE})
+                const solve = wrapper.find('.on-target .on-target-caption .on-target-solve')
 
-            expect(wrapper.find('.on-target').exists()).toBe(true)
-            expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+                expect(wrapper.find('.on-target-label').text()).toBe('On Target')
+                expect(wrapper.find('.push-to-solving').exists()).toBe(false)
+                expect(solve.attributes('role')).toBe('status')
+                expect(solve.findAll('.segment').map(segment => segment.classes('current'))).toEqual([false, true, false])
+                expect(solve.text()).toBe('step 2 of 3')
+            }
+        })
+
+        it('leaves On Target bare for a single-step solve, and once the solve is over', () => {
+            const onTarget = {...IMAGE_PROPS, distanceDeg: 0.05, isClose: true, directionHint: 'OK' as const}
+            for (const props of [
+                {...onTarget, solving: true, solveStage: {...STAGE, attempt: 1, total: 1}},
+                {...onTarget, solving: true},
+                {...onTarget, solving: false, solveStage: STAGE},
+            ]) {
+                expect(mountArrow(props).find('.on-target-solve').exists()).toBe(false)
+            }
         })
 
         // `aimAt` clears the direction, so a new target's first solve, up to minutes on the
@@ -221,7 +252,8 @@ describe('GuideArrow', () => {
             })
 
             expect(wrapper.find('.push-to-solving').exists()).toBe(true)
-            expect(wrapper.find('.step').text()).toBe('step 2/3')
+            expect(wrapper.find('.solve-progress').text()).toBe('step 2 of 3')
+            expect(wrapper.find('.stand-in').exists()).toBe(false)
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
             expect(wrapper.find('.on-target').exists()).toBe(false)
             expect(wrapper.find('.distance-info').exists()).toBe(false)
@@ -257,7 +289,9 @@ describe('GuideArrow', () => {
             const wrapper = mountArrow({...IMAGE_PROPS, stale: true, solving: true})
 
             expect(wrapper.find('.push-to-solving').exists()).toBe(true)
-            expect(wrapper.find('.last-fix').exists()).toBe(false)
+            expect(wrapper.find('.readout-chip').exists()).toBe(false)
+            // Unseen, but sized with its label, so the chip keeps the size it comes back at.
+            expect(wrapper.find('.stand-in .last-fix').exists()).toBe(true)
         })
 
         it('marks another camera\'s readout too', () => {

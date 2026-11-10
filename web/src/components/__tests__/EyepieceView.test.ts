@@ -1073,8 +1073,8 @@ describe('EyepieceView.vue Push-To solving', () => {
 
     expect(wrapper.findComponent({ name: 'GuideArrow' }).props('solveStage')).toEqual(stage)
     expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
-    expect(wrapper.find('.step').text()).toBe('step 2/3')
-    expect(wrapper.find('.distance').exists()).toBe(false)
+    expect(wrapper.find('.push-to-solving .solve-progress').text()).toBe('step 2 of 3')
+    expect(wrapper.find('.readout-chip').exists()).toBe(false)
   })
 
   it('keeps the compass one turn after the solve ends, then gives the readout back', async () => {
@@ -1093,7 +1093,7 @@ describe('EyepieceView.vue Push-To solving', () => {
     vi.advanceTimersByTime(1)
     await nextTick()
     expect(wrapper.find('.push-to-solving').exists()).toBe(false)
-    expect(wrapper.find('.distance').exists()).toBe(true)
+    expect(wrapper.find('.readout-chip .distance').exists()).toBe(true)
   })
 
   it('drops a first solve\'s compass once the hold is over, when the solve found nothing', async () => {

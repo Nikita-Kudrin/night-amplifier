@@ -58,8 +58,9 @@ the field of the camera on screen: its focal length under **Push-To → Equipmen
 plate solve on that same camera. Without either, only the degrees are shown.
 
 While Push-To is plate solving, a turning compass — the header's Push-To icon — takes the
-readout's place, with the step a long search is on (*step 2/3*); the arrow keeps pointing
-the last known way. When the compass stops and the readout returns, the numbers are fresh —
+readout's place, at the readout's size; the arrow keeps pointing the last known way. A search
+trying several ways in turn adds a bar under the compass, one segment per way and as wide as the
+readout, lit up to the one being tried; near the target it sits under *On Target* instead. When the compass stops and the readout returns, the numbers are fresh —
 unless that solve failed: then the readout comes back dimmed and marked *last fix*, the
 numbers from before it, until a solve succeeds. After a failure the compass keeps turning a
 few seconds longer, since Push-To tries again with the next frame. Right after you pick a

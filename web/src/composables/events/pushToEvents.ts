@@ -31,9 +31,14 @@ export type CurrentTarget = PushToTarget | CatalogEntry | Coordinate
 
 export const NOT_SOLVING: Readonly<PlateSolving> = Object.freeze({inProgress: false, targetName: null, lastResult: null, stage: null})
 
-/** "step 2/3" for a multi-strategy solve, `null` for a single one: it tells a slow solve from a hung one. */
-export function solveStep(stage: PlateSolving['stage']): string | null {
-    return stage && stage.total > 1 ? `step ${stage.attempt}/${stage.total}` : null
+/**
+ * The step a multi-strategy solve is on, `null` for a single one: the solving chip's bar tells
+ * a slow solve from a hung one. `attempt` is clamped to `1..=total`, so a stray event never fills
+ * more bars than there are.
+ */
+export function solveProgress(stage: PlateSolving['stage']): Pick<NonNullable<PlateSolving['stage']>, 'attempt' | 'total'> | null {
+    if (!stage || stage.total <= 1) return null
+    return {attempt: Math.min(Math.max(stage.attempt, 1), stage.total), total: stage.total}
 }
 
 /**
@@ -68,17 +73,14 @@ export function createPushToEvents() {
     const pushToBlocked = ref<string | null>(null)
 
     const solvingMessage = computed(() => {
-        const {inProgress, lastResult, targetName, stage} = plateSolving.value
+        const {inProgress, lastResult, targetName} = plateSolving.value
         const targetSuffix = targetName ? `: ${targetName}` : ''
 
         if (inProgress) {
-            // The step counter, not the strategy behind it. A label like "last solve
-            // (this session) + last known pointing" is a diagnostic that overran the
-            // status bar and pushed the one thing the user is looking for -- the object
-            // name -- off the end. It stays in `stage.label` and in the server log.
-            // The counter alone still separates a slow solve from a hung one.
-            const step = solveStep(stage)
-            if (step) return `Searching (${step})${targetSuffix}`
+            // Neither the strategy nor the step: a label like "last solve (this session) +
+            // last known pointing" overran the status bar and pushed the object name off
+            // the end. The solving chip's bar shows the step; the label stays in
+            // `stage.label` and the server log.
             return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
 

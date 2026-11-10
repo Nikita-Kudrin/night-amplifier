@@ -95,7 +95,8 @@ describe('LiveView - Guide Arrow Integration', () => {
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
             expect(guideArrow.props('solving')).toBe(true)
             expect(guideArrow.props('solveStage')).toEqual(STAGE)
-            expect(wrapper.find('.distance').exists()).toBe(false)
+            expect(wrapper.find('.push-to-solving .solve-progress').text()).toBe('step 2 of 3')
+            expect(wrapper.find('.readout-chip').exists()).toBe(false)
         })
 
         describe('when it fails', () => {
