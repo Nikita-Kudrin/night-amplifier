@@ -74,6 +74,11 @@ pub struct CameraSlot {
     /// guide loop uses this; the main camera carries the equivalent on
     /// `SessionResumePlan`.
     raw_session: StdMutex<Option<RawSessionResume>>,
+    /// The observer wants the guide loop running: set by a connect's auto-start and by
+    /// Start, cleared by Stop, read by a reopen. 2026-11-03: a stopped guide reopened beside
+    /// the failing Ares-C PRO streamed through its recovery; read off the phase instead, a
+    /// Stop whose stream stop timed out still said `Guiding` and streamed again.
+    guide_wanted: AtomicBool,
     /// Hardware calls waiting for the handle's owner to run them. See [`CameraOp`].
     pending_ops: StdMutex<Vec<CameraOp>>,
     /// When the monitor checked the handle out for the call it is in, if it is in one.
@@ -158,6 +163,7 @@ impl Default for CameraSlot {
             sdk_calls: Arc::new(InFlightCalls::default()),
             pending_opens: Arc::new(InFlightCalls::default()),
             raw_session: StdMutex::new(None),
+            guide_wanted: AtomicBool::new(false),
             pending_ops: StdMutex::new(Vec::new()),
             monitor_call_since: StdMutex::new(None),
             warmup: StdMutex::new(None),
@@ -286,6 +292,15 @@ impl CameraSlot {
 
     pub fn set_raw_session(&self, session: Option<RawSessionResume>) {
         *self.raw_session.lock().unwrap_or_else(|e| e.into_inner()) = session;
+    }
+
+    pub fn set_guide_wanted(&self, wanted: bool) {
+        self.guide_wanted.store(wanted, Ordering::SeqCst);
+    }
+
+    /// Whether a reopen restarts the guide loop: the observer's last word, not the phase.
+    pub fn guide_wanted(&self) -> bool {
+        self.guide_wanted.load(Ordering::SeqCst)
     }
 
     pub fn recovery(&self) -> Recovery {

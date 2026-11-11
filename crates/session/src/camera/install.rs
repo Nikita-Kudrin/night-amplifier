@@ -382,8 +382,12 @@ pub(super) async fn install_camera(
     let _ = state.events.send(ServerEvent::SettingsUpdated);
 
     // The guide camera free-runs from the moment it connects: solving and its preview
-    // must work while the user is still framing, before any capture has started.
-    if role == CameraRole::Guide {
+    // must work while the user is still framing, before any capture has started. A
+    // reopen restarts it only if the observer has not stopped it since.
+    if role == CameraRole::Guide && replaces.is_none() {
+        state.slot(role).set_guide_wanted(true);
+    }
+    if role == CameraRole::Guide && state.slot(role).guide_wanted() {
         crate::capture::guide_task::start(state, &connected_info);
     }
 

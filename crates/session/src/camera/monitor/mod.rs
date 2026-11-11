@@ -11,12 +11,14 @@
 
 mod cooler;
 mod ffi_worker;
+mod unanswered;
 
 use cooler::{
     cancel_warmup, finish_warmup, handle_update_cooler_target, push_setpoint, start_warmup,
     warmup_overran,
 };
 use ffi_worker::{with_camera_bounded, CallError, FfiWorker, FFI_CALL_TIMEOUT};
+use unanswered::UnansweredReads;
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -88,6 +90,7 @@ struct MonitorCtx {
     /// Polls in a row that found the slot empty while unpaused. See
     /// [`MISSING_HANDLE_TICKS`].
     missing_handle_ticks: u32,
+    unanswered: UnansweredReads,
 }
 
 fn run(
@@ -116,6 +119,7 @@ fn run(
         ffi: FfiWorker::new(),
         fault_is_persistent: false,
         missing_handle_ticks: 0,
+        unanswered: UnansweredReads::default(),
     };
 
     loop {
@@ -205,12 +209,17 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
             }
             return true; // Not yet conclusive; poll again.
         }
+        Err(e @ CallError::Camera(CameraError::TemperatureReadFailed(_))) => {
+            debug!(camera_name = %ctx.camera_name, error = %e, "Transient error reading camera status");
+            return note_implausible_status(ctx);
+        }
         Err(e) => {
             debug!(camera_name = %ctx.camera_name, error = %e, "Transient error reading camera status");
             return true; // transient error; keep running
         }
     };
     ctx.missing_handle_ticks = 0;
+    ctx.unanswered.plausible();
 
     // Broadcast the sample for the UI.
     let target = ctx.state.settings.snapshot().profile_for(ctx.role).target_temp_c;
@@ -345,6 +354,33 @@ fn note_missing_handle(ctx: &mut MonitorCtx) -> bool {
         "The camera handle is gone and nothing holds it; reopening the camera"
     );
     give_up_on_camera(ctx, FaultKind::HandleLost);
+    false
+}
+
+/// Count a reading no sensor gives; past `unanswered::UNANSWERED_READS` on a parked camera
+/// that once read plausibly, reopen it — it would not frame on the next Start.
+fn note_implausible_status(ctx: &mut MonitorCtx) -> bool {
+    let parked = matches!(ctx.state.camera_phase(ctx.role), CameraPhase::Idle | CameraPhase::Precooling);
+    let Some(reads) = ctx.unanswered.implausible(parked) else {
+        return true;
+    };
+    if !camera_health::claim_idle_reopen(&ctx.state, ctx.role, &ctx.camera_name) {
+        ctx.unanswered.leave_alone();
+        warn!(
+            camera_name = %ctx.camera_name,
+            role = ctx.role.label(),
+            reads,
+            "The camera stopped answering while idle again, with no frame since its last reopen; leaving it parked"
+        );
+        return true;
+    }
+    warn!(
+        camera_name = %ctx.camera_name,
+        role = ctx.role.label(),
+        reads,
+        "The camera stopped answering while idle; reopening it"
+    );
+    give_up_on_camera(ctx, FaultKind::Unresponsive);
     false
 }
 

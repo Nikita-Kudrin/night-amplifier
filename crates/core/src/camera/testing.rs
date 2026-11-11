@@ -48,11 +48,17 @@ pub struct CameraControls {
     /// While set, every call answers with the device-loss code a shim produces after a
     /// USB reset.
     pub dead: AtomicBool,
+    /// While set, the temperature `status()` reports, over [`FakeCamera::reporting_temperature`]:
+    /// a camera that stops answering mid-session reads -300 °C.
+    pub temperature_c: Mutex<Option<f64>>,
+    /// How long `end_stream()` takes.
+    pub end_stream_delay_ms: AtomicU64,
     /// Runs inside the next `set_dew_heater` call, the last step of installing a camera.
     pub on_dew_heater: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 
     pub frames: AtomicUsize,
     pub closes: AtomicUsize,
+    pub stream_ends: AtomicUsize,
     pub drops: AtomicUsize,
     pub status_reads: AtomicUsize,
     /// The cooler setpoint each exposure was asked to hold.
@@ -307,8 +313,9 @@ impl Camera for FakeCamera {
             panic!("scripted panic in status()");
         }
         controls.check_alive()?;
+        let temperature_c = controls.temperature_c.lock().unwrap().unwrap_or(self.temperature_c);
         Ok(CameraStatus {
-            temperature_c: self.temperature_c,
+            temperature_c,
             ..Default::default()
         })
     }
@@ -353,6 +360,12 @@ impl Camera for FakeCamera {
             }
             None => self.after_script(),
         }
+    }
+
+    fn end_stream(&mut self) {
+        let delay = Duration::from_millis(self.controls.end_stream_delay_ms.load(Ordering::SeqCst));
+        std::thread::sleep(delay);
+        self.controls.stream_ends.fetch_add(1, Ordering::SeqCst);
     }
 
     fn cancel(&self) {

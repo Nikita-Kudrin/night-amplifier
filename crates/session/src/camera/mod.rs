@@ -25,6 +25,8 @@ mod tests;
 mod viewed_camera_tests;
 #[cfg(test)]
 mod capture_stop_tests;
+#[cfg(test)]
+mod parked_camera_tests;
 
 /// Cadence for polling cooled-camera status from the monitor thread.
 pub const PHASE_POLL_INTERVAL: Duration = Duration::from_secs(2);

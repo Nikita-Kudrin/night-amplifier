@@ -116,6 +116,7 @@ impl ServerEvent {
             // `capture_resumed` also drives a one-off notice, which a lost one goes without.
             E::CameraReconnecting { .. }
             | E::CameraReconnectFailed { .. }
+            | E::CameraUnresponsive { .. }
             | E::CaptureResumed { .. }
             | E::CameraRecoveryCleared { .. } => Some(Topic::CameraRecovery),
             E::TargetChanged(_) | E::TargetCleared => Some(Topic::PushToTarget),

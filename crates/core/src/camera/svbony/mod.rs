@@ -295,6 +295,11 @@ impl Camera for SvbonyCamera {
         self.last_resolved_roi = None;
     }
 
+    fn end_stream(&mut self) {
+        let Self { handle, info, last_resolved_roi, exposure, .. } = self;
+        exposure.end_stream(&mut SvbonyExposure { handle, info, resolved_roi: last_resolved_roi });
+    }
+
     fn cancel(&self) {
         self.exposure.cancel();
     }

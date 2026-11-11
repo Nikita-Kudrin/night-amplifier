@@ -53,6 +53,9 @@ struct Entries {
     /// Opens in a row that faulted before their first frame. Outlives the reopens it
     /// counts — see `camera_health::FRAMELESS_GIVE_UP_AT`.
     frameless_opens: HashMap<CameraKey, FramelessRun>,
+    /// When a parked camera was last reopened for reading implausibly, until it frames —
+    /// see `camera_health::claim_idle_reopen`.
+    idle_reopens: HashMap<CameraKey, Instant>,
 }
 
 /// A run of opens that faulted before their first frame.
@@ -332,6 +335,22 @@ impl CameraRoster {
             .frameless_opens
             .remove(&(role, camera_name.to_string()));
     }
+
+    /// Record an idle reopen at `now`, unless one recorded within `memory` still stands.
+    /// Returns whether this one may go ahead; checked and recorded under one lock.
+    pub(crate) fn claim_idle_reopen(&self, role: CameraRole, camera_name: &str, memory: Duration, now: Instant) -> bool {
+        let mut entries = self.lock();
+        let key = (role, camera_name.to_string());
+        if entries.idle_reopens.get(&key).is_some_and(|at| now.saturating_duration_since(*at) <= memory) {
+            return false;
+        }
+        entries.idle_reopens.insert(key, now);
+        true
+    }
+
+    pub(crate) fn forget_idle_reopen(&self, role: CameraRole, camera_name: &str) {
+        self.lock().idle_reopens.remove(&(role, camera_name.to_string()));
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +444,21 @@ mod tests {
         assert!(roster.transition(CameraRole::Main, CameraPhase::Capturing, CameraPhase::Idle));
         assert_eq!(roster.phase(CameraRole::Main), CameraPhase::Idle);
         assert_eq!(roster.phase(CameraRole::Guide), CameraPhase::Disconnected);
+    }
+
+    #[test]
+    fn an_idle_reopen_is_claimed_once_per_camera_until_forgotten_or_aged_out() {
+        let roster = CameraRoster::default();
+        let memory = Duration::from_secs(600);
+        let start = Instant::now();
+        assert!(roster.claim_idle_reopen(CameraRole::Main, "Ares", memory, start));
+        assert!(!roster.claim_idle_reopen(CameraRole::Main, "Ares", memory, start + memory), "not cured");
+        assert!(roster.claim_idle_reopen(CameraRole::Guide, "Ares", memory, start), "a twin in the other role");
+
+        let later = start + memory + Duration::from_secs(1);
+        assert!(roster.claim_idle_reopen(CameraRole::Main, "Ares", memory, later), "aged out");
+        roster.forget_idle_reopen(CameraRole::Main, "Ares");
+        assert!(roster.claim_idle_reopen(CameraRole::Main, "Ares", memory, later), "forgotten by a frame");
     }
 
     #[test]

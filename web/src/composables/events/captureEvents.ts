@@ -1,4 +1,4 @@
-import {ref} from 'vue'
+import {computed, ref} from 'vue'
 import {dismissRecoveryFailure} from '../api'
 import {CAMERA_PHASES} from '../../constants'
 import type {CameraRole, CaptureState} from '../api.types'
@@ -14,13 +14,21 @@ import type {EventHandlers} from './handlers'
 
 /**
  * The camera a recovery or watchdog warning is about: `role` null when the event had none,
- * `recovery` when automatic recovery raised it, `gaveUp` its give-up.
+ * `recovery` when automatic recovery raised it, `gaveUp` its give-up, `opens` the reopens
+ * of a camera that opens but sends no frame (`camera_unresponsive`).
  */
 interface WarnedCamera {
     name: string
     role: CameraRole | null
     recovery?: boolean
     gaveUp?: boolean
+    opens?: number
+}
+
+/** What a live view of `role` says instead of "Waiting for frames…" while recovery works on it. */
+export interface CameraTrouble {
+    role: CameraRole
+    text: string
 }
 
 /** Where the main stream's frames were cut from the stack, and the frame size the cut arrives at. */
@@ -69,6 +77,17 @@ export function createCaptureEvents() {
     // frames come and go between the bad ones.
     const lastRejectionReason = ref<string | null>(null)
 
+    const cameraTrouble = computed<CameraTrouble | null>(() => {
+        const warned = unresponsiveCamera.value
+        if (!warned?.recovery || !warned.role) return null
+        if (warned.gaveUp) return {role: warned.role, text: `${warned.name} could not be brought back`}
+        if (warned.opens !== undefined) return {role: warned.role, text: `${warned.name} is not sending frames — reopening it…`}
+        return {role: warned.role, text: `Reconnecting to ${warned.name}…`}
+    })
+
+    /** A camera that opens but sends no frame is fine by its phase: only its frame ends that notice. */
+    const isFramelessNotice = () => unresponsiveCamera.value?.opens !== undefined
+
     function clearUnresponsive() {
         unresponsiveWarning.value = null
         unresponsiveCamera.value = null
@@ -95,7 +114,7 @@ export function createCaptureEvents() {
         const healthy = phase !== CAMERA_PHASES.RECOVERING && phase !== CAMERA_PHASES.DISCONNECTED
         const warned = unresponsiveCamera.value
         const sameCamera = warned?.name === name && (!warned.role || !role || warned.role === role)
-        if (healthy && sameCamera) clearUnresponsive()
+        if (healthy && sameCamera && !isFramelessNotice()) clearUnresponsive()
     }
 
     function handleFrameEvent(data: FrameCapturedEvent | FrameRejectedEvent) {
@@ -151,6 +170,12 @@ export function createCaptureEvents() {
         camera_phases(data) {
             for (const camera of data.cameras) clearIfHealthy(camera)
         },
+        camera_unresponsive(data) {
+            const times = data.opens === 1 ? 'time' : 'times'
+            unresponsiveWarning.value =
+                `${data.name} is not sending frames — reopened ${data.opens} ${times} in ${data.for_s} s.`
+            unresponsiveCamera.value = {name: data.name, role: data.role, recovery: true, opens: data.opens}
+        },
         camera_reconnect_failed(data) {
             unresponsiveWarning.value =
                 `Could not bring ${data.name} back after ${data.attempts} attempts: ${data.reason}.`
@@ -162,8 +187,11 @@ export function createCaptureEvents() {
             if (warned?.recovery && warned.role === data.role) clearUnresponsive()
         },
         capture_resumed(data) {
-            clearUnresponsive()
             lastError.value = null
+            // Not back while it sends no frames: "is back" beside "is not sending frames" said
+            // both at once. Its first frame clears that notice, which is the news.
+            if (isFramelessNotice()) return
+            clearUnresponsive()
             resumeNotice.value =
                 `${data.name} is back. Capture resumed with ${data.stacked_count} frames still stacked.`
         },
@@ -210,6 +238,7 @@ export function createCaptureEvents() {
             diskWriterWarning,
             storageSync,
             unresponsiveWarning,
+            cameraTrouble,
             resumeNotice,
             focusModeNotice,
             viewedCamera,

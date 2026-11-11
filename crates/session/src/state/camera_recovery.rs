@@ -20,6 +20,13 @@ pub enum RecoveryStatus {
         of: u32,
         next_attempt_in_s: u64,
     },
+    /// Reopened, without a frame since — see `camera_health::frameless_notice`. A frame
+    /// clears it, a give-up replaces it.
+    Unresponsive {
+        name: String,
+        opens: u32,
+        for_s: u64,
+    },
     /// Stays until a camera connects into the role again: the camera is gone, and the
     /// observer has to act.
     Failed {
@@ -35,6 +42,9 @@ impl RecoveryStatus {
             RecoveryStatus::None => ServerEvent::CameraRecoveryCleared { role },
             RecoveryStatus::Reconnecting { name, attempt, of, next_attempt_in_s } => {
                 ServerEvent::camera_reconnecting(name.clone(), role, *attempt, *of, *next_attempt_in_s)
+            }
+            RecoveryStatus::Unresponsive { name, opens, for_s } => {
+                ServerEvent::camera_unresponsive(name.clone(), role, *opens, *for_s)
             }
             RecoveryStatus::Failed { name, attempts, reason } => {
                 ServerEvent::camera_reconnect_failed(name.clone(), role, *attempts, reason.clone())
@@ -89,6 +99,17 @@ impl CameraRecoveryStatus {
         self.set(role, RecoveryStatus::None);
     }
 
+    /// The camera framed: an unresponsive notice is over. Checked under the lock, so a
+    /// give-up or a reconnect announced meanwhile stays.
+    pub fn clear_unresponsive(&self, role: CameraRole) {
+        let mut statuses = self.lock();
+        if !matches!(statuses[role as usize], RecoveryStatus::Unresponsive { .. }) {
+            return;
+        }
+        statuses[role as usize] = RecoveryStatus::None;
+        let _ = self.events.send(ServerEvent::CameraRecoveryCleared { role });
+    }
+
     /// The observer dismissed `role`'s give-up: clear it for every client, as a connect into
     /// the role would. Only a give-up, checked under the lock: a recovery running meanwhile
     /// keeps its notice. Returns whether there was one.
@@ -109,6 +130,24 @@ mod tests {
 
     fn reconnecting(attempt: u32) -> RecoveryStatus {
         RecoveryStatus::Reconnecting { name: "Ares".into(), attempt, of: 9, next_attempt_in_s: 5 }
+    }
+
+    #[test]
+    fn a_frame_clears_only_an_unresponsive_notice() {
+        let (tx, mut rx) = broadcast::channel(8);
+        let recovery = CameraRecoveryStatus::new(tx);
+        let unresponsive = RecoveryStatus::Unresponsive { name: "Ares".into(), opens: 4, for_s: 45 };
+        recovery.set(CameraRole::Main, unresponsive);
+        recovery.set(CameraRole::Guide, reconnecting(2));
+        while rx.try_recv().is_ok() {}
+
+        recovery.clear_unresponsive(CameraRole::Main);
+        recovery.clear_unresponsive(CameraRole::Guide);
+
+        assert_eq!(recovery.get(CameraRole::Main), RecoveryStatus::None);
+        assert_eq!(recovery.get(CameraRole::Guide), reconnecting(2), "a reconnect under way keeps its notice");
+        assert!(matches!(rx.try_recv(), Ok(ServerEvent::CameraRecoveryCleared { role: CameraRole::Main })));
+        assert!(rx.try_recv().is_err(), "nothing to clear is not announced");
     }
 
     #[test]

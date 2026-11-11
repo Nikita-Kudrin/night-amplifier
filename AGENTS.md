@@ -326,16 +326,23 @@ the server sends no display text the UI does not show.
   (apply, start, abort, poll, plus its quirks) and the loop owns re-apply, stream/single switching, cancel and stall.
   The stall clock starts on entering `capture`, re-apply included (`CaptureConfig::stall_budget` says why). A stream
   is always stopped *before* a config is applied — SVBony's header demands it for the ROI, ToupTek's for the
-  resolution, and both INDI drivers do it. INDI frames arrive as self-describing FITS BLOBs (`Poll::Delivered`),
+  resolution, and both INDI drivers do it — and when a loop hands its handle back (`Camera::end_stream`, bounded in
+  `return_from_capture`, never on a superseded handle): 2026-11-03's Ares-C PRO, parked streaming, read -300 °C. INDI frames arrive as self-describing FITS BLOBs (`Poll::Delivered`),
   watched from before the exposure is triggered; its XML speaks the protocol's spelling (`Idle`, `On`, `Also`).
 - **Fault detection**: one detector with a per-role+name streak serves all watchdogs, so alternating faults still
-  escalate. Recovery is a ladder (stream restart → quiet suspend → supervisor retry → give-up), silent before 20 s;
+  escalate. Recovery is a ladder (stream restart → quiet suspend → supervisor retry → give-up), silent before 10 s;
   a failed hand-off always resumes the monitor. A reopen is not a recovery until a **frame** arrives: opens that
   fault before their first frame are counted per role+name (`camera_health::FramelessVerdict`); the 2nd reopens with
   the same-provider sibling closed and **held closed until the first frame** (`reopen_hold`, deadline-bounded; never a
   capturing Main or one warming up after a Disconnect), the 3rd gives up once the run is 60 s old — 2026-10-12's
   Ares-C PRO reopened 20 times in silence beside an open Neptune-C II, and streamed once that was closed. A Connect,
-  a Start, or a reopen no capture judges ends the run. A monitor call hands its handle back only if the slot is
+  a Start (not one into a reopen under way), a reopen no capture judges, or a handle parked ends the run; a reopen
+  after 10 s of it announces `camera_unresponsive`, cleared by the frame or the parking. The **imaging camera's first
+  frame stall reopens at once** (restarts in place never brought one back; the guide loop's still restarts); a parked
+  camera reading implausibly 5 times after a plausible read is reopened once until it frames (`monitor::unanswered`,
+  `claim_idle_reopen`: a quirk a reopen did not cure was reopened every ~13 s). A reopened guide restarts its loop
+  only if the observer wants it (`guide_wanted`, set by connect/Start, cleared by Stop — mid-reopen too; read off the
+  phase, a Stop whose stream stop timed out restarted it). A monitor call hands its handle back only if the slot is
   neither `Suspended` nor past that **monitor's generation** (`claim_monitor_epoch`, retired by a suspension):
   closing on `Installing` closed the live reopened camera. Only a *named, different* camera discards the FOV cache,
   since a stale FOV *fails* hinted solves.

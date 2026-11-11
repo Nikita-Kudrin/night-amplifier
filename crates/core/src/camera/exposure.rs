@@ -123,6 +123,10 @@ impl ExposureLoop {
         Arc::clone(&self.cancel_flag)
     }
 
+    pub(crate) fn is_streaming(&self) -> bool {
+        self.streaming
+    }
+
     /// Forgets the last config applied, so the next capture pushes it to the camera again.
     pub fn invalidate(&mut self) {
         self.last_applied = None;
@@ -206,7 +210,9 @@ impl ExposureLoop {
         Ok(frame)
     }
 
-    fn end_stream<S: SdkExposure>(&mut self, sdk: &mut S) {
+    /// Ends a stream the last `capture` left running; a no-op otherwise. Also how a
+    /// vendor's [`Camera::end_stream`](super::traits::Camera::end_stream) parks a handle.
+    pub(crate) fn end_stream<S: SdkExposure>(&mut self, sdk: &mut S) {
         if self.streaming {
             sdk.end_stream();
             self.streaming = false;

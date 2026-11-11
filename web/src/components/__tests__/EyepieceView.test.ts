@@ -1158,3 +1158,54 @@ describe('EyepieceView.vue Push-To solving', () => {
     expect(wrapper.find('.right-eye .push-to-solving').exists()).toBe(true)
   })
 })
+
+describe('EyepieceView.vue while recovery works on the camera', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    setPath('/eyepiece')
+    await loadEyepieceView()
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  const trouble = { role: 'main' as const, text: 'Ares-C PRO is not sending frames — reopening it…' }
+
+  it('says why no frame comes instead of waiting for frames', () => {
+    const wrapper = mountEyepiece(undefined, {
+      settings: { show_focus_image: false },
+      eventStream: { cameraTrouble: trouble },
+    })
+
+    const text = wrapper.find('.placeholder').text()
+    expect(text).toContain('Ares-C PRO is not sending frames')
+    expect(text).not.toContain('Waiting for frames')
+  })
+
+  it('says it under the focus image too', () => {
+    const wrapper = mountEyepiece(undefined, {
+      settings: { show_focus_image: true },
+      eventStream: { cameraTrouble: trouble },
+    })
+
+    expect(wrapper.find('.focus-image').exists()).toBe(true)
+    expect(wrapper.find('.placeholder').text()).toContain('Ares-C PRO is not sending frames')
+  })
+
+  it('keeps the focus image alone when nothing is wrong', () => {
+    const wrapper = mountEyepiece(undefined, { settings: { show_focus_image: true } })
+
+    expect(wrapper.find('.focus-image').exists()).toBe(true)
+    expect(wrapper.find('.placeholder').text()).not.toContain('Waiting for frames')
+  })
+
+  it('ignores trouble with the camera this page does not show', () => {
+    const wrapper = mountEyepiece(undefined, {
+      settings: { show_focus_image: false },
+      eventStream: { cameraTrouble: { ...trouble, role: 'guide' } },
+    })
+
+    expect(wrapper.find('.placeholder').text()).toContain('Waiting for frames')
+  })
+})

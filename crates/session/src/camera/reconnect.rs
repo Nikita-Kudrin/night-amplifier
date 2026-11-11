@@ -41,8 +41,8 @@ mod timing {
         Duration::from_secs(10),
     ];
     /// How long recovery runs before the observer is told about it. Every dropout in the
-    /// 2026-09-07 log was back within ~6 s.
-    pub const NOTICE_AFTER: Duration = Duration::from_secs(20);
+    /// 2026-09-07 log was back within ~6 s; past 10 s, "Waiting for frames" needs a reason.
+    pub const NOTICE_AFTER: Duration = Duration::from_secs(10);
     /// Past this the camera is not coming back on its own and something physical needs
     /// attention.
     pub const TOTAL_BUDGET: Duration = Duration::from_secs(300);
@@ -247,14 +247,20 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
         match recovery::reopen_for_recovery(state, &recorded).await {
             Ok(connected) => {
                 info!(camera = %name, role = role.label(), attempt, elapsed = ?started.elapsed(), "Reconnected");
-                state.recovery_status.clear(role);
-                // Only the imaging camera has a capture to resume. For the guide camera
-                // the reopen has already restarted its loop, whose first frame judges it.
-                if role == CameraRole::Main && !resume_capture_if_planned(state, &connected, noticed).await {
+                // Before the resume, whose first frame may clear it at once.
+                state.recovery_status.set(role, camera_health::frameless_notice(state, role, name, NOTICE_AFTER));
+                // The imaging camera's resumed capture judges the reopen by its first
+                // frame; the guide camera's loop does, if the reopen restarted it.
+                let judged = match role {
+                    CameraRole::Main => resume_capture_if_planned(state, &connected, noticed).await,
+                    CameraRole::Guide => state.guide_loops.is_registered(),
+                };
+                if !judged {
                     // Nothing will judge this open by a frame: a run kept past it would
                     // wait for the next fault, however unrelated, to act on.
                     camera_health::forget_frameless_opens(state, role, name);
                     recovery::end_isolation(state, role);
+                    state.recovery_status.clear(role);
                 }
                 return Ok(());
             }
@@ -263,20 +269,35 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
 
         let wait = retry_delay(attempt);
         let left = attempts_left(started.elapsed(), attempt);
-        if started.elapsed() + wait >= NOTICE_AFTER && left > 0 {
-            noticed = true;
-            state.recovery_status.set(
-                role,
-                RecoveryStatus::Reconnecting {
-                    name: name.clone(),
-                    attempt: attempt + 1,
-                    of: attempt + left,
-                    next_attempt_in_s: wait.as_secs(),
-                },
-            );
+        let Some(quiet) = notice_due_in(started.elapsed(), wait, NOTICE_AFTER).filter(|_| left > 0) else {
+            tokio::time::sleep(wait).await;
+            continue;
+        };
+        tokio::time::sleep(quiet).await;
+        // The observer may have disconnected it during the quiet part of the wait.
+        if !recovery::is_recovering(state, &recorded).await {
+            continue;
         }
-        tokio::time::sleep(wait).await;
+        noticed = true;
+        state.recovery_status.set(
+            role,
+            RecoveryStatus::Reconnecting {
+                name: name.clone(),
+                attempt: attempt + 1,
+                of: attempt + left,
+                next_attempt_in_s: (wait - quiet).as_secs(),
+            },
+        );
+        tokio::time::sleep(wait - quiet).await;
     }
+}
+
+/// How far into the `wait` before the next attempt the observer is told, if the quiet
+/// spell ends before that attempt: at its end, not when the wait crossing it begins —
+/// announced ahead, a 10 s spell spoke at 6 s, inside 2026-09-07's dropouts.
+fn notice_due_in(elapsed: Duration, wait: Duration, notice_after: Duration) -> Option<Duration> {
+    let quiet = notice_after.saturating_sub(elapsed);
+    (quiet < wait).then_some(quiet)
 }
 
 /// Restart the capture the dropout interrupted, in the mode it was running in, keeping
@@ -392,6 +413,22 @@ mod tests {
         }
         assert!(starts_at + retry_delay(left + 1) >= TOTAL_BUDGET, "one more attempt would still fit");
         assert!(NOTICE_AFTER < TOTAL_BUDGET, "the observer must hear before the give-up");
+        assert!(
+            NOTICE_AFTER < crate::camera::health::FRAMELESS_GIVE_UP_AFTER,
+            "a frameless run must be announced before it can be given up on"
+        );
+    }
+
+    /// With the field schedule (attempts failing at ~1, 3, 6 and 11 s), a 10 s spell is
+    /// broken at 10 s, inside the wait that crosses it — never at the start of that wait.
+    #[test]
+    fn the_observer_is_told_when_the_quiet_spell_ends() {
+        let secs = Duration::from_secs;
+        let spell = secs(10);
+        assert_eq!(notice_due_in(secs(3), secs(3), spell), None, "the next attempt still lands inside it");
+        assert_eq!(notice_due_in(secs(6), secs(5), spell), Some(secs(4)), "told at 10 s, not 6 s");
+        assert_eq!(notice_due_in(secs(5), secs(5), spell), None, "an attempt at exactly 10 s comes first");
+        assert_eq!(notice_due_in(secs(11), secs(10), spell), Some(Duration::ZERO), "past it: told at once");
     }
 
     /// Time spent inside slow attempts shrinks the promise instead of being ignored.

@@ -7,7 +7,7 @@ use night_amplifier_core::camera::{
     TRANSFER_FLOOR_BYTES_PER_SEC,
 };
 use crate::capture::channel::{PipelineCapacities, QueueDepth};
-use crate::capture::stall::{EscalationReason, StallTracker, StallVerdict, STALL_ESCALATION};
+use crate::capture::stall::{EscalationReason, StallSite, StallTracker, StallVerdict, STALL_ESCALATION};
 use crate::capture::capture_thread::{run_capture_task, CaptureChannels, FrameNumbers};
 use crate::capture::watchdog::*;
 use crate::events::ServerEvent;
@@ -119,19 +119,19 @@ fn binning_and_roi_shrink_the_frame_the_budget_is_sized_for() {
 fn stalls_escalate_only_when_consecutive() {
     let mut tracker = StallTracker::default();
     for _ in 1..STALL_ESCALATION {
-        assert_eq!(tracker.stalled(), StallVerdict::RestartInPlace);
+        assert_eq!(tracker.stalled(StallSite::Main), StallVerdict::RestartInPlace);
     }
     tracker.frame_delivered();
     for _ in 1..STALL_ESCALATION {
         assert_eq!(
-            tracker.stalled(),
+            tracker.stalled(StallSite::Main),
             StallVerdict::RestartInPlace,
             "a delivered frame must reset the run"
         );
     }
-    assert_eq!(tracker.stalled(), StallVerdict::Escalate(EscalationReason::Run));
+    assert_eq!(tracker.stalled(StallSite::Main), StallVerdict::Escalate(EscalationReason::Run));
     assert_eq!(
-        tracker.stalled(),
+        tracker.stalled(StallSite::Main),
         StallVerdict::RestartInPlace,
         "an escalation starts a fresh run"
     );
@@ -146,13 +146,13 @@ fn a_camera_whose_restarts_never_recover_is_reopened_at_its_first_stall() {
     let state = Arc::new(state);
 
     let mut first_run = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
-    assert_eq!(first_run.stalled(), StallVerdict::RestartInPlace);
-    assert_eq!(first_run.stalled(), StallVerdict::RestartInPlace);
-    assert_eq!(first_run.stalled(), StallVerdict::Escalate(EscalationReason::Run));
+    assert_eq!(first_run.stalled(StallSite::Main), StallVerdict::RestartInPlace);
+    assert_eq!(first_run.stalled(StallSite::Main), StallVerdict::RestartInPlace);
+    assert_eq!(first_run.stalled(StallSite::Main), StallVerdict::Escalate(EscalationReason::Run));
 
     let mut after_reopen = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
     assert_eq!(
-        after_reopen.stalled(),
+        after_reopen.stalled(StallSite::Main),
         StallVerdict::Escalate(EscalationReason::RestartsNotRecovering {
             failed: crate::camera::health::RESTART_DISTRUST_AFTER
         })
@@ -160,13 +160,13 @@ fn a_camera_whose_restarts_never_recover_is_reopened_at_its_first_stall() {
 
     let mut other_camera = StallTracker::for_camera(&state, CameraRole::Main, "Ares-C PRO");
     assert_eq!(
-        other_camera.stalled(),
+        other_camera.stalled(StallSite::Main),
         StallVerdict::RestartInPlace,
         "the record belongs to the camera whose restarts failed"
     );
     let mut twin = StallTracker::for_camera(&state, CameraRole::Main, "Neptune-C II");
     assert_eq!(
-        twin.stalled(),
+        twin.stalled(StallSite::Main),
         StallVerdict::RestartInPlace,
         "a second body of the same model, in the other role, is another device"
     );
@@ -178,13 +178,13 @@ fn a_restart_that_brings_frames_back_keeps_the_ordinary_ladder() {
     let state = Arc::new(state);
 
     let mut tracker = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
-    assert_eq!(tracker.stalled(), StallVerdict::RestartInPlace);
-    assert_eq!(tracker.stalled(), StallVerdict::RestartInPlace, "the first restart failed");
+    assert_eq!(tracker.stalled(StallSite::Main), StallVerdict::RestartInPlace);
+    assert_eq!(tracker.stalled(StallSite::Main), StallVerdict::RestartInPlace, "the first restart failed");
     tracker.frame_delivered();
 
     let mut after = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
     assert_eq!(
-        after.stalled(),
+        after.stalled(StallSite::Main),
         StallVerdict::RestartInPlace,
         "a restart that worked clears the failure before it"
     );
@@ -481,4 +481,15 @@ async fn a_camera_whose_restarts_never_work_is_reopened_at_its_first_stall() {
     assert_eq!(run.frames, 1);
     assert_eq!(run.fault_streak, Some(1), "reopened as the fault it is");
     assert!(!has_error_or_disconnect(&run.events), "recovery decides what the user sees");
+}
+
+#[test]
+fn a_first_frame_stall_reopens_at_once_and_later_ones_restart_in_place() {
+    let mut tracker = StallTracker::default();
+    assert_eq!(
+        tracker.stalled(StallSite::FirstFrame),
+        StallVerdict::Escalate(EscalationReason::FirstFrame)
+    );
+    assert_eq!(tracker.stalled(StallSite::Main), StallVerdict::RestartInPlace, "a reopen starts no run");
+    assert_eq!(tracker.stalled(StallSite::Guide), StallVerdict::RestartInPlace);
 }

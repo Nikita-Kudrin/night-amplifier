@@ -154,6 +154,10 @@ const {
 
 const isCapturing = computed(() => isCaptureRunning(eventStream?.captureState.value ?? CAPTURE_STATES.IDLE))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
+const waitingText = computed(() => {
+  const trouble = eventStream?.cameraTrouble.value
+  return trouble && trouble.role === (showGuide.value ? 'guide' : 'main') ? trouble.text : 'Waiting for frames...'
+})
 
 // A new frame size resizes the canvas, which the arrow and the comet ROI follow.
 const {label: backendLabel} = useFrameRenderer({
@@ -389,7 +393,7 @@ onUnmounted(() => {
       </svg>
       <p v-if="!connected">Connecting to stream...</p>
       <p v-else-if="!isCapturing">Start capture to see live view</p>
-      <p v-else>Waiting for frames...</p>
+      <p v-else>{{ waitingText }}</p>
     </div>
 
     <!-- Canvas for rendering (used for both LZ4 and JPEG paths) -->

@@ -8,7 +8,7 @@ import type {EventHandlers, EventStream, Sync} from '../composables/useEventStre
 import {handlerOf} from '../composables/events/handlers'
 import type {EventHandler} from '../composables/events/handlers'
 import {SERVER_EVENT_EXAMPLES} from './api.examples'
-import type {StackCrop, StorageSync} from '../composables/events/captureEvents'
+import type {CameraTrouble, StackCrop, StorageSync} from '../composables/events/captureEvents'
 import {NOT_SOLVING} from '../composables/events/pushToEvents'
 import type {ClientPushDirection, CurrentTarget, PlateSolving} from '../composables/events/pushToEvents'
 import type {AstapInstallProgress, CatalogInstallProgress} from '../composables/events/installEvents'
@@ -81,6 +81,7 @@ function stub(wiring: Wiring): EventStream {
         diskWriterWarning: ref<number | null>(null),
         storageSync: ref<Record<CameraRole, StorageSync | null>>({main: null, guide: null}),
         unresponsiveWarning: ref<string | null>(null),
+        cameraTrouble: computed<CameraTrouble | null>(() => null),
         resumeNotice: ref<string | null>(null),
         focusModeNotice: ref<string | null>(null),
         viewedCamera: ref<CameraRole>('main'),

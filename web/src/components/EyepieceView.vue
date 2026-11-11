@@ -65,6 +65,11 @@ const showFocusImage = computed(() => settings.value?.show_focus_image ?? false)
 const forceFocusImageNow = computed(() => settings.value?.force_focus_image_now ?? false)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
+/** Why no frame comes, while recovery works on the camera this page shows; shown over the focus image too. */
+const troubleText = computed(() => {
+  const trouble = eventStream?.cameraTrouble.value
+  return trouble && trouble.role === (showsGuideCamera.value ? 'guide' : 'main') ? trouble.text : null
+})
 const effectiveHasFrame = computed(() => hasFrame.value && !forceFocusImageNow.value)
 
 /** The eyes on screen, by class name: each one is a canvas drawn from the same frame. */
@@ -281,7 +286,8 @@ onUnmounted(() => {
       <p v-if="!connected">Connecting to stream...</p>
       <template v-else>
         <img v-if="showFocusImage || forceFocusImageNow" src="../assets/focusing-star-black-white.png" class="focus-image" alt="Focusing Star" />
-        <p v-else>Waiting for frames...</p>
+        <p v-if="troubleText">{{ troubleText }}</p>
+        <p v-else-if="!showFocusImage && !forceFocusImageNow">Waiting for frames...</p>
       </template>
     </div>
 

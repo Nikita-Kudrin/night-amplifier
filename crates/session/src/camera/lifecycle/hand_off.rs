@@ -1,10 +1,12 @@
 //! Lending the camera handle to a capture loop and taking it back.
 
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, error, warn};
 
 use super::disconnect::begin_warmup;
 use super::{finalize_disconnect, send_monitor_cmd, take_camera, with_camera, DisconnectCause};
+use crate::camera::health::{self as camera_health, FaultKind};
 use crate::error::ApiError;
 use crate::state::{AppState, CameraPhase, CameraRole, MonitorCmd};
 use night_amplifier_core::camera::Camera;
@@ -132,29 +134,20 @@ pub async fn return_from_capture(
     camera: Option<Box<dyn Camera>>,
 ) {
     match camera {
-        Some(mut cam) => {
-            // The disconnect may already have finished without this handle: both
-            // `guide_task::stop` and the capture watchdog give up after a budget and let
-            // it proceed. Parking a live handle in a slot whose camera is gone leaves an
-            // open device nothing will ever close, and re-stamping the phase resurrects a
-            // camera the UI has retired. The same budget lets a *reconnect* land first,
-            // which is why the occupied slot is checked too — same reasoning as
-            // `monitor::with_camera_bounded`, and `DeviceLease` makes closing the
-            // superseded handle a no-op against the live device.
-            let superseded = state.camera_in_role(role).map(|c| c.info.name).as_deref()
-                != Some(camera_name)
-                || state.slot(role).holds_handle()
-                || state.slot(role).is_recovering();
-            if superseded {
-                warn!(
-                    camera_name,
-                    role = role.label(),
-                    "Handle returned after its camera was replaced or disconnected; closing it"
-                );
-                if let Err(e) = cam.close() {
-                    warn!(error = %e, "camera.close() failed — dropping anyway");
-                }
-                state.slot(role).notify_handle_returned();
+        Some(cam) => {
+            if superseded(state, role, camera_name) {
+                close_superseded(state, role, camera_name, cam);
+                return;
+            }
+            // Ended before parking, never on a superseded handle: vendor calls take a
+            // device index, and that stop would land on the camera that replaced it.
+            let Some(cam) = end_stream_bounded(state, role, camera_name, cam).await else {
+                lost_in_capture(state, role, camera_name).await;
+                return;
+            };
+            // The stop awaited: a Disconnect or a reopen may have landed meanwhile.
+            if superseded(state, role, camera_name) {
+                close_superseded(state, role, camera_name, cam);
                 return;
             }
 
@@ -164,6 +157,11 @@ pub async fn return_from_capture(
                 .lock()
                 .expect("camera handle mutex poisoned") = Some(cam);
             state.slot(role).notify_handle_returned();
+            // Parked, the camera is judged by no frame: its frameless run ends here, and the
+            // notice that it is being reopened — a first frame that failed outright left it
+            // up over an idle camera, with nothing left to clear it.
+            camera_health::forget_frameless_opens(state, role, camera_name);
+            state.recovery_status.clear_unresponsive(role);
 
             // A Disconnect that outlasted this capture's wind-down left its warm-up waiting
             // for the handle. Only now can the monitor command the cooler.
@@ -218,20 +216,81 @@ pub async fn return_from_capture(
                 );
             }
         }
-        None => {
-            // Capture thread crashed or returned without the handle.
-            warn!(
-                camera_name,
-                role = role.label(),
-                "Capture ended without returning handle; cleaning up"
-            );
-            // A camera the observer is disconnecting is not one to reopen.
-            let cause = if state.slot(role).warmup().is_some() {
-                DisconnectCause::Requested
-            } else {
-                DisconnectCause::DeviceFault
-            };
-            finalize_disconnect(state, role, camera_name, cause).await;
+        None => lost_in_capture(state, role, camera_name).await,
+    }
+}
+
+/// How long ending a returned handle's stream may take: one vendor stop call, given what a
+/// status read gets (`capture::watchdog::STATUS_POLL_TIMEOUT`).
+#[cfg(not(test))]
+const END_STREAM_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const END_STREAM_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// The disconnect may already have finished without this handle: both `guide_task::stop`
+/// and the capture watchdog give up after a budget and let it proceed. Parking a live
+/// handle in a slot whose camera is gone leaves an open device nothing will ever close,
+/// and re-stamping the phase resurrects a camera the UI has retired. The same budget lets a
+/// *reconnect* land first, which is why the occupied slot is checked too — same reasoning
+/// as `monitor::with_camera_bounded`.
+fn superseded(state: &AppState, role: CameraRole, camera_name: &str) -> bool {
+    state.camera_in_role(role).map(|c| c.info.name).as_deref() != Some(camera_name)
+        || state.slot(role).holds_handle()
+        || state.slot(role).is_recovering()
+}
+
+/// `DeviceLease` makes this close a no-op against the live device.
+fn close_superseded(state: &AppState, role: CameraRole, camera_name: &str, mut cam: Box<dyn Camera>) {
+    warn!(
+        camera_name,
+        role = role.label(),
+        "Handle returned after its camera was replaced or disconnected; closing it"
+    );
+    if let Err(e) = cam.close() {
+        warn!(error = %e, "camera.close() failed — dropping anyway");
+    }
+    state.slot(role).notify_handle_returned();
+}
+
+/// End the stream the loop left running (`Camera::end_stream`). A camera that does not
+/// answer the stop is a lost handle, like one that stopped answering mid-capture.
+async fn end_stream_bounded(
+    state: &Arc<AppState>,
+    role: CameraRole,
+    camera_name: &str,
+    camera: Box<dyn Camera>,
+) -> Option<Box<dyn Camera>> {
+    let ended = state
+        .slot(role)
+        .sdk_calls
+        .run_bounded(END_STREAM_TIMEOUT, move || {
+            let mut camera = camera;
+            camera.end_stream();
+            camera
+        })
+        .await;
+    match ended {
+        Ok(camera) => Some(camera),
+        Err(error) => {
+            error!(camera_name, role = role.label(), ?error, "The camera did not answer the stop of its stream; handing it to recovery");
+            camera_health::record_fault(state, role, camera_name, FaultKind::Timeout);
+            None
         }
     }
+}
+
+/// The capture thread crashed, returned without the handle, or its handle stopped answering.
+async fn lost_in_capture(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
+    warn!(
+        camera_name,
+        role = role.label(),
+        "Capture ended without returning handle; cleaning up"
+    );
+    // A camera the observer is disconnecting is not one to reopen.
+    let cause = if state.slot(role).warmup().is_some() {
+        DisconnectCause::Requested
+    } else {
+        DisconnectCause::DeviceFault
+    };
+    finalize_disconnect(state, role, camera_name, cause).await;
 }

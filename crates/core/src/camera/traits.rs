@@ -82,6 +82,13 @@ pub trait Camera: Send {
     /// skip (`SimulatedCamera`, test doubles).
     fn invalidate_config_cache(&mut self) {}
 
+    /// End a video stream the last `capture` left running, when a capture or guide loop
+    /// hands the handle back. Left streaming into an SDK nobody read, 2026-11-03's parked
+    /// Ares-C PRO read -300 °C within 18 s and gave no frame on the next Start.
+    ///
+    /// Default no-op: an implementation without a stream has nothing to end.
+    fn end_stream(&mut self) {}
+
     /// Cancel an ongoing exposure
     ///
     /// This is safe to call from another thread while `capture()` is blocking.

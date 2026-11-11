@@ -163,12 +163,23 @@ pub enum ServerEvent {
         reason: String,
     },
 
+    /// The camera reopens but gives no frame: `opens` reopens in a row, the first `for_s`
+    /// seconds ago, while recovery keeps trying. Every reopen of 2026-11-03's three-minute
+    /// outage succeeded at once, so `camera_reconnecting` never came and nobody was told.
+    CameraUnresponsive {
+        name: String,
+        role: CameraRole,
+        opens: u32,
+        for_s: u64,
+    },
+
     /// A reconnect succeeded and the interrupted capture resumed, keeping the
     /// stack it had already accumulated.
     CaptureResumed { name: String, stacked_count: u64 },
 
     /// `role` has no recovery to report: its camera came back, or the observer disconnected
-    /// or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed`.
+    /// or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed` /
+    /// `camera_unresponsive`.
     CameraRecoveryCleared { role: CameraRole },
 
     /// The server left Focus/Finder mode on its own: a running capture switched to stacking,
@@ -554,6 +565,15 @@ impl ServerEvent {
             role,
             attempts,
             reason: reason.into(),
+        }
+    }
+
+    pub fn camera_unresponsive(name: impl Into<String>, role: CameraRole, opens: u32, for_s: u64) -> Self {
+        ServerEvent::CameraUnresponsive {
+            name: name.into(),
+            role,
+            opens,
+            for_s,
         }
     }
 

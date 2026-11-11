@@ -324,6 +324,11 @@ impl Camera for QhyCamera {
         self.exposure.invalidate();
     }
 
+    fn end_stream(&mut self) {
+        let Self { camera, info, exposure } = self;
+        exposure.end_stream(&mut QhyExposure { camera, info });
+    }
+
     fn cancel(&self) {
         self.exposure.cancel();
     }

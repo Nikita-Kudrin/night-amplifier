@@ -34,6 +34,10 @@ pub(crate) enum EscalationReason {
     /// Restarting in place has failed this camera `failed` times in a row lately, so its
     /// first stall skips the restart. See `camera_health::RestartHistory`.
     RestartsNotRecovering { failed: u32 },
+    /// The first frame after a (re)open stalled. Restarting in place brought none of
+    /// 2026-11-03's five back, nor 2026-09-14's six, while a reopen did — each restart
+    /// cost a whole stall budget, 10 of that night's 18 s outage.
+    FirstFrame,
 }
 
 /// Counts stalled frames between good ones, shared by the imaging and guide loops.
@@ -68,8 +72,12 @@ impl StallTracker {
         self.last_frame_at = Some(Instant::now());
     }
 
-    pub(crate) fn stalled(&mut self) -> StallVerdict {
+    pub(crate) fn stalled(&mut self, site: StallSite) -> StallVerdict {
         self.settle_pending_restart(false);
+        if site == StallSite::FirstFrame {
+            self.consecutive = 0;
+            return StallVerdict::Escalate(EscalationReason::FirstFrame);
+        }
         self.consecutive += 1;
         if self.consecutive >= STALL_ESCALATION {
             self.consecutive = 0;
@@ -129,32 +137,29 @@ pub(crate) fn handle_stall(
     camera_name: &str,
     budget: Duration,
 ) -> StallVerdict {
-    let verdict = stalls.stalled();
+    let verdict = stalls.stalled(site);
     let context = StallContext::gather(state, site.role(), stalls);
     match (verdict, site) {
         (StallVerdict::RestartInPlace, StallSite::Guide) => warn!(
             camera = %camera_name, ?budget, %context,
             "Guide frame stalled; restarting the stream in place"
         ),
-        (StallVerdict::RestartInPlace, StallSite::Main) => warn!(
+        // A first frame never restarts in place, nor counts a run: it escalates at once.
+        (StallVerdict::RestartInPlace, _) => warn!(
             camera_name = %camera_name, ?budget, %context,
             "Frame stalled; restarting the stream in place"
-        ),
-        (StallVerdict::RestartInPlace, StallSite::FirstFrame) => warn!(
-            camera_name = %camera_name, ?budget, %context,
-            "First frame stalled; restarting the stream in place"
         ),
         (StallVerdict::Escalate(EscalationReason::Run), StallSite::Guide) => error!(
             camera = %camera_name, consecutive = STALL_ESCALATION, %context,
             "Restarting the guide stream did not bring frames back; reopening the camera"
         ),
-        (StallVerdict::Escalate(EscalationReason::Run), StallSite::Main) => error!(
+        (StallVerdict::Escalate(EscalationReason::Run), _) => error!(
             camera_name = %camera_name, consecutive = STALL_ESCALATION, %context,
             "Restarting the stream did not bring frames back; reopening the camera"
         ),
-        (StallVerdict::Escalate(EscalationReason::Run), StallSite::FirstFrame) => error!(
-            camera_name = %camera_name, consecutive = STALL_ESCALATION, %context,
-            "Restarting the stream did not bring the first frame; reopening the camera"
+        (StallVerdict::Escalate(EscalationReason::FirstFrame), _) => error!(
+            camera_name = %camera_name, role = site.role().label(), ?budget, %context,
+            "First frame stalled; reopening the camera"
         ),
         (StallVerdict::Escalate(EscalationReason::RestartsNotRecovering { failed }), _) => error!(
             camera_name = %camera_name, role = site.role().label(), failed_restarts = failed,

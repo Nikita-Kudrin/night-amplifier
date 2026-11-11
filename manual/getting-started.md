@@ -151,7 +151,9 @@ USB stalls happen — a knocked cable, a hub that browns out, a driver hiccup. N
 Amplifier handles them in the background, and most of the time you will not notice:
 
 - **A lost frame** costs that frame. The camera's stream is restarted on the spot and the
-  capture carries on. If restarting has not brought that camera's frames back lately, it is
+  capture carries on. The imaging camera's first frame after a Start or a reopen is the
+  exception: if it does not come, the camera is reopened straight away, since restarting
+  the stream has never brought a first frame back. If restarting has not brought that camera's frames back lately, it is
   reopened at the first stall instead, which gets frames flowing again within seconds.
   That lasts for 10 minutes after the last restart that failed, or until you connect the
   camera again. While it lasts, each lost frame briefly pauses a running capture, and a
@@ -160,6 +162,14 @@ Amplifier handles them in the background, and most of the time you will not noti
   the selected camera, Push-To and your capture all stay as they were; the capture pauses
   for the few seconds this takes and then continues. The status bar keeps showing
   *Capturing*.
+- **An idle camera that stops answering** — between captures, its temperature reading
+  turns to nonsense for about 10 seconds after having read normally — is reopened the
+  same way, before you press Start, so the next capture is not the one that finds out.
+  If the same thing happens again before the camera has delivered a frame, it is left
+  alone: a second reopen would not help, and pressing Start reopens it if it is stuck.
+- **A stopped camera stays stopped.** Stop ends the camera's video stream before it is
+  set aside, and a guide camera you stopped is not restarted when it is reopened — even
+  if you pressed Stop while it was being reopened.
 
 - **A camera that reopens but never delivers a frame** is not counted as back. On its
   second such reopen in a row, the other camera on the same vendor driver (say, a Player
@@ -168,7 +178,8 @@ Amplifier handles them in the background, and most of the time you will not noti
   imaging camera that is capturing, or one warming up after you disconnected it, is never
   closed for this. After at least three such reopens over a minute, recovery gives up and
   tells you (*"Could not bring … back (it was opened 3 times in a row but delivered no
-  frame)"*). Pressing Start or Connect yourself starts the count afresh.
+  frame)"*). Pressing Start or Connect yourself starts the count afresh — unless the
+  camera is being reopened at that moment, when the count carries on.
 
 The imaging and guide cameras recover independently, and a recovering camera is always
 reopened as *itself* — never as the other camera, even after the USB bus has renumbered
@@ -177,12 +188,13 @@ its devices.
 Starting a capture, or disconnecting the camera, clears the live view: until the first
 new frame arrives you see an empty view, never the previous session's last picture.
 
-You only see a message when recovery takes longer than about 20 seconds:
+You only see a message when recovery takes longer than about 10 seconds:
 
 | Message | What it means |
 |---|---|
 | *"Reconnecting to … — attempt 4 of 25."* | Recovery is taking a while. Attempts repeat every 2, 3, 5, then 10 seconds, for up to 5 minutes; the total counts only the attempts that still fit in that time. |
 | *"… is back. Capture resumed with N frames still stacked."* | It came back after that notice, and your capture picked up where it stopped. |
+| *"… is not sending frames — reopened 4 times in 45 s."* | The camera opens but delivers no picture, and recovery keeps reopening it. The live view and the eyepiece say so instead of *Waiting for frames*; it clears with the first frame. |
 | *"Could not bring … back …"* | Recovery gave up. Check the cable and the power supply, then reconnect by hand. The message stays on every open page until a camera connects in that role; dismissing it on one page clears it on all of them. |
 | *"… has stopped responding."* | The camera failed several calls in a row; recovery is under way. |
 

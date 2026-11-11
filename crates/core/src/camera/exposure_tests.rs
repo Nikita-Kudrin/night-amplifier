@@ -310,3 +310,33 @@ fn an_invalid_config_never_reaches_the_sdk() {
     assert!(exposure.capture(&mut sdk, &snap(5_000)).is_err());
     assert!(sdk.take_calls().is_empty());
 }
+
+/// A handle parked with its stream still running kept streaming into an SDK nobody read.
+#[test]
+fn parking_a_handle_ends_its_stream_and_the_next_capture_starts_it_again() {
+    let mut sdk = ScriptedSdk::new([ready(), ready()]);
+    let mut exposure = ExposureLoop::new();
+    exposure.capture(&mut sdk, &video(1_000)).unwrap();
+    sdk.take_calls();
+
+    exposure.end_stream(&mut sdk);
+    assert_eq!(sdk.take_calls(), ["end_stream"]);
+    assert!(!exposure.is_streaming());
+
+    exposure.capture(&mut sdk, &video(1_000)).unwrap();
+    assert_eq!(sdk.take_calls(), ["start_stream", "poll"], "same config: no reapply, a fresh start");
+}
+
+#[test]
+fn parking_a_handle_with_no_stream_asks_nothing_of_the_sdk() {
+    let mut sdk = ScriptedSdk::new([ready()]);
+    let mut exposure = ExposureLoop::new();
+
+    exposure.end_stream(&mut sdk);
+    assert!(sdk.take_calls().is_empty(), "never captured");
+
+    exposure.capture(&mut sdk, &snap(1_000)).unwrap();
+    sdk.take_calls();
+    exposure.end_stream(&mut sdk);
+    assert!(sdk.take_calls().is_empty(), "a single exposure leaves no stream behind");
+}

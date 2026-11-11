@@ -80,6 +80,7 @@ impl ServerEvent {
             E::camera_persistently_unresponsive("ASI533MC Pro", 3),
             E::camera_reconnecting("ASI533MC Pro", CameraRole::Main, 1, 5, 2),
             E::camera_reconnect_failed("ASI533MC Pro", CameraRole::Main, 5, "unplugged"),
+            E::camera_unresponsive("ASI533MC Pro", CameraRole::Main, 4, 45),
             E::capture_resumed("ASI533MC Pro", 40),
             E::CameraRecoveryCleared { role: CameraRole::Main },
             E::FocusModeLeft,

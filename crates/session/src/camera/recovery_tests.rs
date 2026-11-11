@@ -53,13 +53,13 @@ pub(super) struct FakeCatalog {
     /// Opens of this device wait inside the "vendor SDK" until it is cleared, the way a
     /// real open takes seconds on a busy bus — or never returns.
     held: Mutex<Option<&'static str>>,
-    open_calls: AtomicUsize,
+    pub(super) open_calls: AtomicUsize,
     /// Cameras this bus opens have a cooler.
     pub(super) cooled: AtomicBool,
     /// Shared by every camera this bus opens: a test scripts the next stall, failure,
     /// lost device or `status()` panic, and counts releases, whichever handle the server
     /// holds. `on_dew_heater` runs from inside `install_camera`.
-    camera: Arc<CameraControls>,
+    pub(super) camera: Arc<CameraControls>,
     /// Devices scripted apart from the rest (`controls_for`), by name.
     own_controls: Mutex<Vec<(&'static str, Arc<CameraControls>)>>,
 }
@@ -75,13 +75,13 @@ impl FakeCatalog {
         *self.devices.lock().unwrap() = devices.to_vec();
     }
 
-    fn hold(&self, device: Option<&FakeDevice>) {
+    pub(super) fn hold(&self, device: Option<&FakeDevice>) {
         *self.held.lock().unwrap() = device.map(|device| device.name);
     }
 
     /// Script `device` apart from the shared controls: every handle of it opened from now
     /// on shares these instead.
-    fn controls_for(&self, device: &FakeDevice) -> Arc<CameraControls> {
+    pub(super) fn controls_for(&self, device: &FakeDevice) -> Arc<CameraControls> {
         let mut own = self.own_controls.lock().unwrap();
         if let Some((_, controls)) = own.iter().find(|(name, _)| *name == device.name) {
             return Arc::clone(controls);
@@ -1692,15 +1692,13 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_and_disconnects() {
     assert_eq!(phase_of(&state, CameraRole::Main).await, CameraPhase::Disconnected);
 }
 
-/// The 14:05 sequence on a cooled camera: three stalls escalate to a reopen, the reopened
+/// The 14:05 sequence on a cooled camera: a stall escalates to a reopen, the reopened
 /// handle's first status read is slow and reports nothing usable, the monitor seeds its
 /// cooling ramp from it while the resumed capture waits for the handle. The capture must
 /// get it and run. On 2026-09-20 it never did, and the camera could be neither started
 /// nor disconnected afterwards.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status() {
-    use crate::capture::stall::STALL_ESCALATION;
-
     let catalog = FakeCatalog::with(&[ARES]);
     catalog.cooled.store(true, Ordering::SeqCst);
     let state = rig(&catalog);
@@ -1711,7 +1709,8 @@ async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status()
     connect(&state, &ARES, CameraRole::Main).await;
     // Under the scaled-down OPEN_TIMEOUT, so the reopen's own probe still passes.
     catalog.camera.status_delay_ms.store(150, Ordering::SeqCst);
-    catalog.camera.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
+    // The first frame's stall reopens at once (`EscalationReason::FirstFrame`).
+    catalog.camera.stalls.store(1, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
     let delivered_before = state.stats.delivered();

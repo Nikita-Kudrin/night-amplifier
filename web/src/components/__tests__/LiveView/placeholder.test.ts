@@ -54,4 +54,27 @@ describe('LiveView - Placeholder State', () => {
 
         expect(wrapper.find('.placeholder').text()).toContain('Waiting for frames')
     })
+
+    // 2026-11-03: three minutes of "Waiting for frames" while the camera was being reopened.
+    it('says why no frame comes while recovery works on the camera on screen', () => {
+        mocks.mockImageStream.connected.value = true
+        const wrapper = mountLiveView({
+            captureState: 'Recovering',
+            eventStream: {cameraTrouble: {role: 'main', text: 'Ares-C PRO is not sending frames — reopening it…'}},
+        })
+
+        const text = wrapper.find('.placeholder').text()
+        expect(text).toContain('Ares-C PRO is not sending frames')
+        expect(text).not.toContain('Waiting for frames')
+    })
+
+    it('keeps waiting for frames when the trouble is the other camera’s', () => {
+        mocks.mockImageStream.connected.value = true
+        const wrapper = mountLiveView({
+            captureState: 'Capturing',
+            eventStream: {cameraTrouble: {role: 'guide', text: 'Reconnecting to Neptune-C II…'}},
+        })
+
+        expect(wrapper.find('.placeholder').text()).toContain('Waiting for frames')
+    })
 })

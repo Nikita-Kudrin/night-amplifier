@@ -158,6 +158,7 @@ pub async fn connect(
         .inspect_err(|e| error!(camera_id = %camera_id, error = %e, "Failed to open camera"))?;
     crate::camera::health::forget_restart_history(state, role, &opened.camera.info().name);
     crate::camera::health::forget_frameless_opens(state, role, &opened.camera.info().name);
+    state.roster.forget_idle_reopen(role, &opened.camera.info().name);
     install::install_camera(state, camera_id, role, opened.provider, index, opened.camera, None).await
 }
 

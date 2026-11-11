@@ -221,6 +221,11 @@ impl Camera for TouptekCamera {
         self.exposure.invalidate();
     }
 
+    fn end_stream(&mut self) {
+        let Self { handle, info, exposure, .. } = self;
+        exposure.end_stream(&mut TouptekExposure { handle, info });
+    }
+
     fn cancel(&self) {
         self.exposure.cancel();
     }

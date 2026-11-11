@@ -26,6 +26,7 @@ export const SERVER_EVENT_EXAMPLES: {readonly [K in ServerEventType]: EventOf<K>
     camera_persistently_unresponsive: {"type":"camera_persistently_unresponsive","name":"ASI533MC Pro","consecutive_timeouts":3},
     camera_reconnecting: {"type":"camera_reconnecting","name":"ASI533MC Pro","role":"main","attempt":1,"of":5,"next_attempt_in_s":2},
     camera_reconnect_failed: {"type":"camera_reconnect_failed","name":"ASI533MC Pro","role":"main","attempts":5,"reason":"unplugged"},
+    camera_unresponsive: {"type":"camera_unresponsive","name":"ASI533MC Pro","role":"main","opens":4,"for_s":45},
     capture_resumed: {"type":"capture_resumed","name":"ASI533MC Pro","stacked_count":40},
     camera_recovery_cleared: {"type":"camera_recovery_cleared","role":"main"},
     focus_mode_left: {"type":"focus_mode_left"},

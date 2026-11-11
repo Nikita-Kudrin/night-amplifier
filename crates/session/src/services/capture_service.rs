@@ -105,6 +105,9 @@ impl CaptureService {
             }
         }
 
+        // First: a Start during a reopen is what that reopen restarts the loop on.
+        state.slot(CameraRole::Guide).set_guide_wanted(true);
+
         // Already running is the state the observer asked for, not an error. The client
         // that pressed Start was showing a stopped loop because it had missed the event that
         // said otherwise — a phone waking up, a reloaded page — and a 409 told it nothing
@@ -115,7 +118,7 @@ impl CaptureService {
         }
 
         info!(camera_id = %camera.id, "Starting the guide camera");
-        camera_health::forget_frameless_opens(state, CameraRole::Guide, &camera.info.name);
+        camera_health::forget_frameless_opens_for_start(state, CameraRole::Guide, &camera.info.name);
         guide_task::start(state, &camera);
         Ok(camera.id)
     }
@@ -127,12 +130,19 @@ impl CaptureService {
     }
 
     /// Stop the guide camera's loop, which also stops its raw-frame saving.
+    /// Mid-reopen there is no loop to stop, but the Stop still counts: the reopen leaves the
+    /// camera stopped instead of restarting it.
     async fn stop_guide(state: &Arc<AppState>) -> bool {
-        if !Self::guide_loop_active(state) {
+        let slot = state.slot(CameraRole::Guide);
+        slot.set_guide_wanted(false);
+        if Self::guide_loop_active(state) {
+            info!("Stopping the guide camera");
+            guide_task::stop(state).await;
+        } else if slot.is_recovering() {
+            info!("Stopping the guide camera while it is reopened");
+        } else {
             return false;
         }
-        info!("Stopping the guide camera");
-        guide_task::stop(state).await;
 
         // A deliberate stop ends the observation, the same call `stop_capture` makes on
         // the imaging camera's resume plan: drop the folder the loop was filling so a
@@ -218,9 +228,8 @@ impl CaptureService {
         // What the view still shows is the previous session's picture. 2026-10-12: a
         // Start whose camera never delivered served it as live for three minutes.
         state.main_stream.clear();
-        // The observer's own Start is a fresh attempt, not one more frameless reopen.
         if let Some(camera) = state.camera_in_role(CameraRole::Main) {
-            camera_health::forget_frameless_opens(state, CameraRole::Main, &camera.info.name);
+            camera_health::forget_frameless_opens_for_start(state, CameraRole::Main, &camera.info.name);
         }
 
         // *After* the state moves off `Idle`, which is what closes the window: from here

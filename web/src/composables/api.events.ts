@@ -166,6 +166,19 @@ export interface CameraReconnectFailedEvent {
 }
 
 /**
+ * The camera reopens but gives no frame: `opens` reopens in a row, the first `for_s`
+ * seconds ago, while recovery keeps trying. Every reopen of 2026-11-03's three-minute
+ * outage succeeded at once, so `camera_reconnecting` never came and nobody was told.
+ */
+export interface CameraUnresponsiveEvent {
+    type: 'camera_unresponsive'
+    name: string
+    role: CameraRole
+    opens: number
+    for_s: number
+}
+
+/**
  * A reconnect succeeded and the interrupted capture resumed, keeping the
  * stack it had already accumulated.
  */
@@ -177,7 +190,8 @@ export interface CaptureResumedEvent {
 
 /**
  * `role` has no recovery to report: its camera came back, or the observer disconnected
- * or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed`.
+ * or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed` /
+ * `camera_unresponsive`.
  */
 export interface CameraRecoveryClearedEvent {
     type: 'camera_recovery_cleared'
@@ -528,6 +542,7 @@ export type ServerEvent =
     | CameraPersistentlyUnresponsiveEvent
     | CameraReconnectingEvent
     | CameraReconnectFailedEvent
+    | CameraUnresponsiveEvent
     | CaptureResumedEvent
     | CameraRecoveryClearedEvent
     | FocusModeLeftEvent
@@ -663,6 +678,7 @@ export const SERVER_EVENTS = {
     camera_persistently_unresponsive: {topic: null, kind: 'notice'},
     camera_reconnecting: {topic: 'camera_recovery', kind: 'value'},
     camera_reconnect_failed: {topic: 'camera_recovery', kind: 'value'},
+    camera_unresponsive: {topic: 'camera_recovery', kind: 'value'},
     capture_resumed: {topic: 'camera_recovery', kind: 'value'},
     camera_recovery_cleared: {topic: 'camera_recovery', kind: 'value'},
     focus_mode_left: {topic: null, kind: 'notice'},

@@ -273,46 +273,22 @@ pub(crate) fn run_capture_task(
     None
 }
 
-/// The first frame of a session, through the same stall ladder as every later one: a
-/// stall restarts the stream in place, and only a run of `STALL_ESCALATION` is handed
-/// back, as the fault it is. After a (re)open this is the frame most likely to be slow —
-/// config reapplied, stream started cold — and ending the session over one stall
-/// discarded the capture recovery had just saved.
+/// The first frame of a session. A stall hands the camera back at once, as a fault for
+/// recovery to reopen (`EscalationReason::FirstFrame`): restarting in place never brought
+/// a first frame back. Ending the session over it instead discarded the capture recovery
+/// had just saved.
 pub(super) fn capture_probe_frame(
-    mut camera: Box<dyn Camera>,
+    camera: Box<dyn Camera>,
     config: CaptureConfig,
     frame_number: u64,
     watchdog_timeout: Duration,
     state: &Arc<AppState>,
 ) -> CaptureOutcome {
-    let mut stalls = StallTracker::for_camera(state, CameraRole::Main, &camera.info().name);
-    loop {
-        let outcome = capture_frame_bounded(
-            camera,
-            config.clone(),
-            frame_number,
-            watchdog_timeout,
-            state,
-            CameraRole::Main,
-        );
-        let (returned, budget) = match outcome {
-            CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget))) => (returned, budget),
-            other => {
-                // A restart that brought the first frame back is evidence restarts work.
-                if matches!(other, CaptureOutcome::Completed(_, Ok(_))) {
-                    stalls.frame_delivered();
-                }
-                return other;
-            }
-        };
-        let verdict =
-            handle_stall(&mut stalls, StallSite::FirstFrame, state, &returned.info().name, budget);
-        if let StallVerdict::Escalate(_) = verdict {
-            return CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget)));
-        }
-        if state.is_cancelled() {
-            return CaptureOutcome::Completed(returned, Err(CameraError::Cancelled));
-        }
-        camera = returned;
+    let outcome = capture_frame_bounded(camera, config, frame_number, watchdog_timeout, state, CameraRole::Main);
+    if let CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget))) = &outcome {
+        let name = &returned.info().name;
+        let mut stalls = StallTracker::for_camera(state, CameraRole::Main, name);
+        handle_stall(&mut stalls, StallSite::FirstFrame, state, name, *budget);
     }
+    outcome
 }

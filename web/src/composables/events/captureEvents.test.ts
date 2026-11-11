@@ -90,6 +90,42 @@ describe('captureEvents sync snapshot', () => {
 })
 
 describe('captureEvents camera recovery', () => {
+    // 2026-11-03: every reopen succeeded at once, so nothing said the camera sent no frames.
+    it('says a camera opens without frames, through the healthy phases of each reopen', () => {
+        const {state, send} = captureEvents()
+        send({type: 'camera_unresponsive', name: 'Ares', role: 'main', opens: 4, for_s: 45})
+
+        expect(state.unresponsiveWarning.value).toBe('Ares is not sending frames — reopened 4 times in 45 s.')
+        expect(state.cameraTrouble.value).toEqual({role: 'main', text: 'Ares is not sending frames — reopening it…'})
+
+        send({type: 'camera_phases', cameras: [{name: 'Ares', role: 'main', phase: 'capturing'}]})
+        send({type: 'capture_resumed', name: 'Ares', stacked_count: 0})
+        expect(state.unresponsiveWarning.value).not.toBeNull()
+        expect(state.resumeNotice.value).toBeNull()
+
+        send({type: 'camera_recovery_cleared', role: 'main'})
+        expect(state.unresponsiveWarning.value).toBeNull()
+        expect(state.cameraTrouble.value).toBeNull()
+    })
+
+    it('names the trouble for the live view while reconnecting and after a give-up', () => {
+        const {state, send} = captureEvents()
+        expect(state.cameraTrouble.value).toBeNull()
+
+        send({type: 'camera_reconnecting', name: 'Ares', role: 'main', attempt: 3, of: 9, next_attempt_in_s: 5})
+        expect(state.cameraTrouble.value).toEqual({role: 'main', text: 'Reconnecting to Ares…'})
+
+        send({type: 'camera_reconnect_failed', name: 'Ares', role: 'main', attempts: 9, reason: 'unplugged'})
+        expect(state.cameraTrouble.value).toEqual({role: 'main', text: 'Ares could not be brought back'})
+    })
+
+    it('leaves the live view alone for a watchdog warning no recovery raised', () => {
+        const {state, send} = captureEvents()
+        send({type: 'camera_persistently_unresponsive', name: 'Ares', consecutive_timeouts: 3})
+
+        expect(state.cameraTrouble.value).toBeNull()
+    })
+
     it('takes a reconnect notice down when the snapshot says that role has none', () => {
         const {state, send} = captureEvents()
         send({type: 'camera_reconnecting', name: 'Ares', role: 'main', attempt: 3, of: 9, next_attempt_in_s: 5})

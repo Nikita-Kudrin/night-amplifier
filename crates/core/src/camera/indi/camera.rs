@@ -32,6 +32,23 @@ pub struct IndiCamera {
 }
 
 impl IndiCamera {
+    /// The exposure loop and the INDI calls it drives, borrowed from this camera at once.
+    fn adapter(&mut self, runtime: Handle, supports_video: bool, exposure_s: f64) -> (&mut ExposureLoop, IndiExposure<'_>) {
+        let Self { client, device_name, info, exposure, decode_buffer, pool } = self;
+        let sdk = IndiExposure {
+            client,
+            device: device_name,
+            info,
+            runtime,
+            supports_video,
+            exposure_s,
+            decode_buffer,
+            pool,
+            blobs: None,
+        };
+        (exposure, sdk)
+    }
+
     pub async fn connect(host: String, port: u16, index: usize) -> CameraResult<Self> {
         let mut client = IndiClient::new();
         client
@@ -181,31 +198,24 @@ impl Camera for IndiCamera {
             let supports_video = runtime
                 .block_on(self.client.get_device(&self.device_name))
                 .is_some_and(|device| device.properties.contains_key("CCD_VIDEO_STREAM"));
-            let Self {
-                client,
-                device_name,
-                info,
-                exposure,
-                decode_buffer,
-                pool,
-            } = self;
-            let mut sdk = IndiExposure {
-                client,
-                device: device_name,
-                info,
-                runtime,
-                supports_video,
-                exposure_s: config.exposure_us as f64 / 1_000_000.0,
-                decode_buffer,
-                pool,
-                blobs: None,
-            };
+            let exposure_s = config.exposure_us as f64 / 1_000_000.0;
+            let (exposure, mut sdk) = self.adapter(runtime, supports_video, exposure_s);
             exposure.capture(&mut sdk, config)
         })
     }
 
     fn invalidate_config_cache(&mut self) {
         self.exposure.invalidate();
+    }
+
+    fn end_stream(&mut self) {
+        if !self.exposure.is_streaming() {
+            return;
+        }
+        tokio::task::block_in_place(|| {
+            let (exposure, mut sdk) = self.adapter(Handle::current(), true, 0.0);
+            exposure.end_stream(&mut sdk);
+        })
     }
 
     fn cancel(&self) {

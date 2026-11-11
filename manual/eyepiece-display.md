@@ -38,7 +38,8 @@ Both `/eyepiece` and `/eyepiece_quality` show the camera the operator picks with
 is on. The eyepiece pages have no switch of their own: the person at the eyepiece sees
 what the operator chooses, and the open view changes camera without reconnecting. If the
 camera switched to has not produced a picture yet, the view says *Waiting for frames*
-rather than keep the other camera's. If the guide camera disconnects — or starts warming
+rather than keep the other camera's — or, while that camera is being reconnected or
+reopened without frames, says that instead (under the focusing image, if it is on). If the guide camera disconnects — or starts warming
 up to disconnect — the eyepiece returns to the imaging camera; if it drops out and
 recovers on its own, the eyepiece waits for it.
 

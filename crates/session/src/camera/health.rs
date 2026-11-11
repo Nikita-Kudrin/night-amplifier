@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, warn};
 
 use crate::events::ServerEvent;
-use crate::state::{AppState, CameraRole, FramelessRun};
+use crate::state::{AppState, CameraRole, FramelessRun, RecoveryStatus};
 
 /// Consecutive faults against one camera before escalating from an ordinary
 /// disconnect to a distinct "persistently unresponsive" signal
@@ -44,6 +44,9 @@ pub(crate) enum FaultKind {
     /// The slot's handle is gone with nothing holding it — abandoned to a stuck call, or
     /// lost on a path nobody logged. Nothing can command the camera until it is reopened.
     HandleLost,
+    /// A parked camera that once answered now reads only values no sensor gives (see
+    /// `monitor::unanswered`).
+    Unresponsive,
 }
 
 /// Clear a camera's fault streak. Called whenever any SDK call returns within
@@ -205,12 +208,13 @@ pub(crate) const FRAMELESS_GIVE_UP_AT: u32 = 3;
 
 /// A run younger than this is not given up on, whatever its count: with 1 s subs three
 /// frameless opens take seconds, and a brownout the 300 s reconnect budget rides out
-/// would end in a give-up inside the 20 s recovery stays quiet for. That night's ~9 s
-/// cycle reaches it in about seven opens.
+/// would end in a give-up before recovery had said anything (`reconnect::NOTICE_AFTER`).
+/// That night's ~9 s cycle reaches it in about seven opens.
 #[cfg(not(test))]
 pub(crate) const FRAMELESS_GIVE_UP_AFTER: Duration = Duration::from_secs(60);
+/// Past the scaled `reconnect::NOTICE_AFTER` (700 ms), as 60 s is past 10 s.
 #[cfg(test)]
-pub(crate) const FRAMELESS_GIVE_UP_AFTER: Duration = Duration::from_millis(600);
+pub(crate) const FRAMELESS_GIVE_UP_AFTER: Duration = Duration::from_millis(1_000);
 
 /// How long a frameless run is remembered without a new one, as for restarts.
 const FRAMELESS_HISTORY_TTL: Duration = RESTART_HISTORY_TTL;
@@ -229,7 +233,43 @@ pub(crate) fn record_frameless_open(state: &AppState, role: CameraRole, camera_n
 /// camera on its SDK, if isolation closed it, may reopen beside it.
 pub(crate) fn frame_arrived(state: &AppState, role: CameraRole, camera_name: &str) {
     forget_frameless_opens(state, role, camera_name);
+    state.roster.forget_idle_reopen(role, camera_name);
     super::recovery::end_isolation(state, role);
+    state.recovery_status.clear_unresponsive(role);
+}
+
+/// How long an idle reopen (`monitor::unanswered`) is remembered without a frame since.
+const IDLE_REOPEN_MEMORY: Duration = Duration::from_secs(600);
+
+/// Whether a parked camera that stopped answering may be reopened: once, then not again
+/// until it frames, the observer connects it, or `IDLE_REOPEN_MEMORY` passes. A quirk a
+/// reopen does not cure was reopened every ~13 s for as long as the camera sat idle, each
+/// time through the SDK the other camera may be streaming on; the next Start's first-frame
+/// stall still reopens it at once if it really is wedged.
+pub(crate) fn claim_idle_reopen(state: &AppState, role: CameraRole, camera_name: &str) -> bool {
+    state.roster.claim_idle_reopen(role, camera_name, IDLE_REOPEN_MEMORY, Instant::now())
+}
+
+/// What clients are told after a reopen: nothing, unless the camera has opened without a
+/// frame for `notice_after` — the quiet spell recovery keeps before it says anything.
+pub(crate) fn frameless_notice(
+    state: &AppState,
+    role: CameraRole,
+    camera_name: &str,
+    notice_after: Duration,
+) -> RecoveryStatus {
+    let Some(run) = frameless_run(state, role, camera_name) else {
+        return RecoveryStatus::None;
+    };
+    let age = run.since.elapsed();
+    if age < notice_after {
+        return RecoveryStatus::None;
+    }
+    RecoveryStatus::Unresponsive {
+        name: camera_name.to_string(),
+        opens: run.count,
+        for_s: age.as_secs(),
+    }
 }
 
 /// Forget the run for a fresh attempt: the observer's own Connect or Start, or a reopen
@@ -237,6 +277,15 @@ pub(crate) fn frame_arrived(state: &AppState, role: CameraRole, camera_name: &st
 /// camera closed the healthy guide camera on its next, unrelated fault.
 pub(crate) fn forget_frameless_opens(state: &AppState, role: CameraRole, camera_name: &str) {
     state.roster.forget_frameless_opens(role, camera_name);
+}
+
+/// The observer's own Start is a fresh attempt — unless it lands while the camera is being
+/// reopened, which the run is still judging. 2026-11-03: a Start mid-recovery reset a run
+/// of six to one, and the Ares-C PRO reopened in silence for a further minute.
+pub(crate) fn forget_frameless_opens_for_start(state: &AppState, role: CameraRole, camera_name: &str) {
+    if !state.slot(role).is_recovering() {
+        forget_frameless_opens(state, role, camera_name);
+    }
 }
 
 /// The camera's current run of opens that faulted before their first frame.

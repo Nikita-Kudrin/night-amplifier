@@ -283,6 +283,11 @@ impl Camera for PlayerOneCamera {
         self.exposure.invalidate();
     }
 
+    fn end_stream(&mut self) {
+        let Self { camera, info, exposure } = self;
+        exposure.end_stream(&mut capture::PlayerOneExposure { camera, info });
+    }
+
     fn cancel(&self) {
         self.exposure.cancel();
     }
