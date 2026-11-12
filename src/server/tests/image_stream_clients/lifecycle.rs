@@ -134,3 +134,49 @@ async fn a_stopped_stream_serves_nothing_until_the_next_session() {
     let resumed = next_frame(&mut before).await;
     assert_eq!(next_frame(&mut during).await, resumed);
 }
+
+/// What `kiosk_start.sh`'s watchdog reads: the kiosk's own `/eyepiece_quality` page, heard
+/// from at its every message, and gone with its socket. Neither another page nor a phone on
+/// the quality page counts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[parallel(image_stream_log)]
+async fn the_kiosk_watchdog_sees_its_page_come_stay_heard_and_go() {
+    const KIOSK: &str = "/api/streams/viewers?page=/eyepiece_quality&local=true";
+    let server = start_server().await;
+    let viewers = |path: &'static str| {
+        let addr = server.addr;
+        async move {
+            let response = reqwest_like::get(addr, path).await;
+            assert_eq!(response.status, 200, "{}", response.body);
+            let body: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+            (body["data"]["viewers"].as_u64().unwrap(), body["data"]["heard_s"].as_u64())
+        }
+    };
+    assert_eq!(viewers(KIOSK).await, (0, None));
+
+    let mut kiosk = server.connect_registered(LOSSLESS).await;
+    let _live_view = server.connect_registered(LIVE_VIEW).await;
+    assert_eq!(viewers(KIOSK).await, (1, Some(0)));
+    assert_eq!(viewers("/api/streams/viewers?local=false").await, (0, None));
+    assert_eq!(viewers("/api/streams/viewers").await.0, 2);
+
+    // A page that stops talking ages; its next ping makes it current again.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(viewers(KIOSK).await, (1, Some(1)));
+    kiosk.send(Message::text("ping")).await.unwrap();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), kiosk.next()).await.expect("no pong") {
+            Some(Ok(Message::Text(text))) if text == "pong" => break,
+            Some(Ok(_)) => continue,
+            other => panic!("socket ended before the pong: {other:?}"),
+        }
+    }
+    assert_eq!(viewers(KIOSK).await, (1, Some(0)));
+
+    drop(kiosk);
+    eventually("the kiosk page to leave", || {
+        server.state.stream_clients.snapshot().iter().all(|info| info.page != "/eyepiece_quality")
+    })
+    .await;
+    assert_eq!(viewers(KIOSK).await, (0, None));
+}

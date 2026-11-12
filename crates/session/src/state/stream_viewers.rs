@@ -5,8 +5,10 @@
 //! needs to know about clients is whether any are connected: a family nobody watches is
 //! not encoded at all.
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::FrameStream;
 
@@ -58,9 +60,119 @@ impl Drop for ViewerGuard {
     }
 }
 
+/// Every open image-stream connection, by page, for `GET /api/streams/viewers`: a kiosk's
+/// watchdog asks whether its own page is alive. A crashed tab closes its socket; a hung one
+/// stops pinging (every 30 s), and the handler, stuck sending it a frame, stops reading:
+/// either way `heard_at` stops moving.
+#[derive(Debug, Default)]
+pub struct StreamClients {
+    clients: Mutex<HashMap<u64, StreamClientInfo>>,
+    next_id: AtomicU64,
+}
+
+/// One connection, as [`StreamClients::snapshot`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamClientInfo {
+    /// The frontend page that opened the socket (`/eyepiece_quality`).
+    pub page: &'static str,
+    /// From this machine (loopback): the kiosk's own browser, not a phone on the Wi-Fi.
+    pub local: bool,
+    pub connected_at: Instant,
+    /// The last message the client sent, or its connect.
+    pub heard_at: Instant,
+}
+
+impl StreamClients {
+    /// Lists the connection until the returned registration drops.
+    pub fn register(self: &Arc<Self>, page: &'static str, local: bool) -> StreamClientRegistration {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let now = Instant::now();
+        let info = StreamClientInfo { page, local, connected_at: now, heard_at: now };
+        self.lock().insert(id, info);
+        StreamClientRegistration { clients: Arc::clone(self), id }
+    }
+
+    pub fn snapshot(&self) -> Vec<StreamClientInfo> {
+        self.lock().values().copied().collect()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, StreamClientInfo>> {
+        self.clients.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// A connection's entry in [`StreamClients`], removed on drop (an unwinding handler too).
+#[derive(Debug)]
+pub struct StreamClientRegistration {
+    clients: Arc<StreamClients>,
+    id: u64,
+}
+
+impl StreamClientRegistration {
+    /// The client sent something: it is alive.
+    pub fn heard(&self) {
+        if let Some(info) = self.clients.lock().get_mut(&self.id) {
+            info.heard_at = Instant::now();
+        }
+    }
+}
+
+impl Drop for StreamClientRegistration {
+    fn drop(&mut self) {
+        self.clients.lock().remove(&self.id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registration_lists_its_client_until_dropped() {
+        let clients = Arc::new(StreamClients::default());
+        let kiosk = clients.register("/eyepiece_quality", true);
+        let phone = clients.register("/eyepiece", false);
+        let mut listed = clients.snapshot();
+        listed.sort_by_key(|info| info.page);
+        assert_eq!(
+            listed.iter().map(|info| (info.page, info.local)).collect::<Vec<_>>(),
+            [("/eyepiece", false), ("/eyepiece_quality", true)]
+        );
+
+        drop(phone);
+        assert_eq!(clients.snapshot().len(), 1);
+        drop(kiosk);
+        assert!(clients.snapshot().is_empty());
+    }
+
+    #[test]
+    fn hearing_from_a_client_moves_only_its_own_entry() {
+        let clients = Arc::new(StreamClients::default());
+        let _quiet = clients.register("/eyepiece", false);
+        let talking = clients.register("/eyepiece_quality", true);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        talking.heard();
+
+        for info in clients.snapshot() {
+            let moved = info.heard_at > info.connected_at;
+            assert_eq!(moved, info.page == "/eyepiece_quality", "{info:?}");
+        }
+    }
+
+    #[test]
+    fn a_panicking_handler_still_removes_its_client() {
+        let clients = Arc::new(StreamClients::default());
+        let handle = {
+            let clients = Arc::clone(&clients);
+            std::thread::spawn(move || {
+                let _registration = clients.register("/eyepiece_quality", true);
+                panic!("intentional: checking the registration is removed while unwinding");
+            })
+        };
+        assert!(handle.join().is_err());
+        assert!(clients.snapshot().is_empty());
+    }
 
     #[test]
     fn a_guard_counts_its_viewer_until_dropped() {

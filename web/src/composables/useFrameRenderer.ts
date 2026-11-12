@@ -64,6 +64,16 @@ export interface FrameRendererOptions {
      * re-measures. Not while no canvas drew (a lost context): the restore's redraw reports it.
      */
     onSizeChange?: (size: FrameSize) => void
+    /** A canvas's WebGL context was lost and the browser never gave it back: it stays black. */
+    onRendererLost?: () => void
+    /** `false` draws with Canvas 2D from the start: a page whose WebGL kept being lost. */
+    webgl?: boolean
+}
+
+interface SurfaceOptions {
+    onRestored: () => void
+    onLostForGood: (() => void) | undefined
+    webgl: boolean
 }
 
 /**
@@ -71,9 +81,9 @@ export interface FrameRendererOptions {
  * each GL version on a scratch canvas first, so a failed one leaves this canvas free
  * for the next.
  */
-function createSurface(canvas: HTMLCanvasElement, onRestored: () => void): Surface {
-    const webgl = useWebGLRenderer({onRestored})
-    const renderer = webgl.init(canvas) ? webgl : useCanvas2DRenderer()
+function createSurface(canvas: HTMLCanvasElement, {onRestored, onLostForGood, webgl: tryWebGL}: SurfaceOptions): Surface {
+    const webgl = tryWebGL ? useWebGLRenderer({onRestored, ...(onLostForGood && {onLostForGood})}) : null
+    const renderer = webgl?.init(canvas) ? webgl : useCanvas2DRenderer()
     if (renderer !== webgl && !renderer.init(canvas)) {
         return {backend: () => 'none', maxSourceEdge: () => Infinity, draw: () => false, cleanup() {}}
     }
@@ -103,7 +113,9 @@ function createSurface(canvas: HTMLCanvasElement, onRestored: () => void): Surfa
  * the smaller source is stretched over it. Past the GPU's texture size an upload fails
  * silently and leaves the canvas black.
  */
-export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSizeChange}: FrameRendererOptions) {
+export function useFrameRenderer({
+    frameData, dimensions, isJpeg, canvases, onSizeChange, onRendererLost, webgl = true,
+}: FrameRendererOptions) {
     const surfaces = new Map<HTMLCanvasElement, Surface>()
     const rendererBackend = ref<RendererBackend>('unknown')
     let image: HeldImage | null = null
@@ -117,7 +129,7 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
     function surfaceFor(canvas: HTMLCanvasElement) {
         let surface = surfaces.get(canvas)
         if (!surface) {
-            surface = createSurface(canvas, draw)
+            surface = createSurface(canvas, {onRestored: draw, onLostForGood: onRendererLost, webgl})
             surfaces.set(canvas, surface)
         }
         return surface

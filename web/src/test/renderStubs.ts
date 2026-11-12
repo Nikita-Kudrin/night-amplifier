@@ -10,6 +10,8 @@ type GlContextType = 'webgl2' | 'webgl' | 'experimental-webgl'
 
 /** The `texImage2D` of an RGB8 buffer: target, level, internal format, size, border, format, type, pixels. */
 type PixelUpload = [GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, ArrayBufferView]
+/** The `texSubImage2D` of an RGB8 buffer: target, level, offset, size, format, type, pixels. */
+type PixelUpdate = [GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, ArrayBufferView]
 
 function createGl(type: GlContextType, {compiles, maxTextureSize}: {compiles: boolean; maxTextureSize: number}) {
     const loseContext = vi.fn()
@@ -37,20 +39,40 @@ function createGl(type: GlContextType, {compiles, maxTextureSize}: {compiles: bo
         pixelStorei: vi.fn((pname: GLenum, value: GLint) => {
             if (pname === gl.UNPACK_ALIGNMENT) gl.unpackAlignment = value
         }),
-        // Validates the pixel buffer the way the WebGL spec does, so a row-padding
+        // Both validate the pixel buffer the way the WebGL spec does, so a row-padding
         // mismatch fails here as it does in a browser (INVALID_OPERATION, no upload).
         texImage2D: vi.fn((...args: unknown[]) => {
+            gl.sources.push(args.at(-1))
+            if (gl.failNextAllocation) {
+                gl.failNextAllocation = false
+                raise(gl.OUT_OF_MEMORY)
+                return
+            }
             if (args.length !== 9) return
             const [, , , width, height, , , , pixels] = args as PixelUpload
-            const rowBytes = width * 3
-            const padded = Math.ceil(rowBytes / gl.unpackAlignment) * gl.unpackAlignment
-            const required = height > 0 ? (height - 1) * padded + rowBytes : 0
-            if (pixels.byteLength < required) gl.lastError = gl.INVALID_OPERATION
-            else gl.uploads.push({width, height})
+            checkedUpload(width, height, pixels)
+        }),
+        texSubImage2D: vi.fn((...args: unknown[]) => {
+            gl.sources.push(args.at(-1))
+            if (args.length !== 9) return
+            const [, , , , width, height, , , pixels] = args as PixelUpdate
+            checkedUpload(width, height, pixels)
         }),
         unpackAlignment: 4,
+        /** The error flag `getError` reads and clears, as a context keeps it. */
         lastError: 0,
+        /** Every error raised, whether or not `getError` read it since. */
+        errors: [] as GLenum[],
+        /** Fails the next `texImage2D` as a GPU out of memory does: no storage, the context kept. */
+        failNextAllocation: false,
+        getError: vi.fn(() => {
+            const error = gl.lastError
+            gl.lastError = gl.NO_ERROR
+            return error
+        }),
         uploads: [] as {width: number; height: number}[],
+        /** What every upload drew, bitmap or pixels, by either call, in order. */
+        sources: [] as unknown[],
         viewport: vi.fn(),
         clearColor: vi.fn(),
         clear: vi.fn(),
@@ -86,6 +108,19 @@ function createGl(type: GlContextType, {compiles, maxTextureSize}: {compiles: bo
         UNPACK_ALIGNMENT: 20,
         INVALID_OPERATION: 21,
         MAX_TEXTURE_SIZE: 22,
+        NO_ERROR: 0,
+        OUT_OF_MEMORY: 23,
+    }
+    function raise(error: GLenum) {
+        gl.errors.push(error)
+        if (gl.lastError === gl.NO_ERROR) gl.lastError = error
+    }
+    function checkedUpload(width: number, height: number, pixels: ArrayBufferView) {
+        const rowBytes = width * 3
+        const padded = Math.ceil(rowBytes / gl.unpackAlignment) * gl.unpackAlignment
+        const required = height > 0 ? (height - 1) * padded + rowBytes : 0
+        if (pixels.byteLength < required) raise(gl.INVALID_OPERATION)
+        else gl.uploads.push({width, height})
     }
     return gl
 }

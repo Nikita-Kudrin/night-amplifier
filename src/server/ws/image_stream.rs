@@ -211,6 +211,7 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
         "Image stream client connected"
     );
 
+    let registration = state.stream_clients.register(client.endpoint.page(), is_local(client.peer));
     let mut sender = FrameSender::new(client);
     let mut last_sent: u64 = 0;
     if send_current(&mut socket, &mut sender, &state, &attached.stream, kind, &mut last_sent).await == Delivery::Closed {
@@ -220,6 +221,9 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
     loop {
         tokio::select! {
             msg = socket.recv() => {
+                if matches!(msg, Some(Ok(_))) {
+                    registration.heard();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) if text == "ping" => {
                         if socket.send(Message::Text("pong".into())).await.is_err() {
@@ -324,6 +328,12 @@ async fn send_current(
     }
     *last_sent = counter;
     Delivery::Sent
+}
+
+/// From this machine. A dual-stack listener reports IPv4 loopback as `::ffff:127.0.0.1`,
+/// which `Ipv6Addr::is_loopback` alone calls remote.
+fn is_local(peer: Option<SocketAddr>) -> bool {
+    peer.is_some_and(|peer| peer.ip().to_canonical().is_loopback())
 }
 
 fn describe_peer(peer: Option<SocketAddr>) -> String {

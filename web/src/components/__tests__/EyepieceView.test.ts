@@ -68,6 +68,9 @@ afterEach(() => {
 })
 
 import { useImageStream } from '../../composables/useImageStream'
+import { useWebGLRenderer } from '../../composables/useWebGLRenderer'
+import { useCanvas2DRenderer } from '../../composables/useCanvas2DRenderer'
+import { RENDERER_RELOAD_LIMIT, RENDERER_RELOADS_KEY } from '../../composables/useRendererRecovery'
 import * as api from '../../composables/api'
 import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility'
 import {contextProvides} from '../../composables/appContext'
@@ -1207,5 +1210,96 @@ describe('EyepieceView.vue while recovery works on the camera', () => {
     })
 
     expect(wrapper.find('.placeholder').text()).toContain('Waiting for frames')
+  })
+})
+
+/**
+ * A dedicated display has nobody to reload it: a WebGL context the browser never gives back
+ * would leave it black till morning.
+ */
+describe('EyepieceView.vue after its renderer is lost for good', () => {
+  const reload = vi.fn()
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    // Each reload is counted per tab: one test's would push the next onto Canvas 2D.
+    sessionStorage.clear()
+    setPath('/eyepiece_quality')
+    vi.stubGlobal('location', { ...window.location, reload })
+    installResizeObserverStub()
+    await loadEyepieceView()
+  })
+
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  /** Reports every canvas's context lost for good, as the renderers do once the restore is overdue. */
+  function loseRenderers() {
+    const calls = vi.mocked(useWebGLRenderer).mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    for (const [options] of calls) options?.onLostForGood?.()
+  }
+
+  it('reloads the page once', async () => {
+    mountEyepiece({ binoview: true, circular_view: true })
+    await landFrame()
+
+    loseRenderers()
+    await nextTick()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  // Chromium never retries a page that failed to load: a reload into a stopped server
+  // would leave its error page up for good.
+  it('waits for the server before reloading', async () => {
+    mountEyepiece()
+    await landFrame()
+    lastStream().connected.value = false
+
+    loseRenderers()
+    await nextTick()
+    expect(reload).not.toHaveBeenCalled()
+
+    lastStream().connected.value = true
+    await nextTick()
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  // `/eyepiece` is also a phone page: a reload while the observer switched apps would
+  // bring them back out of fullscreen and zoom.
+  it('waits until the page is shown before reloading', async () => {
+    const setVisibility = (state: DocumentVisibilityState) => {
+      Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    setPath('/eyepiece')
+    setVisibility('hidden')
+    try {
+      mountEyepiece()
+      await landFrame()
+      loseRenderers()
+      await nextTick()
+      expect(reload).not.toHaveBeenCalled()
+
+      setVisibility('visible')
+      await nextTick()
+      expect(reload).toHaveBeenCalledTimes(1)
+    } finally {
+      setVisibility('visible')
+    }
+  })
+
+  // A GPU that crashes on every upload would otherwise reload the kiosk all night.
+  it('draws with Canvas 2D after reloading for its renderer too often', async () => {
+    const now = Date.now()
+    sessionStorage.setItem(RENDERER_RELOADS_KEY, JSON.stringify(Array.from({ length: RENDERER_RELOAD_LIMIT }, (_, i) => now - i)))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mountEyepiece()
+    await landFrame()
+
+    expect(useWebGLRenderer).not.toHaveBeenCalled()
+    expect(useCanvas2DRenderer).toHaveBeenCalled()
   })
 })

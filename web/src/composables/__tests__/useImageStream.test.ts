@@ -18,6 +18,7 @@ setupGlobalWebSocketMock()
 import {nextTick, ref} from 'vue'
 import type {MaybeRefOrGetter} from 'vue'
 import {IMAGE_LIVENESS_MS, NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream'
+import {RGB8_MAGIC} from '../../utils/frameDecoder'
 import type {ImageStream, ImageStreamOptions} from '../useImageStream'
 import {WS_RECONNECT} from '../../constants'
 import { mount } from '@vue/test-utils'
@@ -119,17 +120,11 @@ describe('useImageStream', () => {
             expect(pixels(stream).length).toBe(2 * 2 * 3) // 3 bytes per pixel
         })
 
-        it('decodes valid RGB8+LZ4 Blob message', async () => {
-            const {dimensions, frameNumber} = useImageStream()
+        // A Blob was read back into an ArrayBuffer: one more copy of every frame.
+        it('asks for frames as ArrayBuffers', () => {
+            useImageStream({endpoint: '/ws/eyepiece_quality'})
 
-            const blob = new Blob([createTestFrame(2, 2, 200)])
-
-            await openWebSocket()
-            getWebSocket().simulateMessage(blob)
-            await waitForAsyncProcessing()
-
-            expect(dimensions.value).toEqual({width: 2, height: 2})
-            expect(frameNumber.value).toBe(1)
+            expect(getWebSocket().binaryType).toBe('arraybuffer')
         })
 
         it('increments frameNumber for each successful decode', async () => {
@@ -171,11 +166,11 @@ describe('useImageStream', () => {
             expect(dimensions.value).toEqual({width: 0, height: 0})
         })
 
-        it('does not let a frame still being read land after no_frame', async () => {
+        it('does not let a frame waiting to decode land after no_frame', async () => {
             const {frameData} = useImageStream({endpoint: '/ws/eyepiece_quality'})
 
             await openWebSocket()
-            getWebSocket().simulateMessage(new Blob([createTestFrame(2, 2)]))
+            getWebSocket().simulateMessage(createTestFrame(2, 2))
             getWebSocket().simulateMessage(NO_FRAME)
             await waitForAsyncProcessing()
 
@@ -187,49 +182,117 @@ describe('useImageStream', () => {
 
             await openWebSocket()
             getWebSocket().simulateMessage(NO_FRAME)
-            getWebSocket().simulateMessage(new Blob([createTestFrame(4, 2)]))
+            getWebSocket().simulateMessage(createTestFrame(4, 2))
             await waitForAsyncProcessing()
 
             expect(dimensions.value).toEqual({width: 4, height: 2})
         })
 
-        // Frames arrive as Blobs: one still being read when the source switches (the live
-        // view's Guide toggle) or the socket closes belongs to what was just left.
-        describe('a frame read across a clear', () => {
-            function slowBlob(buffer: ArrayBuffer) {
-                const blob = new Blob([buffer])
-                let release = () => {}
-                const read = new Promise<ArrayBuffer>((resolve) => { release = () => resolve(buffer) })
-                blob.arrayBuffer = () => read
-                return {blob, release: () => release()}
-            }
+        // Decoding every frame the page fell behind on kept it behind, each one decoded
+        // and uploaded only to be replaced.
+        it('decodes only the newest of the frames that queued up', async () => {
+            const stream = useImageStream({endpoint: '/ws/eyepiece_quality'})
+            await openWebSocket()
 
-            it('drops a frame of the old source that finishes reading after the switch', async () => {
+            getWebSocket().simulateMessage(createTestFrame(2, 2, 10))
+            getWebSocket().simulateMessage(createTestFrame(4, 2, 20))
+            getWebSocket().simulateMessage(createTestFrame(2, 4, 30))
+            await waitForAsyncProcessing()
+
+            expect(stream.frameNumber.value).toBe(1)
+            expect(stream.dimensions.value).toEqual({width: 2, height: 4})
+            expect(pixels(stream)).toEqual(new Uint8Array(2 * 4 * 3).fill(30))
+        })
+
+        // One that arrives while the source switches (the live view's Guide toggle) or the
+        // socket closes belongs to what was just left.
+        describe('a frame waiting across a clear', () => {
+            it('drops a frame of the old source', async () => {
                 const source = ref('/ws/eyepiece_quality')
                 const {frameData} = useImageStream({endpoint: () => source.value})
                 await openWebSocket()
-                const pending = slowBlob(createTestFrame(2, 2))
-                getWebSocket().simulateMessage(pending.blob)
+                getWebSocket().simulateMessage(createTestFrame(2, 2))
 
                 source.value = '/ws/eyepiece_quality?source=guide'
                 await nextTick()
-                pending.release()
                 await waitForAsyncProcessing()
 
                 expect(frameData.value).toBe(null)
             })
 
-            it('drops a frame that finishes reading after the socket closed', async () => {
+            it('drops a frame of a socket that closed', async () => {
                 const {frameData} = useImageStream({endpoint: '/ws/eyepiece_quality'})
                 await openWebSocket()
-                const pending = slowBlob(createTestFrame(2, 2))
-                getWebSocket().simulateMessage(pending.blob)
+                getWebSocket().simulateMessage(createTestFrame(2, 2))
 
                 getWebSocket().simulateClose()
-                pending.release()
                 await waitForAsyncProcessing()
 
                 expect(frameData.value).toBe(null)
+            })
+        })
+
+        // A new array a frame was 27 MB of garbage per 3008x3008 frame on the kiosk; the
+        // renderer may draw the frame on screen again while the next one decodes.
+        describe('pixel buffers', () => {
+            /** A 2x2 SA08 frame whose block holds 6 of its 12 bytes: it fails after writing pixels. */
+            function shortFrame() {
+                const block = [0x60, 7, 7, 7, 7, 7, 7]
+                const bytes = new Uint8Array(16 + 4 + block.length)
+                const view = new DataView(bytes.buffer)
+                view.setUint32(0, RGB8_MAGIC, true)
+                view.setUint32(4, 2, true)
+                view.setUint32(8, 2, true)
+                view.setUint32(12, 4 + block.length, true)
+                view.setUint32(16, 12, true)
+                bytes.set(block, 20)
+                return bytes.buffer
+            }
+
+            async function show(stream: ImageStream, buffer: ArrayBuffer) {
+                getWebSocket().simulateMessage(buffer)
+                await waitForAsyncProcessing()
+                return stream.frameData.value
+            }
+
+            it('decodes into two buffers in turn, never the one on screen', async () => {
+                const stream = useImageStream({endpoint: '/ws/eyepiece_quality'})
+                await openWebSocket()
+
+                const first = await show(stream, createTestFrame(2, 2, 1))
+                const second = await show(stream, createTestFrame(2, 2, 2))
+                const third = await show(stream, createTestFrame(2, 2, 3))
+
+                expect(second).not.toBe(first)
+                expect(third).toBe(first)
+                expect(first).toEqual(new Uint8Array(12).fill(3))
+                expect(second).toEqual(new Uint8Array(12).fill(2))
+            })
+
+            it('leaves the frame on screen alone when the next one fails to decode', async () => {
+                const stream = useImageStream({endpoint: '/ws/eyepiece_quality'})
+                const consoleSpy = suppressConsoleErrors()
+                await openWebSocket()
+                const shown = await show(stream, createTestFrame(2, 2, 1))
+
+                await show(stream, shortFrame())
+                const next = await show(stream, createTestFrame(2, 2, 3))
+
+                expect(stream.decodeError.value).toBe(null)
+                expect(next).not.toBe(shown)
+                expect(shown).toEqual(new Uint8Array(12).fill(1))
+                expect(next).toEqual(new Uint8Array(12).fill(3))
+                consoleSpy.mockRestore()
+            })
+
+            it('takes buffers of the new size when the frame size changes', async () => {
+                const stream = useImageStream({endpoint: '/ws/eyepiece_quality'})
+                await openWebSocket()
+                await show(stream, createTestFrame(2, 2))
+
+                await show(stream, createTestFrame(4, 2, 9))
+
+                expect(pixels(stream)).toEqual(new Uint8Array(4 * 2 * 3).fill(9))
             })
         })
 

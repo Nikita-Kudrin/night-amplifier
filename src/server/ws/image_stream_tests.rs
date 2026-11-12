@@ -227,3 +227,15 @@ async fn the_log_describes_the_output_size_or_its_absence() {
         "3008x3008 (frame 3008x3008)"
     );
 }
+
+/// The kiosk's browser is local however the listener reports it; a phone is not.
+#[test]
+fn a_loopback_peer_is_local_on_either_stack() {
+    let peer = |addr: &str| Some(addr.parse::<SocketAddr>().unwrap());
+    assert!(is_local(peer("127.0.0.1:50000")));
+    assert!(is_local(peer("[::1]:50000")));
+    assert!(is_local(peer("[::ffff:127.0.0.1]:50000")));
+    assert!(!is_local(peer("192.168.4.20:50000")));
+    assert!(!is_local(peer("[::ffff:192.168.4.20]:50000")));
+    assert!(!is_local(None));
+}

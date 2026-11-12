@@ -55,21 +55,65 @@ export function useImageStream(options: ImageStreamOptions = {}) {
 
     let framesSinceLastFPS = 0
     let fpsTimer: ReturnType<typeof setInterval> | null = null
-    // Bumped by every clear (`NO_FRAME`, a source switch, a close), so a Blob still being
-    // read across one is dropped rather than shown as the source just left.
-    let clearGeneration = 0
+    // The newest frame not yet decoded; one a newer frame replaces here is never decoded.
+    let pending: ArrayBuffer | null = null
+    let decodeTimer: ReturnType<typeof setTimeout> | undefined
+    let pixelBuffers: Uint8Array[] = []
 
     /**
      * Clear frame data to reset the live view
      * Called when starting a new capture session
      */
     function clearFrameData() {
-        clearGeneration++
+        dropPending()
         frameData.value = null
         dimensions.value = {width: 0, height: 0}
         frameNumber.value = 0
         fps.value = 0
         framesSinceLastFPS = 0
+        decodeError.value = null
+    }
+
+    function dropPending() {
+        pending = null
+        clearTimeout(decodeTimer)
+        decodeTimer = undefined
+    }
+
+    /**
+     * Two lossless buffers taken in turn, never the one on screen, which the renderer may
+     * draw again while the next frame decodes (a restored context). A new one a frame was
+     * 27 MB of garbage per 3008x3008 frame on the kiosk.
+     */
+    function spareBuffer(size: number) {
+        if (pixelBuffers[0]?.length !== size) pixelBuffers = [new Uint8Array(size), new Uint8Array(size)]
+        return pixelBuffers[0] === frameData.value ? pixelBuffers[1] : pixelBuffers[0]
+    }
+
+    /**
+     * Decodes the newest frame, as a task of its own: frames that queued up behind a slow
+     * decode only replace `pending`. That holds for small frames (JPEG): Chromium hands a
+     * megabyte frame over in several tasks, and this one runs first (2 MB, 60 ms decodes:
+     * 30 of 30 decoded; 20 KB, 200 ms: 6 of 30). A lossless page that falls behind is paced
+     * by the server instead, which sends each client only its newest frame once the last
+     * one is through.
+     */
+    function decodePending() {
+        decodeTimer = undefined
+        const buffer = pending
+        pending = null
+        if (!buffer) return
+
+        const decoded = decodeFrame(buffer, spareBuffer)
+        if (!decoded) {
+            decodeError.value = 'Failed to decode frame'
+            return
+        }
+        frameData.value = decoded.frameData
+        isJpeg.value = decoded.isJpeg || isDynamicJpeg
+        dimensions.value = {width: decoded.width, height: decoded.height}
+        frameNumber.value++
+        framesSinceLastFPS++
         decodeError.value = null
     }
 
@@ -88,8 +132,11 @@ export function useImageStream(options: ImageStreamOptions = {}) {
         }
     }
 
-    const {connected, error, connect, disconnect} = useWebSocket(resolveEndpoint, {
+    const {connected, error, connect, disconnect} = useWebSocket<ArrayBuffer | string>(resolveEndpoint, {
         livenessTimeout: IMAGE_LIVENESS_MS,
+        // A Blob was read back into an ArrayBuffer: one more copy of every frame, made
+        // through the browser's blob store.
+        binaryType: 'arraybuffer',
         onOpen: () => {
             startFpsTimer()
         },
@@ -98,9 +145,7 @@ export function useImageStream(options: ImageStreamOptions = {}) {
             fps.value = 0
             clearFrameData()
         },
-        onMessage: async (event) => {
-            let buffer: ArrayBuffer
-
+        onMessage: (event) => {
             if (event.data === NO_FRAME) {
                 // The server switched this socket to a camera with nothing to show yet, or
                 // cleared its stream (a new session, a camera gone): the picture on screen
@@ -108,32 +153,10 @@ export function useImageStream(options: ImageStreamOptions = {}) {
                 clearFrameData()
                 return
             }
+            if (!(event.data instanceof ArrayBuffer)) return // Ignore other text
 
-            // Convert Blob to ArrayBuffer if needed
-            if (event.data instanceof Blob) {
-                const generation = clearGeneration
-                buffer = await event.data.arrayBuffer()
-                // A frame that arrived before a clear must not land after it.
-                if (generation !== clearGeneration) return
-            } else if (event.data instanceof ArrayBuffer) {
-                buffer = event.data
-            } else {
-                return // Ignore other text
-            }
-
-            // Decode frame (dispatches by magic number)
-            const decoded = decodeFrame(buffer)
-
-            if (decoded) {
-                frameData.value = decoded.frameData
-                isJpeg.value = decoded.isJpeg || isDynamicJpeg
-                dimensions.value = {width: decoded.width, height: decoded.height}
-                frameNumber.value++
-                framesSinceLastFPS++
-                decodeError.value = null
-            } else {
-                decodeError.value = 'Failed to decode frame'
-            }
+            pending = event.data
+            decodeTimer ??= setTimeout(decodePending, 0)
         },
     })
 
@@ -149,7 +172,10 @@ export function useImageStream(options: ImageStreamOptions = {}) {
         }
     )
 
-    tryOnScopeDispose(stopFpsTimer)
+    tryOnScopeDispose(() => {
+        stopFpsTimer()
+        dropPending()
+    })
 
     return {
         connected,

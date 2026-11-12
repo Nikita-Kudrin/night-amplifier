@@ -38,19 +38,27 @@ function malformed(format: string, reason: string): null {
     return null
 }
 
-/** Decode a binary WebSocket frame, dispatching by magic number; `null` if it is invalid. */
-export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
+/** Hands a lossless decode the buffer to write `size` bytes of pixels into. */
+export type PixelBuffer = (size: number) => Uint8Array
+
+const freshBuffer: PixelBuffer = (size) => lz4.makeBuffer(size)
+
+/**
+ * Decode a binary WebSocket frame, dispatching by magic number; `null` if it is invalid.
+ * Lossless pixels go into `output`'s buffer, a new one each frame by default.
+ */
+export function decodeFrame(buffer: ArrayBuffer, output: PixelBuffer = freshBuffer): DecodedFrame | null {
     if (buffer.byteLength < FRAME_HEADER_SIZE) return null
 
     const view = new DataView(buffer)
     const magic = view.getUint32(0, true)
 
     if (magic === RGB8_CHUNKED_MAGIC) {
-        return decodeRgb8Lz4Chunked(buffer, view)
+        return decodeRgb8Lz4Chunked(buffer, view, output)
     }
 
     if (magic === RGB8_MAGIC) {
-        return decodeRgb8Lz4(buffer, view)
+        return decodeRgb8Lz4(buffer, view, output)
     }
 
     if (magic === SA10_MAGIC) {
@@ -72,7 +80,7 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
  *
  * Followed by LZ4-compressed RGB8 pixel data (3 bytes per pixel)
  */
-function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
+function decodeRgb8Lz4(buffer: ArrayBuffer, view: DataView, output: PixelBuffer): PixelFrame | null {
 
     const width = view.getUint32(4, true)
     const height = view.getUint32(8, true)
@@ -91,7 +99,7 @@ function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)): PixelF
 
     let decompressedBuffer: Uint8Array
     try {
-        decompressedBuffer = lz4.makeBuffer(decompressedSize)
+        decompressedBuffer = output(decompressedSize)
         const end = lz4.decompressBlock(lz4BlockData, decompressedBuffer, 0, lz4BlockData.length, 0)
         if (end !== decompressedSize) return malformed('SA08', `decompressed to ${end} of ${decompressedSize} bytes`)
     } catch (e) {
@@ -118,7 +126,7 @@ function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)): PixelF
  *
  * Followed by concatenated compressed chunk data
  */
-function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
+function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view: DataView, output: PixelBuffer): PixelFrame | null {
 
     if (buffer.byteLength < SA09_HEADER_SIZE) return null
 
@@ -153,13 +161,13 @@ function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view = new DataView(buffer)):
         return malformed('SA09', `chunks hold ${declared} bytes of pixels for ${width}x${height}`)
     }
 
-    const output = lz4.makeBuffer(totalDecompressed)
+    const pixels = output(totalDecompressed)
     let outputOffset = 0
 
     try {
         for (const {offset, compressedSize, decompressedSize} of chunks) {
             const chunkData = new Uint8Array(buffer, offset, compressedSize)
-            const end = lz4.decompressBlock(chunkData, output, 0, compressedSize, outputOffset)
+            const end = lz4.decompressBlock(chunkData, pixels, 0, compressedSize, outputOffset)
             // A chunk spilling over its stripe would land in the next one's rows.
             if (end !== outputOffset + decompressedSize) {
                 return malformed('SA09', `a chunk decompressed to ${end - outputOffset} of ${decompressedSize} bytes`)
@@ -171,7 +179,7 @@ function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view = new DataView(buffer)):
         return null
     }
 
-    return {width, height, frameData: output}
+    return {width, height, frameData: pixels}
 }
 
 /**

@@ -140,6 +140,13 @@ describe('useWebSocket', () => {
             expectTypeOf<WebSocketOptions<number>>()
         })
 
+        it('takes binary messages as the caller asks, the browser\'s default otherwise', () => {
+            useWebSocket('/ws/frames', {binaryType: 'arraybuffer'})
+            useWebSocket('/ws/events')
+
+            expect(MockWebSocket.instances.map((socket) => socket.binaryType)).toEqual(['arraybuffer', 'blob'])
+        })
+
         it('send() transmits data when connected', async () => {
             const {send} = useWebSocket('/ws/test')
 

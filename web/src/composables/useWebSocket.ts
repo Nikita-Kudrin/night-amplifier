@@ -24,6 +24,8 @@ export interface WebSocketOptions<Data extends SocketData = SocketData> {
     onClose?: ((event: SocketClose) => void) | null
     onError?: ((event: Event) => void) | null
     livenessTimeout?: number | null
+    /** How binary messages arrive; the browser's default is `blob`. */
+    binaryType?: BinaryType
 }
 
 /**
@@ -50,6 +52,7 @@ export function useWebSocket<Data extends SocketData = SocketData>(
         // never drops one. Any message answers, so a socket whose single message takes
         // longer to arrive than this — a big frame on weak Wi-Fi — needs a longer window.
         livenessTimeout = 2 * WS_RECONNECT.pingInterval,
+        binaryType,
     } = options
 
     const connected = ref(false)
@@ -90,6 +93,7 @@ export function useWebSocket<Data extends SocketData = SocketData>(
             // that opens a second socket nobody asked for. Harmless while retries were
             // capped at ten; not once they are unbounded.
             const socket = new WebSocket(getUrl())
+            if (binaryType) socket.binaryType = binaryType
             ws = socket
 
             socket.onopen = () => {

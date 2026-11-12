@@ -36,6 +36,7 @@ export class MockWebSocket {
 
     url: string
     readyState: number = MockWebSocket.CONNECTING
+    binaryType: BinaryType = 'blob'
     onopen: (() => void) | null = null
     onclose: ((event: CloseInit) => void) | null = null
     onerror: ((event: Event) => void) | null = null

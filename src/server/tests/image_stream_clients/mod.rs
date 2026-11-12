@@ -61,6 +61,10 @@ pub(super) async fn start_server() -> TestServer {
             "/api/view/camera",
             axum::routing::put(crate::server::api::cameras::select_viewed_camera),
         )
+        .route(
+            "/api/streams/viewers",
+            axum::routing::get(crate::server::api::streams::get_stream_viewers),
+        )
 
         .with_state(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -342,6 +346,14 @@ pub(super) mod reqwest_like {
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
+        exchange(addr, &request).await
+    }
+
+    pub async fn get(addr: SocketAddr, path: &str) -> Response {
+        exchange(addr, &format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")).await
+    }
+
+    async fn exchange(addr: SocketAddr, request: &str) -> Response {
         let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         socket.write_all(request.as_bytes()).await.unwrap();
         let mut raw = String::new();

@@ -3,6 +3,7 @@ import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
 import type {ComponentPublicInstance} from 'vue'
 import {useImageStream} from '../composables/useImageStream'
 import {useFrameRenderer} from '../composables/useFrameRenderer'
+import {useRendererRecovery} from '../composables/useRendererRecovery'
 import {useEventListener} from '../composables/useEventListener'
 import {useFullscreen} from '../composables/useFullscreen'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility'
@@ -113,6 +114,8 @@ function updateBounds() {
   eyeBounds.value = bounds
 }
 
+const {webgl, onRendererLost} = useRendererRecovery(connected)
+
 // Off the circular view the canvas takes the frame's own aspect, so a new size moves it
 // inside an eye that stays put, and the eye's ResizeObserver never fires.
 const {label: rendererLabel, redraw} = useFrameRenderer({
@@ -121,6 +124,8 @@ const {label: rendererLabel, redraw} = useFrameRenderer({
   isJpeg,
   canvases: () => eyes.value.map((eye) => canvasElements[eye]),
   onSizeChange: updateBounds,
+  onRendererLost,
+  webgl,
 })
 
 const backendLabel = computed(() =>

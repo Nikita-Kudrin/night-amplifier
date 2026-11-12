@@ -65,7 +65,7 @@ pub use session::{
 };
 pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
-pub use stream_viewers::{StreamKind, ViewerGuard};
+pub use stream_viewers::{StreamClientInfo, StreamClientRegistration, StreamClients, StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState, SolverCamera};
 pub use stack_noise::{ShownStack, StackNoiseWindow};
 pub use stream_crop::StreamCropView;
@@ -96,6 +96,8 @@ pub struct AppState {
     pub guide_stream: Arc<FrameStream>,
     /// The camera the eyepiece pages show, chosen on `/`. See [`ViewedCamera`].
     pub viewed_camera: ViewedCamera,
+    /// Every open image-stream connection, for a kiosk's watchdog. See [`StreamClients`].
+    pub stream_clients: Arc<StreamClients>,
     /// What automatic recovery has told clients about each role. See [`RecoveryStatus`].
     pub recovery_status: CameraRecoveryStatus,
     /// The `auto_crop` cut the main stream's frames carry. See [`StreamCropView`].
@@ -235,6 +237,7 @@ impl AppState {
             main_stream: Arc::new(FrameStream::default()),
             guide_stream: Arc::new(FrameStream::default()),
             viewed_camera: ViewedCamera::new(events_tx.clone()),
+            stream_clients: Arc::default(),
             recovery_status: CameraRecoveryStatus::new(events_tx.clone()),
             stream_crop: StreamCropView::new(events_tx.clone()),
             stack_noise: StackNoiseWindow::default(),

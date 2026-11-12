@@ -152,12 +152,30 @@ function versionWorks(version: GLVersion) {
     return prog !== null
 }
 
+/**
+ * How long a lost context may stay lost, while the page is shown, before `onLostForGood`. A
+ * browser restores one in a second or two once its GPU process restarts; one that blocked
+ * WebGL for the page after repeated GPU crashes never does, and the canvas stays black.
+ * Hidden time does not count: a phone's browser drops a background tab's context and
+ * restores it only once the tab is shown again.
+ */
+export const CONTEXT_RESTORE_TIMEOUT_MS = 10_000
+
 export interface WebGLRendererOptions {
     /**
      * Redraws after the browser restored a lost context: the canvas is blank until then,
      * and an idle stream sends no new frame.
      */
     onRestored?: () => void
+    /** The context was lost and not restored within `CONTEXT_RESTORE_TIMEOUT_MS` of being shown. */
+    onLostForGood?: () => void
+}
+
+/** What a texture's storage was allocated for: the next upload of the same reuses it. */
+interface TextureStorage {
+    width: number
+    height: number
+    format: GLenum
 }
 
 /** A linked program's inputs, looked up once. */
@@ -171,7 +189,7 @@ interface Locations {
  * WebGL renderer composable for high-performance image rendering
  * Supports WebGL2 and WebGL1 with standard 8-bit RGB textures
  */
-export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
+export function useWebGLRenderer({onRestored, onLostForGood}: WebGLRendererOptions = {}) {
     const backend = ref<RendererBackend>('unknown')
 
     let gl: GL | null = null
@@ -184,6 +202,8 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
     let positionBuffer: WebGLBuffer | null = null
     let texCoordBuffer: WebGLBuffer | null = null
     let locations: Locations | null = null
+    let storage: TextureStorage | null = null
+    let lostTimer: ReturnType<typeof setTimeout> | undefined
 
     function setupBuffers(gl: GL) {
         const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1])
@@ -201,6 +221,7 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
 
     function setupTexture(gl: GL) {
         texture = gl.createTexture()
+        storage = null
         gl.bindTexture(gl.TEXTURE_2D, texture)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
@@ -226,8 +247,27 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         program = null
         locations = null
         texture = null
+        storage = null
         positionBuffer = null
         texCoordBuffer = null
+    }
+
+    /** Starts the restore deadline afresh while the page is shown, holds it while hidden. */
+    function armRestoreDeadline() {
+        clearTimeout(lostTimer)
+        lostTimer = undefined
+        if (document.visibilityState === 'hidden') return
+        lostTimer = setTimeout(() => {
+            stopRestoreDeadline()
+            console.error(`[WebGLRenderer] ${version?.name} context not restored after ${CONTEXT_RESTORE_TIMEOUT_MS} ms`)
+            onLostForGood?.()
+        }, CONTEXT_RESTORE_TIMEOUT_MS)
+    }
+
+    function stopRestoreDeadline() {
+        clearTimeout(lostTimer)
+        lostTimer = undefined
+        document.removeEventListener('visibilitychange', armRestoreDeadline)
     }
 
     // The context's objects die with it; `preventDefault` asks the browser to restore it.
@@ -235,9 +275,12 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         event.preventDefault()
         console.warn(`[WebGLRenderer] ${version?.name} context lost`)
         forgetResources()
+        document.addEventListener('visibilitychange', armRestoreDeadline)
+        armRestoreDeadline()
     }
 
     function handleContextRestored() {
+        stopRestoreDeadline()
         // Both are set while the listeners are: `init` adds them, `cleanup` removes them first.
         if (!gl || !version || !setupResources(gl, version)) return
         console.log(`[WebGLRenderer] ${version.name} context restored`)
@@ -280,6 +323,38 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
     }
 
     /**
+     * Fills the bound texture with `source`, allocating its storage only when the size or
+     * format changes: a `texImage2D` a frame reallocated a 12-27 MB texture each time. A
+     * failed allocation (out of GPU memory, the context kept) is forgotten, so the next frame
+     * allocates again rather than updating storage that is not there; `getError` is a GPU
+     * round trip, so it is read only after an allocation, never per frame.
+     */
+    function upload(gl: GL, source: RenderSource, sourceWidth: number, sourceHeight: number) {
+        const bitmap = isImageBitmap(source)
+        const wanted = bitmap
+            ? {width: source.width, height: source.height, format: gl.RGBA}
+            : {width: sourceWidth, height: sourceHeight, format: gl.RGB}
+        const reuse = storage !== null
+            && storage.width === wanted.width && storage.height === wanted.height && storage.format === wanted.format
+        if (!bitmap) {
+            // RGB rows are width*3 bytes, but WebGL assumes rows padded to UNPACK_ALIGNMENT
+            // (default 4). For any width not divisible by 4 (e.g. 2539 px) the unpadded
+            // buffer is "too short", the upload fails with INVALID_OPERATION and the
+            // previous frame stays on screen. Set per upload: it is context state.
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+        }
+        if (bitmap) {
+            if (reuse) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source)
+            else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+        } else if (reuse) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sourceWidth, sourceHeight, gl.RGB, gl.UNSIGNED_BYTE, source)
+        } else {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, sourceWidth, sourceHeight, 0, gl.RGB, gl.UNSIGNED_BYTE, source)
+        }
+        if (!reuse) storage = gl.getError() === gl.NO_ERROR ? wanted : null
+    }
+
+    /**
      * Whether it drew: not while the context is lost, when the canvas keeps its old size. The
      * canvas takes `width`x`height`; RGB pixels are `sourceWidth`x`sourceHeight`, smaller
      * when the frame was cut down to fit the texture, and stretched over the canvas.
@@ -300,22 +375,7 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
         }
 
         gl.bindTexture(gl.TEXTURE_2D, texture)
-
-        if (isImageBitmap(frameData)) {
-            gl.texImage2D(
-                gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameData
-            )
-        } else {
-            // RGB rows are width*3 bytes, but WebGL assumes rows padded to UNPACK_ALIGNMENT
-            // (default 4). For any width not divisible by 4 (e.g. 2539 px) the unpadded
-            // buffer is "too short", texImage2D fails with INVALID_OPERATION and the
-            // previous frame stays on screen. Set per upload: it is context state.
-            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-            gl.texImage2D(
-                gl.TEXTURE_2D, 0, gl.RGB, sourceWidth, sourceHeight, 0,
-                gl.RGB, gl.UNSIGNED_BYTE, frameData
-            )
-        }
+        upload(gl, frameData, sourceWidth, sourceHeight)
 
         gl.viewport(0, 0, width, height)
         gl.clearColor(0, 0, 0, 1)
@@ -338,6 +398,7 @@ export function useWebGLRenderer({onRestored}: WebGLRendererOptions = {}) {
     }
 
     function cleanup() {
+        stopRestoreDeadline()
         if (gl) {
             if (texture) gl.deleteTexture(texture)
             if (positionBuffer) gl.deleteBuffer(positionBuffer)

@@ -429,7 +429,14 @@ canvas at the frame's size so geometry stays in stream pixels.
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
 Lossless (beyond 8-bit) for the eyepiece quality view; SA09 chunks it for parallel LZ4; WebGL with Canvas2D
-fallback.
+fallback. It runs all night on a kiosk with nobody to reload it, so the page bounds its work per frame. Image
+sockets take `arraybuffer` (a Blob was one more copy). `useImageStream` decodes into two buffers in turn, never the
+one on screen (3008² was 27 MB of garbage a frame); a page that falls behind is paced by the server's newest-frame
+`watch`, since Chromium delivers a megabyte frame over several tasks and the client never sees two queued. The
+texture is reallocated only on a new size or format, or after an allocation failed (`getError`, then only). A
+context not restored within 10 s *shown* (`useRendererRecovery`) reloads the page once the stream is connected;
+two such reloads in 5 min and the next load draws with Canvas2D, rather than reloading into a crashing GPU all night.
+`GET /api/streams/viewers` says whether the kiosk's page is alive, for `kiosk_start.sh`'s watchdog (manual).
 
 ```
 Magic "SA08" (4B) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload

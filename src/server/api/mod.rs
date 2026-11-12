@@ -16,6 +16,7 @@ pub mod optional_body;
 pub mod push_to;
 pub mod settings;
 pub mod simulator;
+pub mod streams;
 
 use crate::session::state::AppState;
 use axum::routing::{delete, get, post, put};
@@ -44,6 +45,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
         .route("/capture/status", get(capture::get_capture_status))
         // Eyepiece
         .route("/eyepiece/snapshot", get(eyepiece::get_snapshot))
+        .route("/streams/viewers", get(streams::get_stream_viewers))
         // Settings
         .route(
             "/settings",

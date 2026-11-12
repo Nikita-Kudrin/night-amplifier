@@ -1,5 +1,5 @@
 import { describe, it, expect, expectTypeOf, vi, beforeEach, afterEach } from 'vitest'
-import { useWebGLRenderer } from '../useWebGLRenderer'
+import { CONTEXT_RESTORE_TIMEOUT_MS, useWebGLRenderer } from '../useWebGLRenderer'
 import type { WebGLRendererOptions } from '../useWebGLRenderer'
 import { useCanvas2DRenderer } from '../useCanvas2DRenderer'
 import { installCanvasContexts, quietly } from '../../test/renderStubs'
@@ -82,7 +82,7 @@ describe('useWebGLRenderer', () => {
 
         render(canvas, new Uint8Array(width * height * 3), width, height)
 
-        expect(gl.lastError).toBe(0)
+        expect(gl.errors).toEqual([])
         expect(gl.uploads).toEqual([{width, height}])
     })
 
@@ -106,7 +106,7 @@ describe('useWebGLRenderer', () => {
             render(canvas, new Uint8Array(width * height * 3), width, height)
         }
 
-        expect(gl.lastError).toBe(0)
+        expect(gl.errors).toEqual([])
         expect(gl.uploads).toHaveLength(4)
     })
 
@@ -121,6 +121,83 @@ describe('useWebGLRenderer', () => {
 
         expect(afterFirst).toBe(3)
         expect(lookups()).toBe(afterFirst)
+    })
+
+    // A new storage a frame reallocated a 12-27 MB texture each time on the kiosk.
+    describe('texture storage', () => {
+        class MockImageBitmap {
+            width: number
+            height: number
+            constructor(width: number, height: number) {
+                this.width = width
+                this.height = height
+            }
+        }
+        const bitmapOf = (width: number, height: number) => new MockImageBitmap(width, height) as unknown as ImageBitmap
+
+        it('allocates once and updates it in place for frames of the same size', () => {
+            const { render } = initQuietly()
+            const gl = glOf(canvas)
+            const first = new Uint8Array(5 * 4 * 3)
+            const second = new Uint8Array(5 * 4 * 3)
+
+            render(canvas, first, 5, 4)
+            render(canvas, second, 5, 4)
+
+            expect(gl.texImage2D).toHaveBeenCalledTimes(1)
+            expect(gl.texSubImage2D).toHaveBeenCalledWith(
+                gl.TEXTURE_2D, 0, 0, 0, 5, 4, gl.RGB, gl.UNSIGNED_BYTE, second
+            )
+            expect(gl.errors).toEqual([])
+            expect(gl.uploads).toEqual([{width: 5, height: 4}, {width: 5, height: 4}])
+        })
+
+        it('allocates again for a new size or format, and reuses each in turn', () => {
+            vi.stubGlobal('ImageBitmap', MockImageBitmap)
+            const { render } = initQuietly()
+            const gl = glOf(canvas)
+
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+            render(canvas, new Uint8Array(6 * 4 * 3), 6, 4)
+            render(canvas, bitmapOf(6, 4), 6, 4)
+            render(canvas, bitmapOf(6, 4), 6, 4)
+            render(canvas, new Uint8Array(6 * 4 * 3), 6, 4)
+
+            expect(gl.texImage2D).toHaveBeenCalledTimes(4)
+            expect(gl.texSubImage2D).toHaveBeenCalledTimes(1)
+            expect(gl.texSubImage2D).toHaveBeenCalledWith(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, expect.any(MockImageBitmap))
+        })
+
+        // Out of GPU memory with the context kept: updating storage that was never made
+        // fails too, and the view stayed black until the frame size changed.
+        it('allocates again after an allocation failed, and checks only allocations', () => {
+            const { render } = initQuietly()
+            const gl = glOf(canvas)
+
+            gl.failNextAllocation = true
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+
+            expect(gl.errors).toEqual([gl.OUT_OF_MEMORY])
+            expect(gl.texImage2D).toHaveBeenCalledTimes(2)
+            expect(gl.texSubImage2D).toHaveBeenCalledTimes(1)
+            expect(gl.uploads).toEqual([{width: 4, height: 4}, {width: 4, height: 4}])
+            expect(gl.getError).toHaveBeenCalledTimes(2)
+        })
+
+        it('allocates the texture a restored context made, never updating the lost one', () => {
+            const { render } = initQuietly()
+            const gl = glOf(canvas)
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+
+            quietly(() => canvas.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+            quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
+            render(canvas, new Uint8Array(4 * 4 * 3), 4, 4)
+
+            expect(gl.texImage2D).toHaveBeenCalledTimes(2)
+            expect(gl.texSubImage2D).not.toHaveBeenCalled()
+        })
     })
 
     describe('falling back', () => {
@@ -228,6 +305,101 @@ describe('useWebGLRenderer', () => {
 
             cleanup()
             expect(gl.loseContext).toHaveBeenCalledTimes(1)
+        })
+
+        // A browser that blocked WebGL for the page after GPU crashes never restores it.
+        describe('a context that never comes back', () => {
+            beforeEach(() => vi.useFakeTimers())
+            afterEach(() => vi.useRealTimers())
+
+            const lose = () => quietly(() => canvas.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+
+            it('says so once the restore is overdue', () => {
+                const onLostForGood = vi.fn()
+                initQuietly({onLostForGood})
+
+                lose()
+                vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS - 1)
+                expect(onLostForGood).not.toHaveBeenCalled()
+                quietly(() => vi.advanceTimersByTime(1))
+
+                expect(onLostForGood).toHaveBeenCalledTimes(1)
+            })
+
+            it('says nothing of one restored in time, or of a renderer cleaned up', () => {
+                const onLostForGood = vi.fn()
+                initQuietly({onLostForGood})
+                lose()
+                quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
+                const other = document.createElement('canvas')
+                const cleanedUp = useWebGLRenderer({onLostForGood})
+                quietly(() => cleanedUp.init(other))
+                quietly(() => other.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+                cleanedUp.cleanup()
+
+                vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS)
+
+                expect(onLostForGood).not.toHaveBeenCalled()
+                expect(vi.getTimerCount()).toBe(0)
+            })
+
+            describe('while the page is hidden', () => {
+                const setVisibility = (state: DocumentVisibilityState) => {
+                    Object.defineProperty(document, 'visibilityState', {value: state, configurable: true})
+                    document.dispatchEvent(new Event('visibilitychange'))
+                }
+                afterEach(() => setVisibility('visible'))
+
+                // A phone's browser drops a background tab's context and restores it only
+                // once the tab is shown again: time hidden is no restore that failed.
+                it('does not count the time the page spent hidden', () => {
+                    const onLostForGood = vi.fn()
+                    initQuietly({onLostForGood})
+                    setVisibility('hidden')
+
+                    lose()
+                    quietly(() => vi.advanceTimersByTime(3 * CONTEXT_RESTORE_TIMEOUT_MS))
+                    setVisibility('visible')
+                    quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
+                    vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS)
+
+                    expect(onLostForGood).not.toHaveBeenCalled()
+                    expect(vi.getTimerCount()).toBe(0)
+                })
+
+                it('gives a context lost while shown the whole deadline again once shown', () => {
+                    const onLostForGood = vi.fn()
+                    initQuietly({onLostForGood})
+
+                    lose()
+                    vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS - 1000)
+                    setVisibility('hidden')
+                    vi.advanceTimersByTime(3 * CONTEXT_RESTORE_TIMEOUT_MS)
+                    setVisibility('visible')
+                    vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS - 1)
+                    expect(onLostForGood).not.toHaveBeenCalled()
+                    quietly(() => vi.advanceTimersByTime(1))
+
+                    expect(onLostForGood).toHaveBeenCalledTimes(1)
+                    // Said once: a later visibility change starts nothing.
+                    setVisibility('hidden')
+                    setVisibility('visible')
+                    expect(vi.getTimerCount()).toBe(0)
+                })
+
+                it('stops listening for visibility once restored or cleaned up', () => {
+                    const removed = vi.spyOn(document, 'removeEventListener')
+                    const renderer = initQuietly()
+                    lose()
+                    quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
+                    expect(removed).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+
+                    removed.mockClear()
+                    lose()
+                    renderer.cleanup()
+                    expect(removed).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+                })
+            })
         })
 
         it('reports whether it drew', () => {

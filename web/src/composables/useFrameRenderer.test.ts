@@ -1,6 +1,7 @@
 import {defineComponent, h, nextTick, ref, shallowRef} from 'vue'
 import {mount} from '@vue/test-utils'
 import {BACKEND_LABELS, backendLabel, useFrameRenderer} from './useFrameRenderer'
+import {CONTEXT_RESTORE_TIMEOUT_MS} from './useWebGLRenderer'
 import type {FrameRenderer, FrameRendererOptions} from './useFrameRenderer'
 import type {FrameData, FrameSize} from './useImageStream'
 import {installCanvasContexts, quietly} from '../test/renderStubs'
@@ -61,10 +62,12 @@ interface MountOptions {
     count?: number
     isJpeg?: boolean
     onSizeChange?: FrameRendererOptions['onSizeChange']
+    onRendererLost?: FrameRendererOptions['onRendererLost']
+    webgl?: boolean
 }
 
 /** Mounts `count` canvases fed by one stream, as the live view (1) and binoview (2) do. */
-function mountRenderer({count = 1, isJpeg = false, onSizeChange}: MountOptions = {}) {
+function mountRenderer({count = 1, isJpeg = false, onSizeChange, onRendererLost, webgl}: MountOptions = {}) {
     const stream = {
         frameData: shallowRef<FrameData | null>(null),
         dimensions: ref<FrameSize>({width: 0, height: 0}),
@@ -75,7 +78,13 @@ function mountRenderer({count = 1, isJpeg = false, onSizeChange}: MountOptions =
     let renderer: FrameRenderer | undefined
     const Host = defineComponent({
         setup() {
-            renderer = useFrameRenderer({...stream, canvases: () => canvases.slice(0, canvasCount.value), ...(onSizeChange && {onSizeChange})})
+            renderer = useFrameRenderer({
+                ...stream,
+                canvases: () => canvases.slice(0, canvasCount.value),
+                ...(onSizeChange && {onSizeChange}),
+                ...(onRendererLost && {onRendererLost}),
+                ...(webgl !== undefined && {webgl}),
+            })
             return () => h('div', Array.from({length: canvasCount.value}, (_, i) =>
                 h('canvas', {key: i, ref: (el) => { if (el instanceof HTMLCanvasElement) canvases[i] = el }})))
         },
@@ -221,7 +230,7 @@ describe('useFrameRenderer', () => {
                 await flush()
             }
 
-            const drawn = glOf(view.canvases[0]).texImage2D.mock.calls.map((call) => call.at(-1))
+            const drawn = glOf(view.canvases[0]).sources
             expect(drawn).toEqual(decoder.bitmaps)
         })
 
@@ -240,7 +249,7 @@ describe('useFrameRenderer', () => {
             decoder.pending[1].resolve()
             await flush()
 
-            const drawn = glOf(view.canvases[0]).texImage2D.mock.calls.map((call) => call.at(-1))
+            const drawn = glOf(view.canvases[0]).sources
             expect(drawn).toEqual(decoder.bitmaps)
         })
 
@@ -487,6 +496,38 @@ describe('useFrameRenderer', () => {
         quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
 
         expect(glOf(canvas).uploads).toHaveLength(2)
+    })
+
+    it('says when a canvas\'s lost context never came back', async () => {
+        vi.useFakeTimers()
+        try {
+            installCanvasContexts()
+            const onRendererLost = vi.fn()
+            const view = mountRenderer({count: 2, onRendererLost})
+            await view.showRgb(4, 4)
+
+            quietly(() => view.canvases[1].dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+            quietly(() => vi.advanceTimersByTime(CONTEXT_RESTORE_TIMEOUT_MS))
+
+            expect(onRendererLost).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    // A page that kept losing WebGL: no GL context is even asked for.
+    it('draws every canvas with Canvas 2D when told to leave WebGL out', async () => {
+        const {contextOf, context2dOf} = installCanvasContexts()
+        const getContext = vi.mocked(HTMLCanvasElement.prototype.getContext)
+        const view = mountRenderer({count: 2, webgl: false})
+        await view.showRgb(4, 4)
+
+        for (const canvas of view.canvases) {
+            expect(contextOf(canvas)?.type).toBe('2d')
+            expect(context2dOf(canvas).putImageData).toHaveBeenCalled()
+        }
+        expect(getContext.mock.calls.map(([type]) => type)).toEqual(['2d', '2d'])
+        expect(view.renderer().backend.value).toBe('canvas2d')
     })
 
     it('frees its renderers and the held bitmap on unmount', async () => {

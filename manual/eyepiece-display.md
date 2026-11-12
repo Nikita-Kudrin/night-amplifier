@@ -91,15 +91,51 @@ you once it is up:
   a size matching the panel — 1440p for a 1440×1440 screen — sends about a quarter
   of the data (see [Streaming Resolution](/noise-reduction#streaming-resolution)).
 
-Launch it in kiosk mode from your startup script, waiting for the server first —
-Chromium will not retry a page that failed to load:
+Launch it in kiosk mode from your startup script, in a loop that waits for the server
+before every launch (Chromium will not retry a page that failed to load) and starts
+Chromium again whenever it exits. A crashed kiosk otherwise left the panel on the
+desktop until a reboot. The loop also watches the page itself: a crashed tab
+("Aw, Snap!") or a hung one leaves Chromium running, so when the server has not heard
+from this machine's `/eyepiece_quality` page for a minute, Chromium is restarted.
+Run it from Night Amplifier's folder, so the browser's output lands in
+`logs/kiosk.log`, beside Night Amplifier's own log, and survives the reboot:
 
 ```bash
-until curl -sf -o /dev/null http://localhost:8080/; do sleep 0.5; done
-chromium --kiosk 'http://localhost:8080/eyepiece_quality' \
-    --noerrdialogs --disable-infobars --no-first-run \
-    --ozone-platform-hint=auto --password-store=basic
+cd /opt/night-amplifier && mkdir -p logs
+kiosk=http://localhost:8844
+note() { echo "$(date -u +%FT%TZ) $*" >> logs/kiosk.log; }
+up() { curl -sf -o /dev/null --max-time 2 "$kiosk/"; }
+# This machine's page is connected and spoke within 90 s (it pings every 30 s).
+alive() {
+  heard=$(curl -sf --max-time 2 "$kiosk/api/streams/viewers?page=/eyepiece_quality&local=true" |
+    sed -n 's/.*"heard_s":\([0-9]*\).*/\1/p')
+  [ -n "$heard" ] && [ "$heard" -lt 90 ]
+}
+while true; do
+  until up; do sleep 1; done
+  note "starting Chromium"
+  # Through a pipe: a Snap's confinement may drop a log file handed to it.
+  chromium --kiosk "$kiosk/eyepiece_quality" \
+      --noerrdialogs --disable-infobars --no-first-run --hide-crash-restore-bubble \
+      --ozone-platform-hint=auto --password-store=basic > >(cat >> logs/kiosk.log) 2>&1 &
+  pid=$! dead=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 10
+    if alive || ! up; then dead=0; else dead=$((dead + 10)); fi
+    [ "$dead" -eq 60 ] && note "page not alive for 60 s; restarting Chromium" && kill "$pid"
+    [ "$dead" -ge 90 ] && kill -9 "$pid"
+  done
+  wait "$pid"; status=$?   # read at once: any command in between resets $?
+  note "Chromium exited with status $status"
+  sleep 3
+done
 ```
+
+8844 is the port the downloadable build listens on; use yours if you start it with
+another. If the browser's GPU fails for good, the view reloads itself once the server
+answers; after two such reloads within five minutes it draws without WebGL rather
+than reloading into a crashing GPU all night. A view hidden behind another window
+or app (a phone at `/eyepiece`) waits until it is shown before reloading.
 
 Upgrading the binary does not need the browser cache cleared. The interface is
 served with validators, so Chromium re-checks `index.html` on every load and reuses
